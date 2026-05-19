@@ -1,0 +1,156 @@
+import React, { useState } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { useAuth } from '../context/auth';
+import { useTheme } from '../context/theme';
+
+export function LoginPage() {
+  const { login } = useAuth();
+  const navigate = useNavigate();
+  const { mode, setMode } = useTheme();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
+  const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
+  const nextThemeLabel = nextThemeMode === 'system' ? 'OS' : nextThemeMode === 'dark' ? 'D' : 'L';
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    try {
+      await login(email, password);
+      navigate('/');
+    } catch (err: any) {
+      setError(err.message || 'Invalid email or password');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
+      <button
+        onClick={() => setMode(nextThemeMode)}
+        className={`absolute top-6 right-6 z-10 w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
+          mode === 'system'
+            ? 'bg-[var(--surface2)] border-[var(--border)] text-[var(--text)] shadow-sm'
+            : mode === 'dark'
+              ? 'bg-black border-[var(--border)] text-[var(--text)] shadow-sm'
+              : 'bg-white border-[var(--border)] text-black shadow-sm'
+        }`}
+        title={`Theme: ${themeLabel} (click → ${nextThemeLabel})`}
+        aria-label={`Theme ${themeLabel}. Click to switch to ${nextThemeLabel}.`}
+      >
+        {themeLabel}
+      </button>
+
+      <div className="hidden lg:flex flex-col justify-between p-10 border-r border-[var(--border)] bg-[var(--surface)]">
+        <div className="space-y-3">
+          <div className="brand-mark text-4xl text-[var(--accent)] leading-none">CEVOP</div>
+          <p className="text-sm text-[var(--muted)] max-w-sm">
+            Modern restaurant operations for tables, staff and service.
+          </p>
+        </div>
+
+        <div className="space-y-6 max-w-md">
+          <h2 className="font-display text-4xl text-[var(--text)] leading-tight">
+            Keep service fast. Keep teams aligned.
+          </h2>
+          <div className="grid gap-3">
+            <div className="card p-4">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">Orders</div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">Track and manage orders across tables.</div>
+            </div>
+            <div className="card p-4">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">Help Options</div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">Waiter calls and service requests, organised.</div>
+            </div>
+            <div className="card p-4">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">Branches</div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">Operate multi-branch with clear controls.</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="text-xs text-[var(--muted)] font-medium">
+          Powered by <span className="brand-mark text-[var(--text)]">CEVOP</span>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-center p-6">
+        <div className="w-full max-w-md space-y-8 animate-in">
+          <div className="space-y-2">
+            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">CEVOP</div>
+            <h1 className="font-display text-3xl text-[var(--text)]">Sign in</h1>
+            <p className="text-sm text-[var(--muted)]">Access your admin dashboard.</p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="card p-6 space-y-5">
+            <div>
+              <label>Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@restaurant.com"
+                autoComplete="email"
+                required
+              />
+            </div>
+
+            <div>
+              <label>Password</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  autoComplete="current-password"
+                  required
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] transition-colors text-xs select-none"
+                  tabIndex={-1}
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? 'hide' : 'show'}
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <div className="bg-red-900/20 border border-red-800 text-red-400 px-3 py-2 text-sm">
+                {error}
+              </div>
+            )}
+
+            <button type="submit" disabled={loading} className="btn btn-primary w-full py-3 tracking-widest text-sm">
+              {loading ? 'SIGNING IN…' : 'SIGN IN'}
+            </button>
+
+            <div className="flex items-center justify-between text-xs">
+              <Link to="/forgot-password" className="text-[var(--muted)] hover:text-[var(--accent)] transition-colors">
+                Forgot password?
+              </Link>
+              <a href="/signup" className="text-[var(--accent)] hover:underline font-semibold">
+                Start free trial
+              </a>
+            </div>
+          </form>
+
+          <p className="text-center text-xs text-[var(--muted)]">
+            Access is by invite only. Contact your organisation admin.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,17 @@
+{
+  "name": "cevop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-tenant restaurant ordering platform",
+  "scripts": {
+    "install:all": "npm install --prefix server && npm install --prefix apps/customer-pwa && npm install --prefix apps/service-display && npm install --prefix apps/admin-dashboard",
+    "dev:server": "npm run dev --prefix server",
+    "dev:customer": "npm run dev --prefix apps/customer-pwa",
+    "dev:service": "npm run dev --prefix apps/service-display",
+    "dev:admin": "npm run dev --prefix apps/admin-dashboard",
+    "build:all": "npm run build --prefix apps/customer-pwa && npm run build --prefix apps/service-display && npm run build --prefix apps/admin-dashboard && npm run build --prefix server",
+    "db:migrate": "npm run db:migrate --prefix server",
+    "db:seed": "npm run db:seed --prefix server",
+    "db:generate": "npm run db:generate --prefix server"
+  }
+}
