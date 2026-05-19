@@ -1,6 +1,9 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
+# Install OpenSSL for Prisma
+RUN apk add --no-cache openssl
+
 # Copy shared types (needed for TypeScript compilation)
 COPY shared/ ./shared/
 
@@ -20,13 +23,18 @@ RUN npm run build
 FROM node:20-alpine
 WORKDIR /app/server
 
+# Install OpenSSL for Prisma at runtime
+RUN apk add --no-cache openssl
+
 COPY --from=builder /app/server/dist ./dist
 COPY --from=builder /app/server/node_modules ./node_modules
 COPY --from=builder /app/server/package.json ./
 COPY --from=builder /app/server/src/prisma ./src/prisma
 
-# Non-root user for security
+# Create non-root user and give ownership
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN chown -R appuser:appgroup /app/server
+
 USER appuser
 
 EXPOSE 4000
