@@ -7,7 +7,8 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
-
+import { logger } from '../services/logger';
+import bcrypt from 'bcryptjs';
 
 const PLATFORM_SLUG = 'cevop-internal'; // Internal platform org — excluded from client metrics
 
@@ -235,5 +236,202 @@ opsRouter.get('/trials/expiring', async (_req, res: Response) => {
     res.json({ success: true, data: orgs });
   } catch {
     res.status(500).json({ success: false, error: 'Failed to fetch expiring trials' });
+  }
+});
+
+// ─── Team Management ─────────────────────────────────────────────────────────
+
+opsRouter.get('/team', async (req: AuthRequest, res: Response) => {
+  try {
+    const team = await prisma.user.findMany({
+      where: { role: 'SUPERADMIN' },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        isActive: true,
+        mustChangePassword: true,
+        lastLoginAt: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    res.json({ success: true, data: team });
+  } catch {
+    res.status(500).json({ success: false, error: 'Failed to fetch team' });
+  }
+});
+
+opsRouter.post('/team', async (req: AuthRequest, res: Response) => {
+  try {
+    const schema = z.object({
+      name: z.string().min(2).max(100).trim(),
+      email: z.string().email().toLowerCase().trim(),
+      password: z.string().min(8).regex(
+        /^(?=.*[A-Z])(?=.*\d).+$/,
+        'Password must contain at least one uppercase letter and one number'
+      ),
+    });
+    const { name, email, password } = schema.parse(req.body);
+
+    // Find the cevop-internal org — all SUPERADMIN accounts live here
+    const internalOrg = await prisma.organization.findUnique({
+      where: { slug: 'cevop-internal' },
+      select: { id: true },
+    });
+    if (!internalOrg) {
+      res.status(500).json({ success: false, error: 'Internal org not found. Run seed first.' });
+      return;
+    }
+
+    // Check for duplicate email within the internal org
+    const existing = await prisma.user.findFirst({
+      where: { email, organizationId: internalOrg.id },
+    });
+    if (existing) {
+      res.status(409).json({ success: false, error: 'An account with this email already exists' });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const user = await prisma.user.create({
+      data: {
+        organizationId: internalOrg.id,
+        name,
+        email,
+        passwordHash,
+        role: 'SUPERADMIN',
+        isActive: true,
+        mustChangePassword: true, // Force change on first login
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        isActive: true,
+        mustChangePassword: true,
+        createdAt: true,
+      },
+    });
+
+    logger.info('New SUPERADMIN account created', {
+      createdBy: req.user!.userId,
+      newUserId: user.id,
+      email: user.email,
+    });
+
+    res.status(201).json({ success: true, data: user });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      res.status(400).json({ success: false, error: err.errors[0].message });
+      return;
+    }
+    res.status(500).json({ success: false, error: 'Failed to create team member' });
+  }
+});
+
+opsRouter.post('/team/change-password', async (req: AuthRequest, res: Response) => {
+  try {
+    const schema = z.object({
+      currentPassword: z.string().min(1),
+      newPassword: z.string().min(8).regex(
+        /^(?=.*[A-Z])(?=.*\d).+$/,
+        'Password must contain at least one uppercase letter and one number'
+      ),
+    });
+    const { currentPassword, newPassword } = schema.parse(req.body);
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.userId },
+      select: { id: true, passwordHash: true },
+    });
+    if (!user) {
+      res.status(404).json({ success: false, error: 'User not found' });
+      return;
+    }
+
+    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!valid) {
+      res.status(401).json({ success: false, error: 'Current password is incorrect' });
+      return;
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 12);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: newHash,
+        mustChangePassword: false, // Clear the force-change flag
+      },
+    });
+
+    // Revoke all existing refresh tokens — forces re-login on all devices
+    await prisma.refreshToken.updateMany({
+      where: { userId: user.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    logger.info('SUPERADMIN password changed', { userId: user.id });
+
+    res.json({ success: true, message: 'Password changed. Please log in again.' });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      res.status(400).json({ success: false, error: err.errors[0].message });
+      return;
+    }
+    res.status(500).json({ success: false, error: 'Failed to change password' });
+  }
+});
+
+opsRouter.patch('/team/:userId', async (req: AuthRequest, res: Response) => {
+  try {
+    // Prevent self-deactivation
+    if (req.params.userId === req.user!.userId) {
+      res.status(400).json({ success: false, error: 'You cannot deactivate your own account' });
+      return;
+    }
+
+    const schema = z.object({
+      isActive: z.boolean(),
+    });
+    const { isActive } = schema.parse(req.body);
+
+    // Ensure target is actually a SUPERADMIN
+    const target = await prisma.user.findFirst({
+      where: { id: req.params.userId, role: 'SUPERADMIN' },
+    });
+    if (!target) {
+      res.status(404).json({ success: false, error: 'Team member not found' });
+      return;
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: req.params.userId },
+      data: { isActive },
+      select: { id: true, name: true, email: true, isActive: true },
+    });
+
+    // If deactivating, revoke all their refresh tokens immediately
+    if (!isActive) {
+      await prisma.refreshToken.updateMany({
+        where: { userId: req.params.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    }
+
+    logger.info(`SUPERADMIN account ${isActive ? 'activated' : 'deactivated'}`, {
+      actorId: req.user!.userId,
+      targetId: req.params.userId,
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      res.status(400).json({ success: false, error: err.errors[0].message });
+      return;
+    }
+    res.status(500).json({ success: false, error: 'Failed to update team member' });
   }
 });

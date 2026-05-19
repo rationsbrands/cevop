@@ -107,6 +107,7 @@ model User {
   lastLoginIp         String?
   passwordResetToken  String?        @unique
   passwordResetExpiry DateTime?
+  mustChangePassword  Boolean        @default(false)
   auditLogs           AuditLog[]
   refreshTokens       RefreshToken[]
   branch              Branch?        @relation(fields: [branchId], references: [id])

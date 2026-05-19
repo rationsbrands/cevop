@@ -14,11 +14,15 @@ const IconOverview  = ({ size }: IconProps) => <Ico size={size} d={['M18 20V10',
 const IconOrgs      = ({ size }: IconProps) => <Ico size={size} d={['M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2', 'M9 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0', 'M23 21v-2a4 4 0 0 0-3-3.87', 'M16 3.13a4 4 0 0 1 0 7.75']} />;
 const IconOnboard   = ({ size }: IconProps) => <Ico size={size} d={['M12 5v14', 'M5 12h14']} />;
 const IconLogout    = ({ size }: IconProps) => <Ico size={size} d={['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9']} />;
+const IconTeam      = ({ size }: IconProps) => <Ico size={size} d={['M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2', 'M9 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0', 'M23 21v-2a4 4 0 0 0-3-3.87', 'M16 3.13a4 4 0 0 1 0 7.75']} />;
+const IconSecurity  = ({ size }: IconProps) => <Ico size={size} d={['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10']} />;
 
 const NAV = [
-  { to: '/',        label: 'Overview',      Icon: IconOverview, exact: true },
-  { to: '/orgs',    label: 'Organisations', Icon: IconOrgs },
-  { to: '/onboard', label: 'Onboard',       Icon: IconOnboard },
+  { to: '/',         label: 'Overview',      Icon: IconOverview,  exact: true },
+  { to: '/orgs',     label: 'Organisations', Icon: IconOrgs },
+  { to: '/onboard',  label: 'Onboard',       Icon: IconOnboard },
+  { to: '/team',     label: 'Team',          Icon: IconTeam },
+  { to: '/security', label: 'Security',      Icon: IconSecurity },
 ];
 
 export function Shell() {

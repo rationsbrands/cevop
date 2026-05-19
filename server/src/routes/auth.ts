@@ -164,6 +164,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
           name: matchedUser.name,
           email: matchedUser.email,
           role: matchedUser.role,
+          mustChangePassword: matchedUser.mustChangePassword,
           organizationId: matchedUser.organizationId,
           branchId: matchedUser.branchId ?? null,
           organization: {
@@ -280,6 +281,7 @@ authRouter.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        mustChangePassword: user.mustChangePassword,
         organizationId: user.organizationId,
         branchId: user.branchId ?? null,
         organization: {

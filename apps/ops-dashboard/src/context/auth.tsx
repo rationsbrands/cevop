@@ -3,8 +3,8 @@ import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSessi
 
 const API_BASE = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '');
 
-export interface OpsUser { id: string; name: string; email: string; role: string; organizationId: string; }
-interface AuthCtx { user: OpsUser | null; token: string | null; login: (email: string, password: string) => Promise<void>; logout: () => Promise<void>; loading: boolean; }
+export interface OpsUser { id: string; name: string; email: string; role: string; organizationId: string; mustChangePassword: boolean; }
+interface AuthCtx { user: OpsUser | null; token: string | null; login: (email: string, password: string) => Promise<void>; logout: () => Promise<void>; loading: boolean; mustChangePassword: boolean; clearMustChange: () => void; }
 const AuthContext = createContext<AuthCtx | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -43,6 +43,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [token]);
 
   function doLogout() { setToken(null); setUser(null); }
+
+  function clearMustChange() {
+    setUser(prev => prev ? { ...prev, mustChangePassword: false } : null);
+  }
 
   useEffect(() => {
     async function handleWake() {
@@ -99,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (timer.current) clearTimeout(timer.current);
     doLogout();
   }
-  return <AuthContext.Provider value={{ user, token, login, logout, loading }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, token, login, logout, loading, mustChangePassword: user?.mustChangePassword ?? false, clearMustChange }}>{children}</AuthContext.Provider>;
 }
 export function useAuth() { const c = useContext(AuthContext); if (!c) throw new Error('Need AuthProvider'); return c; }
 export function useApi() {
