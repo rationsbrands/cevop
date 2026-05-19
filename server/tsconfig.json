@@ -14,7 +14,8 @@
     "sourceMap": true,
     "types": ["node"],
     "paths": {
-      "@shared/*": ["../shared/*"]
+      "@shared/*": ["../shared/*"],
+      "../../../shared/types": ["../shared/types/index.ts"]
     }
   },
   "include": ["src/**/*", "../shared/**/*"],
