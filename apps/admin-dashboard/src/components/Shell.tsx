@@ -105,7 +105,7 @@ export function Shell() {
         className={`
         fixed inset-y-0 left-0 z-50 lg:static
         ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-        ${sidebarOpen ? 'w-64' : 'w-16'}
+        ${mobileMenuOpen || sidebarOpen ? 'w-64' : 'w-16'}
         shrink-0 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col transition-all duration-300 overflow-hidden
       `}
       >

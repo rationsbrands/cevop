@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth, useApi } from '../context/auth';
 import { useTheme } from '../context/theme';
 
@@ -81,15 +81,14 @@ export function Shell() {
   const api = useApi();
   const { mode, setMode } = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.innerWidth >= 1024;
+  });
   const [resendStatus, setResendStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
-
-  // Close sidebar by default on mobile, open on desktop
-  useEffect(() => {
-    const isMobile = window.innerWidth < 1024;
-    setSidebarOpen(!isMobile);
-  }, []);
+  const sidebarWidth = mobileMenuOpen || sidebarOpen ? 'w-64' : 'w-16';
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
@@ -102,8 +101,9 @@ export function Shell() {
 
   // Close mobile menu on route change
   useEffect(() => {
-    setMobileMenuOpen(false);
-  }, [navigate]);
+    const t = window.setTimeout(() => setMobileMenuOpen(false), 0);
+    return () => window.clearTimeout(t);
+  }, [location.pathname]);
 
   return (
     <div className="flex w-full h-dvh overflow-hidden relative bg-[var(--bg)]">
@@ -119,7 +119,7 @@ export function Shell() {
         className={`
         fixed inset-y-0 left-0 z-50 lg:static
         ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-        ${sidebarOpen ? 'w-64' : 'w-16'} shrink-0 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col transition-all duration-300
+        ${sidebarWidth} shrink-0 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col transition-all duration-300 overflow-hidden
       `}
       >
         <div className="h-14 flex items-center px-3 border-b border-[var(--border)] shrink-0 gap-3">
