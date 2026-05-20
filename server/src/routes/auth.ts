@@ -665,18 +665,16 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
     // Slug uniqueness check
     const slugExists = await prisma.organization.findUnique({ where: { slug: body.orgSlug } });
     if (slugExists) {
-      res
-        .status(409)
-        .json({
-          success: false,
-          error: 'That organisation slug is already taken. Try a different one.',
-        });
+      res.status(409).json({
+        success: false,
+        error: 'That organisation slug is already taken. Try a different one.',
+      });
       return;
     }
 
     // Email uniqueness is org-scoped — but for self-signup we create the org first
     // so we just need to create in a transaction
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const result = await prisma.$transaction(
       async (tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => {
         const org = await tx.organization.create({

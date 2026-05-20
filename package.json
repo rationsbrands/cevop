@@ -17,6 +17,7 @@
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
+      "eslint --fix",
       "prettier --write"
     ],
     "*.{json,css,md}": [
@@ -29,12 +30,16 @@
     "shared"
   ],
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@typescript-eslint/eslint-plugin": "^8.59.4",
     "@typescript-eslint/parser": "^8.59.4",
     "eslint": "^10.4.0",
+    "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.6.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
-    "prettier": "^3.8.3"
+    "prettier": "^3.8.3",
+    "typescript-eslint": "^8.59.4"
   }
 }
