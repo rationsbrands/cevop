@@ -3,7 +3,7 @@ import { useApi } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
 
 interface Metrics {
-  orgs: { total: number; active: number; trialing: number; suspended: number; selfSignup: number; newThisMonth: number };
+  orgs: { total: number; active: number; trialing: number; suspended: number; selfSignup: number; newThisMonth: number; free: number };
   users: { total: number };
   orders: { total: number; today: number };
   branches: { total: number };
@@ -56,10 +56,11 @@ export function MetricsPage() {
       </div>
 
       {/* Primary metrics */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard label="Total Orgs" value={metrics?.orgs.total ?? 0} sub={`${metrics?.orgs.newThisMonth ?? 0} new this month`} accent />
         <StatCard label="Active" value={metrics?.orgs.active ?? 0} sub="Paying customers" />
-        <StatCard label="On Trial" value={metrics?.orgs.trialing ?? 0} sub="14-day trial" />
+        <StatCard label="On Trial" value={metrics?.orgs.trialing ?? 0} sub="7-day trial" />
+        <StatCard label="Free Tier" value={metrics?.orgs.free ?? 0} sub="Forever free" />
         <StatCard label="Total Revenue" value={formatPrice(metrics?.revenue.total ?? 0)} sub="All time, all orgs" accent />
       </div>
 

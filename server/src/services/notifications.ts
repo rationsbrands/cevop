@@ -5,6 +5,12 @@ function fmtPrice(value: number | string): string {
   return '₦' + Number(value).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function notificationsEnabled(plan?: string): { whatsapp: boolean; slack: boolean } {
+  if (!plan || plan === 'free') return { whatsapp: false, slack: false };
+  if (plan === 'starter') return { whatsapp: true, slack: false };
+  return { whatsapp: true, slack: true }; // trial, growth, enterprise
+}
+
 async function sendWhatsApp(phoneNumber: string, message: string): Promise<void> {
   const token = process.env.WHATSAPP_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_ID;
@@ -36,12 +42,13 @@ type OrderForNotification = {
   table?: { label: string } | null;
 };
 
-export async function notifyNewOrder(order: OrderForNotification, whatsappNumber?: string, slackWebhook?: string): Promise<void> {
+export async function notifyNewOrder(order: OrderForNotification, whatsappNumber?: string, slackWebhook?: string, plan?: string): Promise<void> {
+  const { whatsapp, slack } = notificationsEnabled(plan);
   const tableLabel = order.table?.label || `Table ${order.tableId}`;
   const itemsSummary = order.items.map(i => `  • ${i.quantity}x ${i.menuItem?.name || i.menuItemId}${i.notes ? ` (${i.notes})` : ''}`).join('\n');
   const msg = `🍽️ *NEW ORDER — ${tableLabel}*\n\n#${order.id.slice(-6).toUpperCase()}\n\n${itemsSummary}\n\nTotal: ${fmtPrice(Number(order.total))}`;
-  if (whatsappNumber) await sendWhatsApp(whatsappNumber, msg);
-  if (slackWebhook) await sendSlack(slackWebhook, `New order from ${tableLabel}`, [
+  if (whatsapp && whatsappNumber) await sendWhatsApp(whatsappNumber, msg);
+  if (slack && slackWebhook) await sendSlack(slackWebhook, `New order from ${tableLabel}`, [
     { type: 'header', text: { type: 'plain_text', text: `🍽️ New Order — ${tableLabel}` } },
     { type: 'section', fields: [{ type: 'mrkdwn', text: `*Order:*\n#${order.id.slice(-6).toUpperCase()}` }, { type: 'mrkdwn', text: `*Total:*\n${fmtPrice(Number(order.total))}` }] },
     { type: 'section', text: { type: 'mrkdwn', text: `*Items:*\n${itemsSummary}` } },
@@ -54,11 +61,12 @@ type WaiterCallForNotification = {
   table?: { label: string } | null;
 };
 
-export async function notifyWaiterCall(call: WaiterCallForNotification, whatsappNumber?: string, slackWebhook?: string): Promise<void> {
+export async function notifyWaiterCall(call: WaiterCallForNotification, whatsappNumber?: string, slackWebhook?: string, plan?: string): Promise<void> {
+  const { whatsapp, slack } = notificationsEnabled(plan);
   const tableLabel = call.table?.label || `Table ${call.tableId}`;
   const msg = `🔔 *WAITER CALLED — ${tableLabel}*\nReason: ${call.reason || 'No reason given'}`;
-  if (whatsappNumber) await sendWhatsApp(whatsappNumber, msg);
-  if (slackWebhook) await sendSlack(slackWebhook, `Waiter called from ${tableLabel}`);
+  if (whatsapp && whatsappNumber) await sendWhatsApp(whatsappNumber, msg);
+  if (slack && slackWebhook) await sendSlack(slackWebhook, `Waiter called from ${tableLabel}`);
 }
 
 type ServiceRequestForNotification = {
@@ -68,9 +76,10 @@ type ServiceRequestForNotification = {
   table?: { label: string } | null;
 };
 
-export async function notifyServiceRequest(req: ServiceRequestForNotification, whatsappNumber?: string, slackWebhook?: string): Promise<void> {
+export async function notifyServiceRequest(req: ServiceRequestForNotification, whatsappNumber?: string, slackWebhook?: string, plan?: string): Promise<void> {
+  const { whatsapp, slack } = notificationsEnabled(plan);
   const tableLabel = req.table?.label || `Table ${req.tableId}`;
   const msg = `⚙️ *SERVICE REQUEST — ${tableLabel}*\nType: ${req.serviceType}\nNotes: ${req.notes || 'None'}`;
-  if (whatsappNumber) await sendWhatsApp(whatsappNumber, msg);
-  if (slackWebhook) await sendSlack(slackWebhook, `Service request from ${tableLabel}`);
+  if (whatsapp && whatsappNumber) await sendWhatsApp(whatsappNumber, msg);
+  if (slack && slackWebhook) await sendSlack(slackWebhook, `Service request from ${tableLabel}`);
 }

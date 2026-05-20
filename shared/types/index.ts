@@ -163,6 +163,7 @@ export interface AuthPayload {
   organizationId: string;
   branchId?: string;
   role: string;
+  plan?: string;
 }
 
 export interface ApiResponse<T = unknown> {

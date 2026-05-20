@@ -49,7 +49,7 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
     io.to(table.organizationId).emit('SERVICE_REQUESTED', request);
 
     const org = await prisma.organization.findUnique({ where: { id: table.organizationId } });
-    if (org) notifyServiceRequest(request, org.whatsappNumber || undefined, org.slackWebhook || undefined).catch(() => {});
+    if (org) notifyServiceRequest(request, org.whatsappNumber || undefined, org.slackWebhook || undefined, org.plan).catch(() => {});
 
     res.status(201).json({ success: true, data: request });
   } catch (err: unknown) {

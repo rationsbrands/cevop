@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useApi } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
 
-const PLAN_OPTS = ['trial', 'starter', 'growth', 'enterprise'];
+const PLAN_OPTS = ['free', 'trial', 'starter', 'growth', 'enterprise'];
 const STATUS_OPTS = ['trialing', 'active', 'suspended', 'cancelled'];
 
 const STATUS_COLOR: Record<string, string> = {
@@ -11,6 +11,14 @@ const STATUS_COLOR: Record<string, string> = {
   active: 'text-green-400 border-green-800 bg-green-900/20',
   suspended: 'text-red-400 border-red-800 bg-red-900/20',
   cancelled: 'text-gray-400 border-gray-700',
+};
+
+const PLAN_COLOR: Record<string, string> = {
+  free: 'text-gray-400 border-gray-700 bg-gray-900/20',
+  trial: 'text-yellow-400 border-yellow-800 bg-yellow-900/20',
+  starter: 'text-blue-400 border-blue-800 bg-blue-900/20',
+  growth: 'text-green-400 border-green-800 bg-green-900/20',
+  enterprise: 'text-purple-400 border-purple-800 bg-purple-900/20',
 };
 
 export function OrgDetailPage() {
@@ -59,6 +67,22 @@ export function OrgDetailPage() {
     setSaving(false);
   }
 
+  async function assignTrial() {
+    if (!confirm('Assign a 7-day Growth trial to this organisation?')) return;
+    const trialEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const res = await api.patch(`/api/ops/orgs/${org.id}/plan`, {
+      plan: 'trial',
+      planStatus: 'trialing',
+      trialEndsAt,
+    });
+    if (res.success) {
+      setOrg((prev: any) => ({ ...prev, plan: 'trial', planStatus: 'trialing', trialEndsAt }));
+      setSuccess('7-day trial assigned');
+    } else {
+      setError(res.error || 'Failed to assign trial');
+    }
+  }
+
   if (loading) return <div className="flex items-center justify-center h-48"><div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" /></div>;
   if (!org) return <div className="text-red-400">Organisation not found</div>;
 
@@ -76,11 +100,16 @@ export function OrgDetailPage() {
           <p className="text-[var(--muted)] font-mono text-sm mt-0.5">{org.slug}</p>
           <div className="flex items-center gap-2 mt-2">
             <span className={`text-xs px-2 py-0.5 border ${STATUS_COLOR[org.planStatus] ?? ''}`}>{org.planStatus}</span>
-            <span className="text-xs text-[var(--muted)] uppercase">{org.plan}</span>
+            <span className={`text-xs px-2 py-0.5 border uppercase ${PLAN_COLOR[org.plan] ?? ''}`}>{org.plan}</span>
             {org.selfSignup && <span className="text-xs text-blue-400 border border-blue-800 px-1.5 py-0.5">Self-signup</span>}
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
+          {org.planStatus === 'active' && org.plan === 'free' && (
+            <button onClick={assignTrial} className="btn btn-secondary text-xs px-3 py-1.5">
+              Assign 7-Day Trial
+            </button>
+          )}
           {org.planStatus !== 'suspended' && (
             <button onClick={() => quickAction('suspend')} disabled={saving} className="btn btn-danger btn-sm">Suspend</button>
           )}

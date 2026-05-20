@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import { authenticate, requireRole, requireBranchAccess, AuthRequest } from '../middleware/auth';
+import { checkStaffLimit } from '../middleware/checkLimits';
 import { logger } from '../services/logger';
 
 export const usersRouter = Router();
@@ -40,7 +41,7 @@ const createUserSchema = z.object({
   branchId: z.string().optional(),
 });
 
-usersRouter.post('/', requireRole('ADMIN', 'SUPERADMIN'), async (req: AuthRequest, res: Response) => {
+usersRouter.post('/', requireRole('ADMIN', 'SUPERADMIN'), checkStaffLimit, async (req: AuthRequest, res: Response) => {
   try {
     const { name, email, password, role, branchId } = createUserSchema.parse(req.body);
     const passwordHash = await bcrypt.hash(password, 12);

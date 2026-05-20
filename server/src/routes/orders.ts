@@ -116,7 +116,8 @@ ordersRouter.post('/public', async (req: Request, res: Response) => {
           table: order.table,
         },
         org.whatsappNumber || undefined,
-        org.slackWebhook || undefined
+        org.slackWebhook || undefined,
+        org.plan
       ).catch(() => {});
     }
 

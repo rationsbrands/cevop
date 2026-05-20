@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import { authenticate, requireRole, requireBranchAccess, AuthRequest } from '../middleware/auth';
+import { checkTableLimit } from '../middleware/checkLimits';
 import { logger } from '../services/logger';
 
 export const tablesRouter = Router();
@@ -111,7 +112,7 @@ const tableSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-tablesRouter.post('/', requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'), async (req: AuthRequest, res: Response) => {
+tablesRouter.post('/', requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'), checkTableLimit, async (req: AuthRequest, res: Response) => {
   try {
     const data = tableSchema.parse(req.body);
 

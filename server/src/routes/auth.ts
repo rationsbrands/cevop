@@ -122,6 +122,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       organizationId: matchedUser.organizationId,
       branchId: matchedUser.branchId ?? undefined,
       role: matchedUser.role,
+      plan: matchedUser.organization?.plan ?? 'free',
     };
     const accessToken = signAccess(accessPayload);
 
@@ -237,6 +238,7 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
       organizationId: stored.user.organizationId,
       branchId: stored.user.branchId ?? undefined,
       role: stored.user.role,
+      plan: stored.user.organization?.plan ?? 'free',
     });
 
     res.cookie(COOKIE_NAME, newRawRefresh, COOKIE_OPTIONS);
@@ -418,6 +420,7 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
       organizationId: user.organizationId,
       branchId: user.branchId ?? undefined,
       role: user.role,
+      plan: user.organization?.plan ?? 'free',
     };
     const accessToken = signAccess(accessPayload);
     const rawRefresh = generateSecureToken();
@@ -602,8 +605,6 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
 
     // Email uniqueness is org-scoped — but for self-signup we create the org first
     // so we just need to create in a transaction
-    const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await prisma.$transaction(async (tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => {
       const org = await tx.organization.create({
@@ -615,9 +616,8 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
           contactPhone: body.contactPhone,
           contactEmail: body.adminEmail,
           selfSignup: true,
-          plan: 'trial',
-          planStatus: 'trialing',
-          trialEndsAt,
+          plan: 'free',
+          planStatus: 'active',
         },
       });
 
@@ -639,7 +639,6 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
       orgId: result.org.id,
       slug: result.org.slug,
       email: body.adminEmail,
-      trialEndsAt,
     });
 
     // Issue tokens so they can start immediately
@@ -647,6 +646,7 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
       userId: result.admin.id,
       organizationId: result.org.id,
       role: result.admin.role,
+      plan: result.org.plan ?? 'free',
     };
     const accessToken = signAccess(accessPayload);
     const rawRefresh = generateSecureToken();
@@ -665,7 +665,6 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
       data: {
         accessToken,
         expiresIn: 900,
-        trialEndsAt,
         user: {
           id: result.admin.id,
           name: result.admin.name,

@@ -19,8 +19,8 @@ model Organization {
   timezone         String            @default("Africa/Lagos")
   currency         String            @default("NGN")
   isActive         Boolean           @default(true)
-  plan             String            @default("trial")
-  planStatus       String            @default("trialing")
+  plan             String            @default("free")
+  planStatus       String            @default("active")
   trialEndsAt      DateTime?
   verifiedAt       DateTime?
   verifiedBy       String?

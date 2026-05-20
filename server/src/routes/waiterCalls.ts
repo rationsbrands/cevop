@@ -47,7 +47,7 @@ waiterCallsRouter.post('/public', async (req: Request, res: Response) => {
     io.to(table.organizationId).emit('WAITER_CALLED', call);
 
     const org = await prisma.organization.findUnique({ where: { id: table.organizationId } });
-    if (org) notifyWaiterCall(call, org.whatsappNumber || undefined, org.slackWebhook || undefined).catch(() => {});
+    if (org) notifyWaiterCall(call, org.whatsappNumber || undefined, org.slackWebhook || undefined, org.plan).catch(() => {});
 
     res.status(201).json({ success: true, data: call });
   } catch (err: unknown) {

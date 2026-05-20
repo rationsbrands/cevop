@@ -186,18 +186,26 @@ export function useApi() {
     return `${base}${pathname}${qs ? '?' + qs : ''}`;
   }
 
+  async function handleResponse(res: Response) {
+    const data = await res.json();
+    if (res.status === 402 && data.upgradeRequired) {
+      alert(`Limit Reached:\n${data.error}\n\nPlease contact Cevop support to upgrade your plan.`);
+    }
+    return data;
+  }
+
   return {
     effectiveBranchId,
     get: (path: string, params?: Record<string, string>) =>
-      fetch(buildUrl(path, params), { headers }).then((r) => r.json()),
+      fetch(buildUrl(path, params), { headers }).then(handleResponse),
     post: (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) }).then((r) => r.json()),
+      fetch(`${API_BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) }).then(handleResponse),
     put: (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'PUT', headers, body: JSON.stringify(body) }).then((r) => r.json()),
+      fetch(`${API_BASE}${path}`, { method: 'PUT', headers, body: JSON.stringify(body) }).then(handleResponse),
     patch: (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'PATCH', headers, body: JSON.stringify(body) }).then((r) => r.json()),
+      fetch(`${API_BASE}${path}`, { method: 'PATCH', headers, body: JSON.stringify(body) }).then(handleResponse),
     delete: (path: string) =>
-      fetch(`${API_BASE}${path}`, { method: 'DELETE', headers }).then((r) => r.json()),
+      fetch(`${API_BASE}${path}`, { method: 'DELETE', headers }).then(handleResponse),
   };
 }
 

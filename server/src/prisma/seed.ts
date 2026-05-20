@@ -142,6 +142,32 @@ async function main() {
   const miRTea   = await prisma.menuItem.create({ data: { organizationId: org2.id, branchId: branch2Main.id, categoryId: catRDrinks.id, name: 'Earl Grey Tea', price: 4 } });
   const miRPint  = await prisma.menuItem.create({ data: { organizationId: org2.id, branchId: branch2Main.id, categoryId: catRDrinks.id, name: 'Pale Ale Pint', price: 6 } });
 
+  // ── FREE BITES (active single-branch client, Free Tier) ─────────────────────────
+  const org3 = await prisma.organization.create({
+    data: {
+      name: 'Free Bites',
+      slug: 'free-bites',
+      timezone: 'America/New_York',
+      currency: 'USD',
+      plan: 'free',
+      planStatus: 'active',
+      isActive: true,
+      contactEmail: 'admin@freebites.com',
+    },
+  });
+
+  const branch3Main = await prisma.branch.create({
+    data: { organizationId: org3.id, name: 'Main Location', slug: 'main', address: '100 Free Street', phone: '+1 555 000 0000' },
+  });
+
+  await prisma.user.create({ data: { organizationId: org3.id, name: 'Free Admin', email: 'admin@freebites.com', passwordHash: await h('Admin1234!'), role: UserRole.ADMIN } });
+  await prisma.user.create({ data: { organizationId: org3.id, branchId: branch3Main.id, name: 'Free Waiter 1', email: 'waiter1@freebites.com', passwordHash: await h('Waiter1234!'), role: UserRole.WAITER } });
+  await prisma.user.create({ data: { organizationId: org3.id, branchId: branch3Main.id, name: 'Free Waiter 2', email: 'waiter2@freebites.com', passwordHash: await h('Waiter1234!'), role: UserRole.WAITER } });
+
+  for (let i = 1; i <= 5; i++) {
+    await prisma.table.create({ data: { organizationId: org3.id, branchId: branch3Main.id, label: `Table ${i}`, number: i } });
+  }
+
   // ── LIVE DATA ────────────────────────────────────────────────────────────────
   console.log('📦 Seeding orders, waiter calls, service requests...');
 
@@ -192,6 +218,13 @@ async function main() {
         isActive: true,
       }
     });
+    await prisma.helpOption.create({
+      data: {
+        ...opt,
+        organizationId: org3.id, // Free Bites
+        isActive: true,
+      }
+    });
   }
 
   console.log('\n🎉 Seed complete!\n');
@@ -207,6 +240,7 @@ async function main() {
   console.log('  Rations Admin:   admin@rations.com         / Admin1234!');
   console.log('  Rations Service: service@rations.com       / Service1234!');
   console.log('  Rations Waiter:  waiter@rations.com        / Waiter1234!');
+  console.log('  Free Bites Admin:admin@freebites.com       / Admin1234!');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('No org slug needed — email + password only.');
 }

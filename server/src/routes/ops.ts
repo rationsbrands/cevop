@@ -29,6 +29,7 @@ opsRouter.get('/metrics', async (_req, res: Response) => {
       suspendedOrgs,
       selfSignupOrgs,
       newOrgsThisMonth,
+      freeOrgs,
       totalUsers,
       totalOrders,
       ordersToday,
@@ -41,6 +42,7 @@ opsRouter.get('/metrics', async (_req, res: Response) => {
       prisma.organization.count({ where: { planStatus: 'suspended', slug: { not: PLATFORM_SLUG } } }),
       prisma.organization.count({ where: { selfSignup: true, slug: { not: PLATFORM_SLUG } } }),
       prisma.organization.count({ where: { createdAt: { gte: thirtyDaysAgo }, slug: { not: PLATFORM_SLUG } } }),
+      prisma.organization.count({ where: { plan: 'free', slug: { not: PLATFORM_SLUG } } }),
       prisma.user.count({ where: { isActive: true, role: { not: 'SUPERADMIN' } } }),
       prisma.order.count(),
       prisma.order.count({ where: { createdAt: { gte: today } } }),
@@ -51,7 +53,7 @@ opsRouter.get('/metrics', async (_req, res: Response) => {
     res.json({
       success: true,
       data: {
-        orgs: { total: totalOrgs, active: activeOrgs, trialing: trialingOrgs, suspended: suspendedOrgs, selfSignup: selfSignupOrgs, newThisMonth: newOrgsThisMonth },
+        orgs: { total: totalOrgs, active: activeOrgs, trialing: trialingOrgs, suspended: suspendedOrgs, selfSignup: selfSignupOrgs, newThisMonth: newOrgsThisMonth, free: freeOrgs },
         users: { total: totalUsers },
         orders: { total: totalOrders, today: ordersToday },
         branches: { total: totalBranches },

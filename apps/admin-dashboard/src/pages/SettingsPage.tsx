@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth, useApi } from '../context/auth';
 
 export function SettingsPage() {
+  const { user } = useAuth();
   const api = useApi();
   const [form, setForm] = useState({ name: '', slug: '', logo: '', whatsappNumber: '', slackWebhook: '' });
   const [loading, setLoading] = useState(true);
@@ -49,16 +50,25 @@ export function SettingsPage() {
 
       <div className="card p-6 space-y-5">
         <h2 className="font-semibold text-sm text-[var(--muted)] uppercase tracking-wider border-b border-[var(--border)] pb-2">Notifications</h2>
-        <div>
-          <label>WhatsApp Number</label>
-          <input value={form.whatsappNumber} onChange={(e) => setForm({ ...form, whatsappNumber: e.target.value })} placeholder="+1234567890" />
-          <p className="text-xs text-[var(--muted)] mt-1">Receive new orders and waiter call alerts via WhatsApp.</p>
-        </div>
-        <div>
-          <label>Slack Webhook URL</label>
-          <input value={form.slackWebhook} onChange={(e) => setForm({ ...form, slackWebhook: e.target.value })} placeholder="https://hooks.slack.com/services/..." />
-          <p className="text-xs text-[var(--muted)] mt-1">Post order and alert notifications to your Slack channel.</p>
-        </div>
+        {user?.plan === 'free' ? (
+          <div className="p-4 border border-yellow-800 bg-yellow-900/20 text-yellow-400 text-sm">
+            <p className="font-semibold">Not available on Free plan</p>
+            <p className="mt-1">WhatsApp and Slack notifications require a paid plan. Please contact Cevop support to upgrade.</p>
+          </div>
+        ) : (
+          <>
+            <div>
+              <label>WhatsApp Number</label>
+              <input value={form.whatsappNumber} onChange={(e) => setForm({ ...form, whatsappNumber: e.target.value })} placeholder="+1234567890" />
+              <p className="text-xs text-[var(--muted)] mt-1">Receive new orders and waiter call alerts via WhatsApp.</p>
+            </div>
+            <div>
+              <label>Slack Webhook URL</label>
+              <input value={form.slackWebhook} onChange={(e) => setForm({ ...form, slackWebhook: e.target.value })} placeholder="https://hooks.slack.com/services/..." />
+              <p className="text-xs text-[var(--muted)] mt-1">Post order and alert notifications to your Slack channel.</p>
+            </div>
+          </>
+        )}
       </div>
 
       {success && <div className="bg-green-900/20 border border-green-800 text-green-400 px-3 py-2 text-sm">{success}</div>}

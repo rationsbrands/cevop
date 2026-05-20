@@ -3,6 +3,7 @@ import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../services/prisma';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { checkBranchLimit, checkStaffLimit } from '../middleware/checkLimits';
 import { logger } from '../services/logger';
 
 export const branchesRouter = Router();
@@ -36,7 +37,7 @@ branchesRouter.get('/', requireRole('ADMIN', 'SUPERADMIN'), async (req: AuthRequ
 });
 
 // POST / — create a branch (ADMIN/SUPERADMIN)
-branchesRouter.post('/', requireRole('ADMIN', 'SUPERADMIN'), async (req: AuthRequest, res: Response) => {
+branchesRouter.post('/', requireRole('ADMIN', 'SUPERADMIN'), checkBranchLimit, async (req: AuthRequest, res: Response) => {
   try {
     const data = branchSchema.parse(req.body);
 
@@ -172,7 +173,7 @@ branchesRouter.delete('/:branchId', requireRole('ADMIN', 'SUPERADMIN'), async (r
 });
 
 // POST /:branchId/admin — create a BRANCH_ADMIN user for a branch (ADMIN/SUPERADMIN only)
-branchesRouter.post('/:branchId/admin', requireRole('ADMIN', 'SUPERADMIN'), async (req: AuthRequest, res: Response) => {
+branchesRouter.post('/:branchId/admin', requireRole('ADMIN', 'SUPERADMIN'), checkStaffLimit, async (req: AuthRequest, res: Response) => {
   try {
     const { branchId } = req.params;
     const schema = z.object({
