@@ -8,7 +8,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-ui': ['framer-motion'],
           'vendor-socket': ['socket.io-client'],
         },
       },
