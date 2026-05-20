@@ -1,16 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth, useApi } from '../context/auth';
 
-interface Branch { id: string; name: string; }
+interface Branch {
+  id: string;
+  name: string;
+}
 interface User {
-  id: string; name: string; email: string; role: string;
-  isActive: boolean; createdAt: string; branchId?: string;
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  isActive: boolean;
+  createdAt: string;
+  branchId?: string;
   branch?: { id: string; name: string } | null;
 }
 
 const ROLE_LABELS: Record<string, string> = {
-  ADMIN: 'Admin', BRANCH_ADMIN: 'Branch Admin',
-  SERVICE: 'Service', WAITER: 'Waiter', SUPERADMIN: 'Superadmin',
+  ADMIN: 'Admin',
+  BRANCH_ADMIN: 'Branch Admin',
+  SERVICE: 'Service',
+  WAITER: 'Waiter',
+  SUPERADMIN: 'Superadmin',
 };
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -27,7 +38,13 @@ export function UsersPage() {
   const [tab, setTab] = useState<'users' | 'invites'>('users');
 
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'WAITER', branchId: '' });
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'WAITER',
+    branchId: '',
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -42,7 +59,9 @@ export function UsersPage() {
   const isOrgAdmin = me?.role === 'ADMIN' || me?.role === 'SUPERADMIN';
   const isBranchAdmin = me?.role === 'BRANCH_ADMIN';
 
-  const availableRoles = isBranchAdmin ? ['SERVICE', 'WAITER'] : ['ADMIN', 'BRANCH_ADMIN', 'SERVICE', 'WAITER'];
+  const availableRoles = isBranchAdmin
+    ? ['SERVICE', 'WAITER']
+    : ['ADMIN', 'BRANCH_ADMIN', 'SERVICE', 'WAITER'];
   const inviteRoles = isBranchAdmin ? ['SERVICE', 'WAITER'] : ['BRANCH_ADMIN', 'SERVICE', 'WAITER'];
 
   async function load() {
@@ -56,40 +75,60 @@ export function UsersPage() {
       setUsers(usersRes.data ?? []);
       setBranches(branchesRes.data ?? []);
       setInvites(invitesRes.data ?? []);
-    } catch { setError('Failed to load'); }
-    finally { setLoading(false); }
+    } catch {
+      setError('Failed to load');
+    } finally {
+      setLoading(false);
+    }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    setCreating(true); setCreateError('');
+    setCreating(true);
+    setCreateError('');
     try {
       const payload: any = { ...form };
       if (!payload.branchId) delete payload.branchId;
       const { success, error: err, data } = await api.post('/api/users', payload);
-      if (!success) { setCreateError(err || 'Failed to create user'); return; }
+      if (!success) {
+        setCreateError(err || 'Failed to create user');
+        return;
+      }
       setUsers((prev) => [data, ...prev]);
       setForm({ name: '', email: '', password: '', role: 'WAITER', branchId: '' });
       setShowCreate(false);
-    } catch { setCreateError('Failed to create user'); }
-    finally { setCreating(false); }
+    } catch {
+      setCreateError('Failed to create user');
+    } finally {
+      setCreating(false);
+    }
   }
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();
-    setInviting(true); setInviteError(''); setInviteResult(null);
+    setInviting(true);
+    setInviteError('');
+    setInviteResult(null);
     try {
       const payload: any = { ...inviteForm };
       if (!payload.branchId) delete payload.branchId;
       const { success, error: err, data } = await api.post('/api/invites', payload);
-      if (!success) { setInviteError(err || 'Failed to send invite'); return; }
+      if (!success) {
+        setInviteError(err || 'Failed to send invite');
+        return;
+      }
       setInviteResult(data);
       setInviteForm({ email: '', role: 'WAITER', branchId: '' });
       load(); // Refresh invites list
-    } catch { setInviteError('Failed to send invite'); }
-    finally { setInviting(false); }
+    } catch {
+      setInviteError('Failed to send invite');
+    } finally {
+      setInviting(false);
+    }
   }
 
   async function revokeInvite(id: string) {
@@ -98,8 +137,10 @@ export function UsersPage() {
   }
 
   async function toggleActive(user: User) {
-    const { success, data } = await api.patch(`/api/users/${user.id}`, { isActive: !user.isActive });
-    if (success) setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, ...data } : u));
+    const { success, data } = await api.patch(`/api/users/${user.id}`, {
+      isActive: !user.isActive,
+    });
+    if (success) setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, ...data } : u)));
   }
 
   if (loading) return <div className="text-[var(--muted)] text-sm">Loading…</div>;
@@ -111,15 +152,28 @@ export function UsersPage() {
         <div>
           <h1 className="font-display text-4xl">STAFF</h1>
           <p className="text-[var(--muted)] text-sm mt-0.5">
-            {me?.branch ? `Managing staff for ${me.branch.name}` : 'All staff across your organisation'}
+            {me?.branch
+              ? `Managing staff for ${me.branch.name}`
+              : 'All staff across your organisation'}
           </p>
         </div>
         <div className="flex gap-2">
           {(isOrgAdmin || isBranchAdmin) && (
-            <button onClick={() => { setShowInvite(true); setInviteResult(null); setInviteError(''); }} className="btn btn-secondary btn-sm">Invite via Email</button>
+            <button
+              onClick={() => {
+                setShowInvite(true);
+                setInviteResult(null);
+                setInviteError('');
+              }}
+              className="btn btn-secondary btn-sm"
+            >
+              Invite via Email
+            </button>
           )}
           {isOrgAdmin && (
-            <button onClick={() => setShowCreate(true)} className="btn btn-primary btn-sm">+ Add Staff</button>
+            <button onClick={() => setShowCreate(true)} className="btn btn-primary btn-sm">
+              + Add Staff
+            </button>
           )}
         </div>
       </div>
@@ -127,13 +181,26 @@ export function UsersPage() {
       {/* Invite Result Banner */}
       {inviteResult && (
         <div className="card p-4 border-[var(--accent)] bg-[var(--accent-dim)] space-y-2">
-          <p className="text-sm font-semibold text-[var(--text)]">Invite sent for {inviteResult.email}</p>
-          <p className="text-xs text-[var(--muted)]">Share this invite link with them (if email isn't configured):</p>
+          <p className="text-sm font-semibold text-[var(--text)]">
+            Invite sent for {inviteResult.email}
+          </p>
+          <p className="text-xs text-[var(--muted)]">
+            Share this invite link with them (if email isn't configured):
+          </p>
           <div className="flex items-center gap-2">
-            <code className="text-xs bg-[var(--surface2)] border border-[var(--border)] px-2 py-1 flex-1 break-all">{inviteResult.inviteUrl}</code>
-            <button onClick={() => navigator.clipboard.writeText(inviteResult.inviteUrl)} className="btn btn-secondary btn-sm shrink-0">Copy</button>
+            <code className="text-xs bg-[var(--surface2)] border border-[var(--border)] px-2 py-1 flex-1 break-all">
+              {inviteResult.inviteUrl}
+            </code>
+            <button
+              onClick={() => navigator.clipboard.writeText(inviteResult.inviteUrl)}
+              className="btn btn-secondary btn-sm shrink-0"
+            >
+              Copy
+            </button>
           </div>
-          <p className="text-xs text-[var(--muted)]">Expires: {new Date(inviteResult.expiresAt).toLocaleString()}</p>
+          <p className="text-xs text-[var(--muted)]">
+            Expires: {new Date(inviteResult.expiresAt).toLocaleString()}
+          </p>
         </div>
       )}
 
@@ -143,35 +210,122 @@ export function UsersPage() {
           <h2 className="font-semibold text-[var(--text)]">Add Staff Member</h2>
           <form onSubmit={handleCreate} className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label>Name *</label><input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} required /></div>
-              <div><label>Email *</label><input type="email" value={form.email} onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))} required /></div>
+              <div>
+                <label>Name *</label>
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  required
+                />
+              </div>
+              <div>
+                <label>Email *</label>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                  required
+                />
+              </div>
               <div>
                 <label>Password *</label>
                 <div className="relative">
-                  <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))} required minLength={8} placeholder="Min 8 characters" className="pr-10" />
-                  <button type="button" onClick={() => setShowPassword(v => !v)} tabIndex={-1} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] transition-colors text-xs select-none">{showPassword ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}</button>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={form.password}
+                    onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+                    required
+                    minLength={8}
+                    placeholder="••••••••"
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    tabIndex={-1}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] transition-colors text-xs select-none"
+                  >
+                    {showPassword ? (
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                        <line x1="1" y1="1" x2="23" y2="23" />
+                      </svg>
+                    ) : (
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    )}
+                  </button>
                 </div>
               </div>
               <div>
                 <label>Role *</label>
-                <select value={form.role} onChange={(e) => setForm(f => ({ ...f, role: e.target.value }))}>
-                  {availableRoles.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                <select
+                  value={form.role}
+                  onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
+                >
+                  {availableRoles.map((r) => (
+                    <option key={r} value={r}>
+                      {ROLE_LABELS[r]}
+                    </option>
+                  ))}
                 </select>
               </div>
               {isOrgAdmin && branches.length > 0 && (
                 <div className="sm:col-span-2">
-                  <label>Assign to Branch {form.role === 'BRANCH_ADMIN' ? '*' : '(optional)'}</label>
-                  <select value={form.branchId} onChange={(e) => setForm(f => ({ ...f, branchId: e.target.value }))} required={form.role === 'BRANCH_ADMIN'}>
+                  <label>
+                    Assign to Branch {form.role === 'BRANCH_ADMIN' ? '*' : '(optional)'}
+                  </label>
+                  <select
+                    value={form.branchId}
+                    onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}
+                    required={form.role === 'BRANCH_ADMIN'}
+                  >
                     <option value="">— Org-wide —</option>
-                    {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               )}
             </div>
             {createError && <p className="text-red-400 text-sm">{createError}</p>}
             <div className="flex gap-2">
-              <button type="button" onClick={() => setShowCreate(false)} className="btn btn-secondary flex-1 py-2 text-sm">Cancel</button>
-              <button type="submit" disabled={creating} className="btn btn-primary flex-1 py-2 text-sm disabled:opacity-50">{creating ? 'Creating…' : 'Add Staff'}</button>
+              <button
+                type="button"
+                onClick={() => setShowCreate(false)}
+                className="btn btn-secondary flex-1 py-2 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={creating}
+                className="btn btn-primary flex-1 py-2 text-sm disabled:opacity-50"
+              >
+                {creating ? 'Creating…' : 'Add Staff'}
+              </button>
             </div>
           </form>
         </div>
@@ -181,30 +335,71 @@ export function UsersPage() {
       {showInvite && (
         <div className="card p-5 space-y-4 border-[var(--accent)]">
           <h2 className="font-semibold text-[var(--text)]">Invite Staff by Email</h2>
-          <p className="text-xs text-[var(--muted)]">They'll receive a link to set up their account. The invite expires in 72 hours.</p>
+          <p className="text-xs text-[var(--muted)]">
+            They'll receive a link to set up their account. The invite expires in 72 hours.
+          </p>
           <form onSubmit={handleInvite} className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="sm:col-span-2"><label>Email *</label><input type="email" value={inviteForm.email} onChange={(e) => setInviteForm(f => ({ ...f, email: e.target.value }))} required placeholder="staff@restaurant.com" /></div>
+              <div className="sm:col-span-2">
+                <label>Email *</label>
+                <input
+                  type="email"
+                  value={inviteForm.email}
+                  onChange={(e) => setInviteForm((f) => ({ ...f, email: e.target.value }))}
+                  required
+                  placeholder="e.g. name@restaurant.com"
+                />
+              </div>
               <div>
                 <label>Role *</label>
-                <select value={inviteForm.role} onChange={(e) => setInviteForm(f => ({ ...f, role: e.target.value }))}>
-                  {inviteRoles.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                <select
+                  value={inviteForm.role}
+                  onChange={(e) => setInviteForm((f) => ({ ...f, role: e.target.value }))}
+                >
+                  {inviteRoles.map((r) => (
+                    <option key={r} value={r}>
+                      {ROLE_LABELS[r]}
+                    </option>
+                  ))}
                 </select>
               </div>
               {isOrgAdmin && branches.length > 0 && (
                 <div>
                   <label>Branch {inviteForm.role === 'BRANCH_ADMIN' ? '*' : '(optional)'}</label>
-                  <select value={inviteForm.branchId} onChange={(e) => setInviteForm(f => ({ ...f, branchId: e.target.value }))} required={inviteForm.role === 'BRANCH_ADMIN'}>
+                  <select
+                    value={inviteForm.branchId}
+                    onChange={(e) => setInviteForm((f) => ({ ...f, branchId: e.target.value }))}
+                    required={inviteForm.role === 'BRANCH_ADMIN'}
+                  >
                     <option value="">— Org-wide —</option>
-                    {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               )}
             </div>
             {inviteError && <p className="text-red-400 text-sm">{inviteError}</p>}
             <div className="flex gap-2">
-              <button type="button" onClick={() => { setShowInvite(false); setInviteResult(null); }} className="btn btn-secondary flex-1 py-2 text-sm">Cancel</button>
-              <button type="submit" disabled={inviting} className="btn btn-primary flex-1 py-2 text-sm disabled:opacity-50">{inviting ? 'Sending…' : 'Send Invite'}</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowInvite(false);
+                  setInviteResult(null);
+                }}
+                className="btn btn-secondary flex-1 py-2 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={inviting}
+                className="btn btn-primary flex-1 py-2 text-sm disabled:opacity-50"
+              >
+                {inviting ? 'Sending…' : 'Send Invite'}
+              </button>
             </div>
           </form>
         </div>
@@ -212,8 +407,18 @@ export function UsersPage() {
 
       {/* Tabs */}
       <div className="flex border-b border-[var(--border)]">
-        <button onClick={() => setTab('users')} className={`px-4 py-2 text-sm font-bold transition-all ${tab === 'users' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)]'}`}>Users ({users.length})</button>
-        <button onClick={() => setTab('invites')} className={`px-4 py-2 text-sm font-bold transition-all ${tab === 'invites' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)]'}`}>Pending Invites ({invites.length})</button>
+        <button
+          onClick={() => setTab('users')}
+          className={`px-4 py-2 text-sm font-bold transition-all ${tab === 'users' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)]'}`}
+        >
+          Users ({users.length})
+        </button>
+        <button
+          onClick={() => setTab('invites')}
+          className={`px-4 py-2 text-sm font-bold transition-all ${tab === 'invites' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)]'}`}
+        >
+          Pending Invites ({invites.length})
+        </button>
       </div>
 
       {tab === 'users' ? (
@@ -221,36 +426,74 @@ export function UsersPage() {
           <table className="w-full text-sm min-w-[600px]">
             <thead>
               <tr className="border-b border-[var(--border)] text-left">
-                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">Name</th>
-                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">Email</th>
-                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">Role</th>
-                {isOrgAdmin && <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">Branch</th>}
-                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
+                  Name
+                </th>
+                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
+                  Email
+                </th>
+                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
+                  Role
+                </th>
+                {isOrgAdmin && (
+                  <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
+                    Branch
+                  </th>
+                )}
+                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
+                  Status
+                </th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
               {users.map((u) => (
-                <tr key={u.id} className={`hover:bg-[var(--surface2)] transition-colors ${!u.isActive ? 'opacity-40' : ''}`}>
+                <tr
+                  key={u.id}
+                  className={`hover:bg-[var(--surface2)] transition-colors ${!u.isActive ? 'opacity-40' : ''}`}
+                >
                   <td className="px-4 py-3 font-medium text-[var(--text)]">{u.name}</td>
                   <td className="px-4 py-3 text-[var(--muted)] text-sm">{u.email}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 border ${u.role === 'ADMIN' || u.role === 'SUPERADMIN' ? 'border-[var(--accent)] text-[var(--accent)]' : u.role === 'BRANCH_ADMIN' ? 'border-blue-600 text-blue-400' : 'border-[var(--border)] text-[var(--muted)]'}`}>
-                      {ROLE_LABELS[u.role] ?? u.role}
+                    <span
+                      className={`text-xs px-2 py-0.5 border ${u.role === 'ADMIN' || u.role === 'SUPERADMIN' ? 'border-[var(--accent)] text-[var(--accent)]' : u.role === 'BRANCH_ADMIN' ? 'border-blue-600 text-blue-400' : 'border-[var(--border)] text-[var(--muted)]'}`}
+                    >
+                      {u.role === 'ADMIN' || u.role === 'SUPERADMIN'
+                        ? `Org. ${ROLE_LABELS[u.role] ?? u.role}`
+                        : u.role === 'BRANCH_ADMIN' && u.branch?.name
+                          ? `${u.branch.name} Admin`
+                          : (ROLE_LABELS[u.role] ?? u.role)}
                     </span>
                   </td>
-                  {isOrgAdmin && <td className="px-4 py-3 text-[var(--muted)] text-xs">{u.branch?.name ?? <span className="opacity-40">—</span>}</td>}
-                  <td className="px-4 py-3"><span className={`text-xs ${u.isActive ? 'text-green-400' : 'text-red-400'}`}>{u.isActive ? 'Active' : 'Inactive'}</span></td>
+                  {isOrgAdmin && (
+                    <td className="px-4 py-3 text-[var(--muted)] text-xs">
+                      {u.branch?.name ?? <span className="opacity-40">—</span>}
+                    </td>
+                  )}
+                  <td className="px-4 py-3">
+                    <span className={`text-xs ${u.isActive ? 'text-green-400' : 'text-red-400'}`}>
+                      {u.isActive ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-right">
                     {u.id !== me?.id && (isOrgAdmin || isBranchAdmin) && (
-                      <button onClick={() => toggleActive(u)} className="text-xs text-[var(--muted)] hover:text-[var(--danger)] transition-colors">
+                      <button
+                        onClick={() => toggleActive(u)}
+                        className="text-xs text-[var(--muted)] hover:text-[var(--danger)] transition-colors"
+                      >
                         {u.isActive ? 'Deactivate' : 'Activate'}
                       </button>
                     )}
                   </td>
                 </tr>
               ))}
-              {users.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-[var(--muted)]">No staff found</td></tr>}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--muted)]">
+                    No staff found
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -259,10 +502,18 @@ export function UsersPage() {
           <table className="w-full text-sm min-w-[600px]">
             <thead>
               <tr className="border-b border-[var(--border)] text-left">
-                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">Email</th>
-                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">Role</th>
-                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">Branch</th>
-                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">Expires</th>
+                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
+                  Email
+                </th>
+                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
+                  Role
+                </th>
+                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
+                  Branch
+                </th>
+                <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
+                  Expires
+                </th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -270,15 +521,36 @@ export function UsersPage() {
               {invites.map((i) => (
                 <tr key={i.id} className="hover:bg-[var(--surface2)]">
                   <td className="px-4 py-3 text-[var(--text)]">{i.email}</td>
-                  <td className="px-4 py-3"><span className="text-xs text-[var(--muted)] border border-[var(--border)] px-2 py-0.5">{ROLE_LABELS[i.role] ?? i.role}</span></td>
+                  <td className="px-4 py-3">
+                    <span className="text-xs text-[var(--muted)] border border-[var(--border)] px-2 py-0.5">
+                      {i.role === 'ADMIN' || i.role === 'SUPERADMIN'
+                        ? `Org. ${ROLE_LABELS[i.role] ?? i.role}`
+                        : i.role === 'BRANCH_ADMIN' && i.branchName
+                          ? `${i.branchName} Admin`
+                          : (ROLE_LABELS[i.role] ?? i.role)}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-[var(--muted)] text-xs">{i.branchName ?? '—'}</td>
-                  <td className="px-4 py-3 text-[var(--muted)] text-xs">{new Date(i.expiresAt).toLocaleString()}</td>
+                  <td className="px-4 py-3 text-[var(--muted)] text-xs">
+                    {new Date(i.expiresAt).toLocaleString()}
+                  </td>
                   <td className="px-4 py-3 text-right">
-                    <button onClick={() => revokeInvite(i.id)} className="text-xs text-red-400 hover:text-red-300">Revoke</button>
+                    <button
+                      onClick={() => revokeInvite(i.id)}
+                      className="text-xs text-red-400 hover:text-red-300"
+                    >
+                      Revoke
+                    </button>
                   </td>
                 </tr>
               ))}
-              {invites.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-[var(--muted)]">No pending invites</td></tr>}
+              {invites.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-8 text-center text-[var(--muted)]">
+                    No pending invites
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

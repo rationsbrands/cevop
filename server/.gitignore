@@ -35,6 +35,7 @@ Thumbs.db
 *.swp
 *.swo
 
-CREDENTIALS.md
 *.credentials.md
 test-*.js
+
+cevop_for_claude.zip

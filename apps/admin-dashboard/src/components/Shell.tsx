@@ -3,12 +3,25 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth, useApi } from '../context/auth';
 import { useTheme } from '../context/theme';
 import {
-  IconDashboard, IconMenu, IconTables, IconOrders, IconStaff,
-  IconHelp, IconBranches, IconSettings, IconOnboard, IconLogout,
-  IconChevronLeft, IconX
+  IconDashboard,
+  IconMenu,
+  IconTables,
+  IconOrders,
+  IconStaff,
+  IconHelp,
+  IconBranches,
+  IconSettings,
+  IconOnboard,
+  IconLogout,
+  IconChevronLeft,
+  IconX,
 } from './Icons';
 
-interface BranchOption { id: string; name: string; slug: string; }
+interface BranchOption {
+  id: string;
+  name: string;
+  slug: string;
+}
 
 export function Shell() {
   const { user, logout, activeBranchFilter, setActiveBranchFilter, loading } = useAuth();
@@ -17,6 +30,7 @@ export function Shell() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [resendStatus, setResendStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [branches, setBranches] = useState<BranchOption[]>([]);
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
@@ -24,8 +38,7 @@ export function Shell() {
   const nextThemeLabel = nextThemeMode === 'system' ? 'OS' : nextThemeMode === 'dark' ? 'D' : 'L';
 
   const isBranchScoped = !!user?.branchId;
-  const isOrgAdmin = user?.role === 'ADMIN' || user?.role === 'SUPERADMIN';
-  const isSuperAdmin = user?.role === 'SUPERADMIN';
+  const isOrgAdmin = user?.role === 'ADMIN';
 
   // Close sidebar by default on mobile, open on desktop
   useEffect(() => {
@@ -35,7 +48,12 @@ export function Shell() {
 
   useEffect(() => {
     if (!isOrgAdmin) return;
-    api.get('/api/branches').then(({ data }) => { if (data) setBranches(data); }).catch(() => {});
+    api
+      .get('/api/branches')
+      .then(({ data }) => {
+        if (data) setBranches(data);
+      })
+      .catch(() => {});
   }, [isOrgAdmin]);
 
   // Close mobile menu on route change
@@ -44,51 +62,60 @@ export function Shell() {
   }, [navigate]);
 
   const NAV = [
-    { to: '/',             label: 'Dashboard',    Icon: IconDashboard, exact: true, show: true },
-    { to: '/menu',         label: 'Menu',          Icon: IconMenu,      show: true },
-    { to: '/tables',       label: 'Tables & QR',   Icon: IconTables,    show: true },
-    { to: '/orders',       label: 'Orders',        Icon: IconOrders,    show: true },
-    { to: '/users',        label: 'Staff',         Icon: IconStaff,     show: true },
-    { to: '/help-options', label: 'Help Options',  Icon: IconHelp,      show: true },
-    { to: '/branches',     label: 'Branches',      Icon: IconBranches,  show: isOrgAdmin },
-    { to: '/settings',     label: 'Settings',      Icon: IconSettings,  show: isOrgAdmin },
-    { to: '/onboard',      label: 'Onboard Org',   Icon: IconOnboard,   show: isSuperAdmin },
+    { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true, show: true },
+    { to: '/menu', label: 'Menu', Icon: IconMenu, show: true },
+    { to: '/tables', label: 'Tables & QR', Icon: IconTables, show: true },
+    { to: '/orders', label: 'Orders', Icon: IconOrders, show: true },
+    { to: '/users', label: 'Staff', Icon: IconStaff, show: true },
+    { to: '/help-options', label: 'Help Options', Icon: IconHelp, show: true },
+    { to: '/branches', label: 'Branches', Icon: IconBranches, show: isOrgAdmin },
+    { to: '/settings', label: 'Settings', Icon: IconSettings, show: isOrgAdmin },
   ].filter((n) => n.show);
 
-  async function handleLogout() { await logout(); navigate('/login'); }
+  async function handleLogout() {
+    await logout();
+    navigate('/login');
+  }
 
   return (
-    <div className="flex w-full min-h-dvh relative">
+    <div className="flex w-full h-dvh overflow-hidden relative">
       {/* Mobile Backdrop */}
       {mobileMenuOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-black/50 z-40 lg:hidden backdrop-blur-sm"
           onClick={() => setMobileMenuOpen(false)}
         />
       )}
 
       {/* Sidebar */}
-      <aside className={`
+      <aside
+        className={`
         fixed inset-y-0 left-0 z-50 lg:static
         ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         ${sidebarOpen ? 'w-64' : 'w-16'}
         shrink-0 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col transition-all duration-300 overflow-hidden
-      `}>
+      `}
+      >
         {/* Logo row */}
         <div className="h-14 flex items-center px-3 border-b border-[var(--border)] shrink-0 gap-3">
           <button
-            onClick={() => setSidebarOpen(v => !v)}
+            onClick={() => setSidebarOpen((v) => !v)}
             className="w-8 h-8 flex items-center justify-center text-[var(--accent)] font-display text-base shrink-0 hover:bg-[var(--surface2)] transition-colors rounded-sm"
             title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
           >
-            {sidebarOpen
-              ? <IconChevronLeft size={16} />
-              : <span className="brand-mark text-[var(--accent)]" />
-            }
+            {sidebarOpen ? (
+              <IconChevronLeft size={16} />
+            ) : (
+              <span className="brand-mark text-[var(--accent)]" />
+            )}
           </button>
-          {(sidebarOpen || mobileMenuOpen) && <span className="brand-mark text-base text-[var(--text)] whitespace-nowrap tracking-wide">CEVOP</span>}
-          
-          <button 
+          {(sidebarOpen || mobileMenuOpen) && (
+            <span className="brand-mark text-base text-[var(--text)] whitespace-nowrap tracking-wide">
+              CEVOP
+            </span>
+          )}
+
+          <button
             onClick={() => setMobileMenuOpen(false)}
             className="lg:hidden ml-auto p-2 text-[var(--muted)] hover:text-[var(--text)]"
           >
@@ -103,10 +130,16 @@ export function Shell() {
             <select
               className="w-full bg-[var(--surface2)] border-[var(--border)] text-xs py-1.5"
               value={activeBranchFilter?.id ?? ''}
-              onChange={(e) => setActiveBranchFilter(branches.find(b => b.id === e.target.value) ?? null)}
+              onChange={(e) =>
+                setActiveBranchFilter(branches.find((b) => b.id === e.target.value) ?? null)
+              }
             >
               <option value="">All Branches</option>
-              {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
             </select>
           </div>
         )}
@@ -115,19 +148,24 @@ export function Shell() {
         <nav className="flex-1 py-4 space-y-1 px-2 mt-1 overflow-y-auto scrollbar-hide">
           {NAV.map(({ to, label, Icon: NavIcon, exact }) => (
             <NavLink
-              key={to} to={to} end={exact}
+              key={to}
+              to={to}
+              end={exact}
               onClick={() => setMobileMenuOpen(false)}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 text-sm transition-all duration-150 rounded-sm ${isActive
-                  ? 'bg-[var(--accent-dim)] text-[var(--accent)] font-semibold'
-                  : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface2)]'
+                `flex items-center gap-3 px-3 py-2.5 text-sm transition-all duration-150 rounded-sm ${
+                  isActive
+                    ? 'bg-[var(--accent-dim)] text-[var(--accent)] font-semibold'
+                    : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface2)]'
                 }`
               }
             >
               <span className="shrink-0 w-5 flex items-center justify-center">
                 <NavIcon size={18} />
               </span>
-              {(sidebarOpen || mobileMenuOpen) && <span className="whitespace-nowrap">{label}</span>}
+              {(sidebarOpen || mobileMenuOpen) && (
+                <span className="whitespace-nowrap">{label}</span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -135,9 +173,11 @@ export function Shell() {
         {/* Footer */}
         <div className="p-3 border-t border-[var(--border)] shrink-0 space-y-4">
           {/* Theme toggle */}
-          {(sidebarOpen || mobileMenuOpen) ? (
+          {sidebarOpen || mobileMenuOpen ? (
             <div className="flex flex-col gap-1.5 px-1">
-              <label className="text-[9px] text-[var(--muted)] uppercase font-bold tracking-widest px-1">Theme</label>
+              <label className="text-[9px] text-[var(--muted)] uppercase font-bold tracking-widest px-1">
+                Theme
+              </label>
               <div className="flex items-center gap-2 px-1">
                 <button
                   onClick={() => setMode(nextThemeMode)}
@@ -176,11 +216,17 @@ export function Shell() {
           )}
 
           {/* User info */}
-          {(sidebarOpen || mobileMenuOpen) ? (
+          {sidebarOpen || mobileMenuOpen ? (
             <div className="pt-2 border-t border-[var(--border)] mt-2">
               <div className="px-3 mb-3">
                 <p className="text-xs text-[var(--text)] font-bold truncate">{user?.name}</p>
-                <p className="text-[10px] text-[var(--muted)] uppercase tracking-wider">{user?.role?.replace(/_/g, ' ')}</p>
+                <p className="text-[10px] text-[var(--muted)] uppercase tracking-wider">
+                  {user?.role === 'ADMIN' || user?.role === 'SUPERADMIN'
+                    ? `Org. ${user.role.replace(/_/g, ' ')}`
+                    : user?.role === 'BRANCH_ADMIN' && user?.branch
+                      ? `${user.branch.name} Admin`
+                      : user?.role?.replace(/_/g, ' ')}
+                </p>
               </div>
               <button
                 onClick={handleLogout}
@@ -206,19 +252,31 @@ export function Shell() {
         {/* Top bar */}
         <header className="h-14 flex items-center px-4 lg:px-6 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 justify-between sticky top-0 z-30">
           <div className="flex items-center gap-3 min-w-0">
-            <button 
+            <button
               onClick={() => setMobileMenuOpen(true)}
               className="lg:hidden p-2 -ml-2 text-[var(--text)]"
             >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <line x1="3" y1="12" x2="21" y2="12"></line>
                 <line x1="3" y1="6" x2="21" y2="6"></line>
                 <line x1="3" y1="18" x2="21" y2="18"></line>
               </svg>
             </button>
-            
+
             <div className="flex items-center gap-2 text-sm min-w-0">
-              <NavLink to="/" className="font-bold text-[var(--text)] truncate hover:text-[var(--accent)] transition-colors">
+              <NavLink
+                to="/"
+                className="font-bold text-[var(--text)] truncate hover:text-[var(--accent)] transition-colors"
+              >
                 {user?.organization?.name}
               </NavLink>
               {(activeBranchFilter || isBranchScoped) && (
@@ -239,6 +297,77 @@ export function Shell() {
             </div>
           </div>
         </header>
+
+        {user && user.emailVerified === false && (
+          <div
+            className={`px-4 py-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shrink-0 border-b transition-colors ${
+              resendStatus === 'sent'
+                ? 'bg-[var(--success)]/10 border-[var(--success)]/20'
+                : 'bg-yellow-500/10 border-yellow-500/20'
+            }`}
+          >
+            <div
+              className={`flex items-center gap-2 text-sm ${resendStatus === 'sent' ? 'text-[var(--success)]' : 'text-yellow-600 dark:text-yellow-400'}`}
+            >
+              {resendStatus === 'sent' ? (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              ) : (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                  <line x1="12" y1="9" x2="12" y2="13"></line>
+                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+              )}
+              <span>
+                {resendStatus === 'sent'
+                  ? 'Verification email sent! Please check your inbox.'
+                  : 'Please verify your email address to secure your account.'}
+              </span>
+            </div>
+            {resendStatus !== 'sent' && (
+              <button
+                onClick={async () => {
+                  setResendStatus('sending');
+                  try {
+                    await api.post('/api/auth/resend-verification', {});
+                    setResendStatus('sent');
+                  } catch {
+                    setResendStatus('error');
+                    setTimeout(() => setResendStatus('idle'), 3000);
+                  }
+                }}
+                disabled={resendStatus === 'sending'}
+                className="text-xs font-semibold bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
+              >
+                {resendStatus === 'sending'
+                  ? 'Sending...'
+                  : resendStatus === 'error'
+                    ? 'Failed'
+                    : 'Resend verification'}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Page outlet */}
         <div className="flex-1 overflow-y-auto p-4 lg:p-8">

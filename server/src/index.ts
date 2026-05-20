@@ -6,9 +6,12 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
-import { Ratelimit, type Duration } from '@upstash/ratelimit';import { Server as SocketServer } from 'socket.io';
+import compression from 'compression';
+import { Ratelimit, type Duration } from '@upstash/ratelimit';
+import { Server as SocketServer } from 'socket.io';
 
 import { getRedisClient } from './services/redis';
+import { prisma } from './services/prisma';
 
 import { authRouter } from './routes/auth';
 import { menuRouter } from './routes/menu';
@@ -42,20 +45,23 @@ export const io = new SocketServer(httpServer, {
 });
 
 // Security headers
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'none'"],
-      frameAncestors: ["'none'"],
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
     },
-  },
-  crossOriginEmbedderPolicy: false,
-}));
+    crossOriginEmbedderPolicy: false,
+  }),
+);
 app.set('trust proxy', 1);
 
 // CORS
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(cookieParser());
+app.use(compression());
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
@@ -67,7 +73,7 @@ app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) }
 // Fallback in-memory limiters (used in dev or if Redis not configured)
 const authFallback = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests, please slow down.' },
@@ -75,7 +81,7 @@ const authFallback = rateLimit({
 
 const apiFallback = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 500,
+  max: 3000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests.' },
@@ -83,7 +89,7 @@ const apiFallback = rateLimit({
 
 const publicFallback = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 60,
+  max: 120,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests from this table.' },
@@ -96,13 +102,13 @@ function makeUpstashLimiter(requests: number, window: Duration): Ratelimit | nul
   return new Ratelimit({
     redis,
     limiter: Ratelimit.slidingWindow(requests, window),
-    prefix: 'cevop:rl',
+    prefix: 'cevop:rl2',
   });
 }
 
-const upstashAuth   = makeUpstashLimiter(20,  '15 m');
-const upstashApi    = makeUpstashLimiter(500, '15 m');
-const upstashPublic = makeUpstashLimiter(60,  '1 m');
+const upstashAuth = makeUpstashLimiter(100, '15 m');
+const upstashApi = makeUpstashLimiter(3000, '15 m');
+const upstashPublic = makeUpstashLimiter(120, '1 m');
 // Wraps an Upstash limiter into Express middleware, falls back to in-memory
 function makeLimiter(
   upstash: Ratelimit | null,
@@ -112,7 +118,7 @@ function makeLimiter(
   if (!upstash) return fallback;
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const ip = (req.ip ?? req.socket.remoteAddress ?? 'unknown');
+      const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
       const { success } = await upstash.limit(ip);
       if (!success) {
         res.status(429).json({ success: false, error: errorMsg });
@@ -126,18 +132,22 @@ function makeLimiter(
   };
 }
 
-const authLimiter   = makeLimiter(upstashAuth,   authFallback,   'Too many requests, please slow down.');
-const apiLimiter    = makeLimiter(upstashApi,    apiFallback,    'Too many requests.');
-const publicLimiter = makeLimiter(upstashPublic, publicFallback, 'Too many requests from this table.');
+const authLimiter = makeLimiter(upstashAuth, authFallback, 'Too many requests, please slow down.');
+const apiLimiter = makeLimiter(upstashApi, apiFallback, 'Too many requests.');
+const publicLimiter = makeLimiter(
+  upstashPublic,
+  publicFallback,
+  'Too many requests from this table.',
+);
 
 // ---------------------------------------------------------------------------
 
-app.use('/api/auth/login',          authLimiter);
+app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/forgot-password', authLimiter);
-app.use('/api/auth/signup',         authLimiter);
-app.use('/api/auth/check-slug',     authLimiter);
-app.use('/api/orders/public',        publicLimiter);
-app.use('/api/waiter-calls/public',  publicLimiter);
+app.use('/api/auth/signup', authLimiter);
+app.use('/api/auth/check-slug', apiLimiter);
+app.use('/api/orders/public', publicLimiter);
+app.use('/api/waiter-calls/public', publicLimiter);
 app.use('/api/service-requests/public', publicLimiter);
 app.use('/api/', apiLimiter);
 
@@ -150,18 +160,18 @@ app.get('/health', (_req, res) => {
 });
 
 // Routes
-app.use('/api/auth',             authRouter);
-app.use('/api/menu',             menuRouter);
-app.use('/api/orders',           ordersRouter);
-app.use('/api/tables',           tablesRouter);
-app.use('/api/orgs',             orgsRouter);
-app.use('/api/branches',         branchesRouter);
-app.use('/api/users',            usersRouter);
-app.use('/api/invites',          invitesRouter);
-app.use('/api/waiter-calls',     waiterCallsRouter);
+app.use('/api/auth', authRouter);
+app.use('/api/menu', menuRouter);
+app.use('/api/orders', ordersRouter);
+app.use('/api/tables', tablesRouter);
+app.use('/api/orgs', orgsRouter);
+app.use('/api/branches', branchesRouter);
+app.use('/api/users', usersRouter);
+app.use('/api/invites', invitesRouter);
+app.use('/api/waiter-calls', waiterCallsRouter);
 app.use('/api/service-requests', serviceRequestsRouter);
-app.use('/api/help-options',     helpOptionsRouter);
-app.use('/api/ops',              opsRouter);
+app.use('/api/help-options', helpOptionsRouter);
+app.use('/api/ops', opsRouter);
 
 // WebSocket
 initSocketHandlers(io);
@@ -170,13 +180,40 @@ initSocketHandlers(io);
 app.use(errorHandler);
 
 const PORT = Number(process.env.PORT) || 4000;
-httpServer.listen(PORT, '0.0.0.0', () => {
-  logger.info(`🚀 Cevop API running on port ${PORT}`);
-  logger.info(`📡 WebSocket ready`);
-  logger.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  if (!process.env.UPSTASH_REDIS_REST_URL) {
-    logger.warn('UPSTASH_REDIS_REST_URL not set — rate limiters using in-memory store (not suitable for production)');
-  }
-});
+const server = httpServer;
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, '0.0.0.0', () => {
+    logger.info(`🚀 API running on http://0.0.0.0:${PORT}`);
+    logger.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    if (!process.env.UPSTASH_REDIS_REST_URL) {
+      logger.warn(
+        'UPSTASH_REDIS_REST_URL not set — rate limiters using in-memory store (not suitable for production)',
+      );
+    }
+  });
+}
+
+// Graceful Shutdown
+function gracefulShutdown(signal: string) {
+  logger.info(`Received ${signal}. Shutting down gracefully...`);
+  io.close(() => {
+    logger.info('WebSocket connections closed.');
+  });
+  server.close(async () => {
+    logger.info('HTTP server closed.');
+    await prisma.$disconnect();
+    logger.info('Prisma disconnected.');
+    process.exit(0);
+  });
+
+  // Force close after 10s
+  setTimeout(() => {
+    logger.error('Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 export default app;

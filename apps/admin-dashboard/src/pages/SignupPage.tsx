@@ -22,7 +22,11 @@ const CURRENCIES = [
 ];
 
 function slugify(s: string) {
-  return s.toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+  return s
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '');
 }
 
 type Step = 'org' | 'account' | 'done';
@@ -61,7 +65,10 @@ export function SignupPage() {
 
   // Debounced slug check
   useEffect(() => {
-    if (!orgSlug || orgSlug.length < 2) { setSlugStatus('idle'); return; }
+    if (!orgSlug || orgSlug.length < 2) {
+      setSlugStatus('idle');
+      return;
+    }
     setSlugStatus('checking');
     if (slugTimer.current) clearTimeout(slugTimer.current);
     slugTimer.current = setTimeout(async () => {
@@ -69,96 +76,156 @@ export function SignupPage() {
         const res = await fetch(`${API_BASE}/api/auth/check-slug/${orgSlug}`);
         const { available } = await res.json();
         setSlugStatus(available ? 'available' : 'taken');
-      } catch { setSlugStatus('idle'); }
+      } catch {
+        setSlugStatus('idle');
+      }
     }, 500);
-    return () => { if (slugTimer.current) clearTimeout(slugTimer.current); };
+    return () => {
+      if (slugTimer.current) clearTimeout(slugTimer.current);
+    };
   }, [orgSlug]);
 
   function handleOrgContinue(e: React.FormEvent) {
     e.preventDefault();
     setOrgStepError('');
-    if (slugStatus === 'taken') { setOrgStepError('That slug is already taken. Please choose another.'); return; }
-    if (slugStatus === 'checking') { setOrgStepError('Still checking slug availability, please wait…'); return; }
+    if (slugStatus === 'taken') {
+      setOrgStepError('That slug is already taken. Please choose another.');
+      return;
+    }
+    if (slugStatus === 'checking') {
+      setOrgStepError('Still checking slug availability, please wait…');
+      return;
+    }
     setStep('account');
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (password !== confirmPassword) { setError('Passwords do not match'); return; }
-    if (password.length < 8) { setError('Password must be at least 8 characters'); return; }
-    setSubmitting(true); setError('');
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    setSubmitting(true);
+    setError('');
 
     try {
       const res = await fetch(`${API_BASE}/api/auth/signup`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orgName, orgSlug, adminName, adminEmail, adminPassword: password, contactPhone, timezone, currency }),
+        body: JSON.stringify({
+          orgName,
+          orgSlug,
+          adminName,
+          adminEmail,
+          adminPassword: password,
+          contactPhone,
+          timezone,
+          currency,
+        }),
       });
       const body = await res.json();
-      if (!res.ok) { setError(body.error || 'Registration failed'); return; }
+      if (!res.ok) {
+        setError(body.error || 'Registration failed');
+        return;
+      }
 
       // Log them in immediately with returned cookie
 
       setStep('done');
-    } catch { setError('Something went wrong. Please try again.'); }
-    finally { setSubmitting(false); }
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  const slugBorderColor = slugStatus === 'available' ? 'border-green-500' : slugStatus === 'taken' ? 'border-red-500' : slugStatus === 'checking' ? 'border-yellow-500' : '';
+  const slugBorderColor =
+    slugStatus === 'available'
+      ? 'border-green-500'
+      : slugStatus === 'taken'
+        ? 'border-red-500'
+        : slugStatus === 'checking'
+          ? 'border-yellow-500'
+          : '';
 
-  if (step === 'done') return (
-    <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
-      <button
-        onClick={() => setMode(nextThemeMode)}
-        className={`absolute top-6 right-6 z-10 w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
-          mode === 'system'
-            ? 'bg-[var(--surface2)] border-[var(--border)] text-[var(--text)] shadow-sm'
-            : mode === 'dark'
-              ? 'bg-black border-[var(--border)] text-[var(--text)] shadow-sm'
-              : 'bg-white border-[var(--border)] text-black shadow-sm'
-        }`}
-        title={`Theme: ${themeLabel} (click → ${nextThemeLabel})`}
-        aria-label={`Theme ${themeLabel}. Click to switch to ${nextThemeLabel}.`}
-      >
-        {themeLabel}
-      </button>
+  if (step === 'done')
+    return (
+      <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
+        <button
+          onClick={() => setMode(nextThemeMode)}
+          className={`absolute top-6 right-6 z-10 w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
+            mode === 'system'
+              ? 'bg-[var(--surface2)] border-[var(--border)] text-[var(--text)] shadow-sm'
+              : mode === 'dark'
+                ? 'bg-black border-[var(--border)] text-[var(--text)] shadow-sm'
+                : 'bg-white border-[var(--border)] text-black shadow-sm'
+          }`}
+          title={`Theme: ${themeLabel} (click → ${nextThemeLabel})`}
+          aria-label={`Theme ${themeLabel}. Click to switch to ${nextThemeLabel}.`}
+        >
+          {themeLabel}
+        </button>
 
-      <div className="hidden lg:flex flex-col justify-between p-10 border-r border-[var(--border)] bg-[var(--surface)]">
-        <div className="space-y-3">
-          <div className="brand-mark text-4xl text-[var(--accent)] leading-none">CEVOP</div>
-          <p className="text-sm text-[var(--muted)] max-w-sm">
-            You’re set. Next: configure branches, tables, menu items, and invite staff.
-          </p>
+        <div className="hidden lg:flex flex-col justify-between p-10 border-r border-[var(--border)] bg-[var(--surface)]">
+          <div className="space-y-3">
+            <div className="brand-mark text-4xl text-[var(--accent)] leading-none">CEVOP</div>
+            <p className="text-sm text-[var(--muted)] max-w-sm">
+              Please verify your email to access your new dashboard and configure your restaurant.
+            </p>
+          </div>
+          <div className="text-xs text-[var(--muted)] font-medium">
+            Powered by <span className="brand-mark text-[var(--text)]">CEVOP</span>
+          </div>
         </div>
-        <div className="text-xs text-[var(--muted)] font-medium">
-          Powered by <span className="brand-mark text-[var(--text)]">CEVOP</span>
+
+        <div className="flex items-center justify-center p-6">
+          <div className="w-full max-w-md space-y-6 animate-in text-center">
+            <div className="w-16 h-16 bg-blue-500/20 text-blue-500 rounded-full flex items-center justify-center mx-auto mb-6">
+              <svg
+                width="32"
+                height="32"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                <polyline points="22,6 12,13 2,6"></polyline>
+              </svg>
+            </div>
+
+            <div className="space-y-2">
+              <h1 className="font-display text-3xl text-[var(--text)]">Check your email</h1>
+              <p className="text-sm text-[var(--muted)]">
+                Welcome {adminName}! We've sent a verification link to <strong>{adminEmail}</strong>
+                .
+              </p>
+            </div>
+
+            <div className="card p-6 mt-4">
+              <p className="text-sm text-[var(--text)]">
+                Please click the link in the email to verify your address and log in to your
+                dashboard.
+              </p>
+            </div>
+
+            <button
+              onClick={() => (window.location.href = '/login')}
+              className="btn btn-secondary w-full py-3 tracking-widest text-sm mt-4"
+            >
+              Return to Login
+            </button>
+          </div>
         </div>
       </div>
-
-      <div className="flex items-center justify-center p-6">
-        <div className="w-full max-w-md space-y-6 animate-in">
-          <div className="space-y-2">
-            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">CEVOP</div>
-            <h1 className="font-display text-3xl text-[var(--text)]">You’re in</h1>
-            <p className="text-sm text-[var(--muted)]">Your 14-day free trial has started.</p>
-          </div>
-
-          <div className="card p-6 space-y-3">
-            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">What’s next</div>
-            <div className="text-sm text-[var(--text)]">1. Create your first branch</div>
-            <div className="text-sm text-[var(--text)]">2. Add menu items</div>
-            <div className="text-sm text-[var(--text)]">3. Create tables and QR codes</div>
-            <div className="text-sm text-[var(--text)]">4. Invite your team</div>
-          </div>
-
-          <button onClick={() => window.location.href = '/'} className="btn btn-primary w-full py-3 tracking-widest text-sm">
-            Go to dashboard
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+    );
 
   return (
     <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
@@ -186,12 +253,20 @@ export function SignupPage() {
         </div>
         <div className="space-y-3 max-w-md">
           <div className="card p-4">
-            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">Setup</div>
-            <div className="mt-1 text-sm font-semibold text-[var(--text)]">Branches, tables, menu and staff.</div>
+            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+              Setup
+            </div>
+            <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+              Branches, tables, menu and staff.
+            </div>
           </div>
           <div className="card p-4">
-            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">Service</div>
-            <div className="mt-1 text-sm font-semibold text-[var(--text)]">Orders, waiter calls and service requests.</div>
+            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+              Service
+            </div>
+            <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+              Orders, waiter calls and service requests.
+            </div>
           </div>
         </div>
         <div className="text-xs text-[var(--muted)] font-medium">
@@ -202,132 +277,288 @@ export function SignupPage() {
       <div className="flex items-center justify-center p-6">
         <div className="w-full max-w-md space-y-8 animate-in">
           <div className="space-y-2">
-            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">CEVOP</div>
+            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">
+              CEVOP
+            </div>
             <h1 className="font-display text-3xl text-[var(--text)]">Start free trial</h1>
             <p className="text-sm text-[var(--muted)]">No credit card needed.</p>
           </div>
 
-        {/* Step indicator */}
-        <div className="flex items-center gap-2">
-          {(['org', 'account'] as Step[]).map((s, i) => (
-            <React.Fragment key={s}>
-              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${step === s || (step === 'account' && s === 'org') ? 'bg-[var(--accent)] border-[var(--accent)] text-black' : 'border-[var(--border)] text-[var(--muted)]'}`}>
-                {step === 'account' && s === 'org' ? <span>&#10003;</span> : <>{i + 1}</>}
-              </div>
-              {i < 1 && <div className={`flex-1 h-0.5 transition-all ${step === 'account' ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'}`} />}
-            </React.Fragment>
-          ))}
-          <span className="text-xs text-[var(--muted)] ml-2">{step === 'org' ? 'Your restaurant' : 'Your account'}</span>
-        </div>
+          {/* Step indicator */}
+          <div className="flex items-center gap-2">
+            {(['org', 'account'] as Step[]).map((s, i) => (
+              <React.Fragment key={s}>
+                <div
+                  className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${step === s || (step === 'account' && s === 'org') ? 'bg-[var(--accent)] border-[var(--accent)] text-black' : 'border-[var(--border)] text-[var(--muted)]'}`}
+                >
+                  {step === 'account' && s === 'org' ? <span>&#10003;</span> : <>{i + 1}</>}
+                </div>
+                {i < 1 && (
+                  <div
+                    className={`flex-1 h-0.5 transition-all ${step === 'account' ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'}`}
+                  />
+                )}
+              </React.Fragment>
+            ))}
+            <span className="text-xs text-[var(--muted)] ml-2">
+              {step === 'org' ? 'Your restaurant' : 'Your account'}
+            </span>
+          </div>
 
-        {/* Step 1: Org details */}
-        {step === 'org' && (
-          <form onSubmit={handleOrgContinue} className="card p-6 space-y-4">
-            <div>
-              <label>Restaurant Name *</label>
-              <input
-                value={orgName}
-                onChange={e => { setOrgName(e.target.value); setOrgSlug(slugify(e.target.value)); }}
-                placeholder="Rations Restaurant"
-                required
-              />
-            </div>
-
-            <div>
-              <label>
-                URL Slug *
-                <span className="ml-2 text-[var(--muted)] normal-case font-normal text-xs">
-                  {slugStatus === 'checking' && <span className="text-[var(--muted)]">Checking...</span>}
-                  {slugStatus === 'available' && <span className="text-[var(--success)]">Available</span>}
-                  {slugStatus === 'taken' && <span className="text-[var(--danger)]">Already taken</span>}
-                </span>
-              </label>
-              <input
-                value={orgSlug}
-                onChange={e => setOrgSlug(e.target.value)}
-                placeholder="rations-restaurant"
-                required
-                pattern="^[a-z0-9-]{2,100}$"
-                className={slugBorderColor}
-              />
-              <p className="text-xs text-[var(--muted)] mt-1">Used for your dashboard URL. Lowercase, numbers, hyphens only.</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
+          {/* Step 1: Org details */}
+          {step === 'org' && (
+            <form onSubmit={handleOrgContinue} className="card p-6 space-y-4">
               <div>
-                <label>Timezone *</label>
-                <select value={timezone} onChange={e => setTimezone(e.target.value)}>
-                  {TIMEZONES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
+                <label>Restaurant Name *</label>
+                <input
+                  value={orgName}
+                  onChange={(e) => {
+                    setOrgName(e.target.value);
+                    setOrgSlug(slugify(e.target.value));
+                  }}
+                  placeholder="e.g. Cevop Restaurant"
+                  required
+                />
               </div>
+
               <div>
-                <label>Currency *</label>
-                <select value={currency} onChange={e => setCurrency(e.target.value)}>
-                  {CURRENCIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                </select>
+                <label>
+                  URL Slug *
+                  <span className="ml-2 text-[var(--muted)] normal-case font-normal text-xs">
+                    {slugStatus === 'checking' && (
+                      <span className="text-[var(--muted)]">Checking...</span>
+                    )}
+                    {slugStatus === 'available' && (
+                      <span className="text-[var(--success)]">Available</span>
+                    )}
+                    {slugStatus === 'taken' && (
+                      <span className="text-[var(--danger)]">Already taken</span>
+                    )}
+                  </span>
+                </label>
+                <input
+                  value={orgSlug}
+                  onChange={(e) => setOrgSlug(e.target.value)}
+                  placeholder="e.g. cevop-restaurant"
+                  required
+                  pattern="^[a-z0-9-]{2,100}$"
+                  className={slugBorderColor}
+                />
+                <p className="text-xs text-[var(--muted)] mt-1">
+                  Used for your dashboard URL. Lowercase, numbers, hyphens only.
+                </p>
               </div>
-            </div>
 
-            <div>
-              <label>Phone Number <span className="text-[var(--muted)] normal-case font-normal">(optional)</span></label>
-              <input type="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)} placeholder="+234 800 000 0000" />
-            </div>
-
-            {orgStepError && <div className="bg-red-900/20 border border-red-800 text-red-400 px-3 py-2 text-sm">{orgStepError}</div>}
-
-            <button type="submit" className="btn btn-primary w-full py-3 text-sm tracking-widest">
-              CONTINUE →
-            </button>
-          </form>
-        )}
-
-        {/* Step 2: Account details */}
-        {step === 'account' && (
-          <form onSubmit={handleSubmit} className="card p-6 space-y-4">
-            <div>
-              <label>Your Full Name *</label>
-              <input value={adminName} onChange={e => setAdminName(e.target.value)} required placeholder="Restaurant Owner" />
-            </div>
-            <div>
-              <label>Email Address *</label>
-              <input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} required placeholder="you@restaurant.com" autoComplete="email" />
-              <p className="text-xs text-[var(--muted)] mt-1">This will be your login email.</p>
-            </div>
-            <div>
-              <label>Password *</label>
-              <div className="relative">
-                <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} required minLength={8} placeholder="Min 8 characters" className="pr-10" autoComplete="new-password" />
-                <button type="button" onClick={() => setShowPw(v => !v)} tabIndex={-1} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] transition-colors text-xs select-none">{showPw ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}</button>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label>Timezone *</label>
+                  <select value={timezone} onChange={(e) => setTimezone(e.target.value)}>
+                    {TIMEZONES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label>Currency *</label>
+                  <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                    {CURRENCIES.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
-            </div>
-            <div>
-              <label>Confirm Password *</label>
-              <div className="relative">
-                <input type={showConfirm ? 'text' : 'password'} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required placeholder="Repeat password" className="pr-10" />
-                <button type="button" onClick={() => setShowConfirm(v => !v)} tabIndex={-1} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] transition-colors text-xs select-none">{showConfirm ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}</button>
+
+              <div>
+                <label>
+                  Phone Number{' '}
+                  <span className="text-[var(--muted)] normal-case font-normal">(optional)</span>
+                </label>
+                <input
+                  type="tel"
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
+                  placeholder="e.g. +234 800 000 0000"
+                />
               </div>
-            </div>
 
-            {error && <div className="bg-red-900/20 border border-red-800 text-red-400 px-3 py-2 text-sm">{error}</div>}
+              {orgStepError && (
+                <div className="bg-red-900/20 border border-red-800 text-red-400 px-3 py-2 text-sm">
+                  {orgStepError}
+                </div>
+              )}
 
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setStep('org')} className="btn btn-secondary flex-1 py-3 text-sm">← Back</button>
-              <button type="submit" disabled={submitting} className="btn btn-primary flex-1 py-3 text-sm tracking-widest disabled:opacity-50">
-                {submitting ? 'CREATING…' : 'CREATE ACCOUNT'}
+              <button type="submit" className="btn btn-primary w-full py-3 text-sm tracking-widest">
+                CONTINUE →
               </button>
-            </div>
+            </form>
+          )}
 
-            <p className="text-xs text-[var(--muted)] text-center">
-              By signing up you agree to our Terms of Service. Your 14-day free trial starts immediately.
-            </p>
-          </form>
-        )}
+          {/* Step 2: Account details */}
+          {step === 'account' && (
+            <form onSubmit={handleSubmit} className="card p-6 space-y-4">
+              <div>
+                <label>Your Full Name *</label>
+                <input
+                  value={adminName}
+                  onChange={(e) => setAdminName(e.target.value)}
+                  required
+                  placeholder="e.g. Jane Doe"
+                />
+              </div>
+              <div>
+                <label>Email Address *</label>
+                <input
+                  type="email"
+                  value={adminEmail}
+                  onChange={(e) => setAdminEmail(e.target.value)}
+                  required
+                  placeholder="e.g. name@restaurant.com"
+                  autoComplete="email"
+                />
+                <p className="text-xs text-[var(--muted)] mt-1">This will be your login email.</p>
+              </div>
+              <div>
+                <label>Password *</label>
+                <div className="relative">
+                  <input
+                    type={showPw ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    minLength={8}
+                    placeholder="••••••••"
+                    className="pr-10"
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPw((v) => !v)}
+                    tabIndex={-1}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] transition-colors text-xs select-none"
+                  >
+                    {showPw ? (
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                        <line x1="1" y1="1" x2="23" y2="23" />
+                      </svg>
+                    ) : (
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label>Confirm Password *</label>
+                <div className="relative">
+                  <input
+                    type={showConfirm ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    placeholder="••••••••"
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirm((v) => !v)}
+                    tabIndex={-1}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] transition-colors text-xs select-none"
+                  >
+                    {showConfirm ? (
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                        <line x1="1" y1="1" x2="23" y2="23" />
+                      </svg>
+                    ) : (
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              </div>
 
-        <p className="text-center text-xs text-[var(--muted)]">
-          Already have an account? <Link to="/login" className="text-[var(--accent)] hover:underline">Sign in</Link>
-        </p>
+              {error && (
+                <div className="bg-red-900/20 border border-red-800 text-red-400 px-3 py-2 text-sm">
+                  {error}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setStep('org')}
+                  className="btn btn-secondary flex-1 py-3 text-sm"
+                >
+                  ← Back
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="btn btn-primary flex-1 py-3 text-sm tracking-widest disabled:opacity-50"
+                >
+                  {submitting ? 'CREATING…' : 'CREATE ACCOUNT'}
+                </button>
+              </div>
+
+              <p className="text-xs text-[var(--muted)] text-center">
+                By signing up you agree to our Terms of Service.
+              </p>
+            </form>
+          )}
+
+          <p className="text-center text-xs text-[var(--muted)]">
+            Already have an account?{' '}
+            <Link to="/login" className="text-[var(--accent)] hover:underline">
+              Sign in
+            </Link>
+          </p>
+        </div>
       </div>
-    </div>
     </div>
   );
 }

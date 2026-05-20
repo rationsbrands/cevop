@@ -40,7 +40,11 @@ const footerStyle = `
   padding-top: 16px;
 `;
 
-export async function sendPasswordReset(to: string, resetUrl: string, orgName: string): Promise<void> {
+export async function sendPasswordReset(
+  to: string,
+  resetUrl: string,
+  orgName: string,
+): Promise<void> {
   const html = `
     <div style="${baseEmailStyle}">
       <div style="${cardStyle}">
@@ -97,10 +101,12 @@ export async function sendInvite(
   orgName: string,
   branchName: string | null,
   role: string,
-  invitedByName: string
+  invitedByName: string,
 ): Promise<void> {
   const roleFormatted = formatRole(role);
-  const branchText = branchName ? ` You'll be part of the <strong>${branchName}</strong> branch.` : '';
+  const branchText = branchName
+    ? ` You'll be part of the <strong>${branchName}</strong> branch.`
+    : '';
   const branchTextPlain = branchName ? ` You'll be part of the ${branchName} branch.` : '';
 
   const html = `
@@ -144,6 +150,51 @@ If you didn't request this, you can safely ignore this email.
     });
   } catch (error) {
     logger.error('Failed to send invite email', { to, error });
+    throw error;
+  }
+}
+
+export async function sendVerificationEmail(
+  to: string,
+  verifyUrl: string,
+  orgName: string,
+): Promise<void> {
+  const html = `
+    <div style="${baseEmailStyle}">
+      <div style="${cardStyle}">
+        <h2 style="margin-top: 0; color: #111;">Cevop</h2>
+        <h1 style="font-size: 24px; margin-bottom: 16px;">Verify your email</h1>
+        <p style="line-height: 1.5;">Welcome to Cevop! You signed up as the admin for <strong>${orgName}</strong>.</p>
+        <p style="line-height: 1.5;">Please verify your email address by clicking the button below.</p>
+        <a href="${verifyUrl}" style="${buttonStyle}">Verify Email</a>
+        <div style="${footerStyle}">
+          If you didn't create an account, you can safely ignore this email.
+        </div>
+      </div>
+    </div>
+  `;
+
+  const text = `
+Verify your email
+
+Welcome to Cevop! You signed up as the admin for ${orgName}.
+Please verify your email address by clicking the link below:
+
+${verifyUrl}
+
+If you didn't create an account, you can safely ignore this email.
+  `.trim();
+
+  try {
+    await resend.emails.send({
+      from: FROM_ADDRESS,
+      to,
+      subject: 'Verify your Cevop account email',
+      html,
+      text,
+    });
+  } catch (error) {
+    logger.error('Failed to send verification email', { to, error });
     throw error;
   }
 }

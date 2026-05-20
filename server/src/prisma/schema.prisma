@@ -28,6 +28,7 @@ model Organization {
   contactPhone     String?
   contactEmail     String?
   notes            String?
+  scheduledForDeletionAt DateTime?
   auditLogs        AuditLog[]
   branches         Branch[]
   categories       Category[]
@@ -108,6 +109,8 @@ model User {
   passwordResetToken  String?        @unique
   passwordResetExpiry DateTime?
   mustChangePassword  Boolean        @default(false)
+  emailVerified       DateTime?
+  emailVerificationToken String?     @unique
   auditLogs           AuditLog[]
   refreshTokens       RefreshToken[]
   branch              Branch?        @relation(fields: [branchId], references: [id])

@@ -1,0 +1,18 @@
+#!/usr/bin/expect -f
+set timeout -1
+spawn npx prisma migrate dev --name add_email_verification --skip-seed
+expect {
+    "Are you sure you want to create this migration?" {
+        send "y\r"
+        exp_continue
+    }
+    "If there are existing duplicate values, this will fail" {
+        send "y\r"
+        exp_continue
+    }
+    "We need to reset the PostgreSQL database" {
+        send "y\r"
+        exp_continue
+    }
+    eof
+}

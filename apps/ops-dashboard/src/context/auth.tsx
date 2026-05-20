@@ -1,10 +1,34 @@
-import React, { createContext, useContext, useState, useEffect, useRef, ReactNode, useCallback } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+  ReactNode,
+  useCallback,
+} from 'react';
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
 
-const API_BASE = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '');
+const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 
-export interface OpsUser { id: string; name: string; email: string; role: string; organizationId: string; mustChangePassword: boolean; }
-interface AuthCtx { user: OpsUser | null; token: string | null; login: (email: string, password: string) => Promise<void>; logout: () => Promise<void>; loading: boolean; mustChangePassword: boolean; clearMustChange: () => void; }
+export interface OpsUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  organizationId: string;
+  mustChangePassword: boolean;
+  emailVerified: boolean;
+}
+interface AuthCtx {
+  user: OpsUser | null;
+  token: string | null;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  loading: boolean;
+  mustChangePassword: boolean;
+  clearMustChange: () => void;
+}
 const AuthContext = createContext<AuthCtx | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -33,19 +57,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
       });
-      if (!res.ok) { doLogout(); return null; }
+      if (!res.ok) {
+        doLogout();
+        return null;
+      }
       const { data } = await res.json();
       setToken(data.accessToken);
       lastRefreshedAt.current = Date.now();
       scheduleRefresh(data.accessToken);
       return data.accessToken;
-    } catch { doLogout(); return null; }
+    } catch {
+      doLogout();
+      return null;
+    }
   }, [token]);
 
-  function doLogout() { setToken(null); setUser(null); }
+  function doLogout() {
+    setToken(null);
+    setUser(null);
+  }
 
   function clearMustChange() {
-    setUser(prev => prev ? { ...prev, mustChangePassword: false } : null);
+    setUser((prev) => (prev ? { ...prev, mustChangePassword: false } : null));
   }
 
   useEffect(() => {
@@ -68,12 +101,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
         });
-        if (!res.ok) { setLoading(false); return; }
+        if (!res.ok) {
+          setLoading(false);
+          return;
+        }
         const { data } = await res.json();
         setToken(data.accessToken);
         scheduleRefresh(data.accessToken);
 
-        const meRes = await fetch(`${API_BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${data.accessToken}` } });
+        const meRes = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${data.accessToken}` },
+        });
         const { data: userData } = await meRes.json();
         if (userData?.role === 'SUPERADMIN') {
           setUser(userData);
@@ -86,32 +124,72 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     })();
-    return () => { if (timer.current) clearTimeout(timer.current); };
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
   }, []);
 
   async function login(email: string, password: string) {
-    const res = await fetch(`${API_BASE}/api/auth/login`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || 'Login failed');
-    if (body.data.user.role !== 'SUPERADMIN') throw new Error('This portal is for Cevop operators only');
-    setToken(body.data.accessToken); setUser(body.data.user); scheduleRefresh(body.data.accessToken);
+    if (body.data.user.role !== 'SUPERADMIN')
+      throw new Error('This portal is for Cevop operators only');
+    setToken(body.data.accessToken);
+    setUser(body.data.user);
+    scheduleRefresh(body.data.accessToken);
   }
   async function logout() {
     try {
-      await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' } });
-    } catch { /* ignore */ }
+      await fetch(`${API_BASE}/api/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch {
+      /* ignore */
+    }
     if (timer.current) clearTimeout(timer.current);
     doLogout();
   }
-  return <AuthContext.Provider value={{ user, token, login, logout, loading, mustChangePassword: user?.mustChangePassword ?? false, clearMustChange }}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        login,
+        logout,
+        loading,
+        mustChangePassword: user?.mustChangePassword ?? false,
+        clearMustChange,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
 }
-export function useAuth() { const c = useContext(AuthContext); if (!c) throw new Error('Need AuthProvider'); return c; }
+export function useAuth() {
+  const c = useContext(AuthContext);
+  if (!c) throw new Error('Need AuthProvider');
+  return c;
+}
 export function useApi() {
   const { token } = useAuth();
   const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
   return {
-    get: (path: string) => fetch(`${API_BASE}${path}`, { headers: h }).then(r => r.json()),
-    post: (path: string, body: unknown) => fetch(`${API_BASE}${path}`, { method: 'POST', headers: h, body: JSON.stringify(body) }).then(r => r.json()),
-    patch: (path: string, body: unknown) => fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: h, body: JSON.stringify(body) }).then(r => r.json()),
+    get: (path: string) => fetch(`${API_BASE}${path}`, { headers: h }).then((r) => r.json()),
+    post: (path: string, body: unknown) =>
+      fetch(`${API_BASE}${path}`, { method: 'POST', headers: h, body: JSON.stringify(body) }).then(
+        (r) => r.json(),
+      ),
+    patch: (path: string, body: unknown) =>
+      fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: h, body: JSON.stringify(body) }).then(
+        (r) => r.json(),
+      ),
   };
 }

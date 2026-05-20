@@ -164,6 +164,7 @@ export interface AuthPayload {
   branchId?: string;
   role: string;
   plan?: string;
+  impersonating?: boolean;
 }
 
 export interface ApiResponse<T = unknown> {

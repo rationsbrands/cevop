@@ -32,15 +32,24 @@ export function TeamPage() {
     }
   }
 
-  useEffect(() => { loadTeam(); }, []);
+  useEffect(() => {
+    loadTeam();
+  }, []);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true); setError(''); setSuccess('');
+    setSaving(true);
+    setError('');
+    setSuccess('');
     try {
       const res = await api.post('/api/ops/team', form);
-      if (!res.success) { setError(res.error || 'Failed to create account'); return; }
-      setSuccess(`Account created for ${form.email}. They must change their password on first login.`);
+      if (!res.success) {
+        setError(res.error || 'Failed to create account');
+        return;
+      }
+      setSuccess(
+        `Account created for ${form.email}. They must change their password on first login.`,
+      );
       setForm({ name: '', email: '', password: '' });
       setShowForm(false);
       await loadTeam();
@@ -53,7 +62,8 @@ export function TeamPage() {
 
   async function toggleActive(member: TeamMember) {
     const action = member.isActive ? 'deactivate' : 'reactivate';
-    if (!confirm(`${action === 'deactivate' ? 'Deactivate' : 'Reactivate'} ${member.name}?`)) return;
+    if (!confirm(`${action === 'deactivate' ? 'Deactivate' : 'Reactivate'} ${member.name}?`))
+      return;
     try {
       const res = await api.patch(`/api/ops/team/${member.id}`, { isActive: !member.isActive });
       if (res.success) await loadTeam();
@@ -71,15 +81,27 @@ export function TeamPage() {
           <p className="text-sm text-[var(--muted)] mt-1">Manage Cevop operator accounts.</p>
         </div>
         <button
-          onClick={() => { setShowForm(v => !v); setError(''); setSuccess(''); }}
+          onClick={() => {
+            setShowForm((v) => !v);
+            setError('');
+            setSuccess('');
+          }}
           className="btn btn-primary px-4 py-2 text-sm"
         >
           {showForm ? 'Cancel' : '+ Add Member'}
         </button>
       </div>
 
-      {error && <div className="bg-red-900/20 border border-red-800 text-red-400 px-4 py-3 text-sm">{error}</div>}
-      {success && <div className="bg-green-900/20 border border-green-800 text-green-400 px-4 py-3 text-sm">{success}</div>}
+      {error && (
+        <div className="bg-red-900/20 border border-red-800 text-red-400 px-4 py-3 text-sm">
+          {error}
+        </div>
+      )}
+      {success && (
+        <div className="bg-green-900/20 border border-green-800 text-green-400 px-4 py-3 text-sm">
+          {success}
+        </div>
+      )}
 
       {showForm && (
         <div className="card p-6">
@@ -90,9 +112,9 @@ export function TeamPage() {
               <input
                 type="text"
                 value={form.name}
-                onChange={e => setForm(v => ({ ...v, name: e.target.value }))}
+                onChange={(e) => setForm((v) => ({ ...v, name: e.target.value }))}
                 required
-                placeholder="Jane Smith"
+                placeholder="e.g. Jane Doe"
               />
             </div>
             <div>
@@ -100,9 +122,9 @@ export function TeamPage() {
               <input
                 type="email"
                 value={form.email}
-                onChange={e => setForm(v => ({ ...v, email: e.target.value }))}
+                onChange={(e) => setForm((v) => ({ ...v, email: e.target.value }))}
                 required
-                placeholder="jane@cevop.com"
+                placeholder="e.g. jane@cevop.com"
               />
             </div>
             <div>
@@ -111,14 +133,14 @@ export function TeamPage() {
                 <input
                   type={showPw ? 'text' : 'password'}
                   value={form.password}
-                  onChange={e => setForm(v => ({ ...v, password: e.target.value }))}
+                  onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))}
                   required
                   className="pr-10"
-                  placeholder="Min 8 chars, 1 uppercase, 1 number"
+                  placeholder="••••••••"
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPw(v => !v)}
+                  onClick={() => setShowPw((v) => !v)}
                   tabIndex={-1}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] text-xs"
                 >
@@ -129,7 +151,11 @@ export function TeamPage() {
                 They will be forced to change this on first login.
               </p>
             </div>
-            <button type="submit" disabled={saving} className="btn btn-primary px-6 py-2 text-sm disabled:opacity-50">
+            <button
+              type="submit"
+              disabled={saving}
+              className="btn btn-primary px-6 py-2 text-sm disabled:opacity-50"
+            >
               {saving ? 'Creating...' : 'Create Account'}
             </button>
           </form>
@@ -145,15 +171,23 @@ export function TeamPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--border)]">
-                <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">Name</th>
-                <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">Email</th>
-                <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">Last Login</th>
-                <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">Status</th>
+                <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">
+                  Name
+                </th>
+                <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">
+                  Email
+                </th>
+                <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">
+                  Last Login
+                </th>
+                <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">
+                  Status
+                </th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
-              {team.map(member => (
+              {team.map((member) => (
                 <tr key={member.id} className="border-b border-[var(--border)] last:border-0">
                   <td className="px-4 py-3 text-[var(--text)] font-medium">
                     {member.name}
@@ -170,11 +204,13 @@ export function TeamPage() {
                       : 'Never'}
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs font-bold px-2 py-0.5 ${
-                      member.isActive
-                        ? 'text-green-400 bg-green-900/20 border border-green-800'
-                        : 'text-red-400 bg-red-900/20 border border-red-800'
-                    }`}>
+                    <span
+                      className={`text-xs font-bold px-2 py-0.5 ${
+                        member.isActive
+                          ? 'text-green-400 bg-green-900/20 border border-green-800'
+                          : 'text-red-400 bg-red-900/20 border border-red-800'
+                      }`}
+                    >
                       {member.isActive ? 'ACTIVE' : 'INACTIVE'}
                     </span>
                   </td>

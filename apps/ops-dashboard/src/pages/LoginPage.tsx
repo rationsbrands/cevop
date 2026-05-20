@@ -19,10 +19,16 @@ export function LoginPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true); setError('');
-    try { await login(email, password); navigate('/'); }
-    catch (err: any) { setError(err.message); }
-    finally { setLoading(false); }
+    setLoading(true);
+    setError('');
+    try {
+      await login(email, password);
+      navigate('/');
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -46,11 +52,11 @@ export function LoginPage() {
         <div className="space-y-3">
           <div className="flex items-center gap-3">
             <div className="brand-mark text-4xl text-[var(--accent)] leading-none">CEVOP</div>
-            <span className="text-[10px] border border-[var(--danger)] text-[var(--danger)] px-2 py-1 font-bold tracking-widest uppercase">Ops</span>
+            <span className="text-[10px] border border-[var(--danger)] text-[var(--danger)] px-2 py-1 font-bold tracking-widest uppercase">
+              Ops
+            </span>
           </div>
-          <p className="text-sm text-[var(--muted)] max-w-sm">
-            Internal operations portal.
-          </p>
+          <p className="text-sm text-[var(--muted)] max-w-sm">Internal operations portal.</p>
         </div>
         <div className="text-xs text-[var(--muted)] font-medium">
           Powered by <span className="brand-mark text-[var(--text)]">CEVOP</span>
@@ -60,27 +66,85 @@ export function LoginPage() {
       <div className="flex items-center justify-center p-6">
         <div className="w-full max-w-md space-y-8 animate-in">
           <div className="space-y-2">
-            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">CEVOP</div>
+            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">
+              CEVOP
+            </div>
             <h1 className="font-display text-3xl text-[var(--text)]">Ops sign in</h1>
             <p className="text-sm text-[var(--muted)]">Cevop internal only.</p>
           </div>
           <form onSubmit={handleSubmit} className="card p-6 space-y-5">
-          <div>
-            <label>Email</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" placeholder="ops@cevop.io" />
-          </div>
-          <div>
-            <label>Password</label>
-            <div className="relative">
-              <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} required className="pr-10" />
-              <button type="button" onClick={() => setShowPw(v => !v)} tabIndex={-1} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] text-xs">{showPw ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}</button>
+            <div>
+              <label>Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                placeholder="name@cevop.com"
+              />
             </div>
-          </div>
-          {error && <div className="bg-red-900/20 border border-red-800 text-red-400 px-3 py-2 text-sm">{error}</div>}
-          <button type="submit" disabled={loading} className="btn btn-primary w-full py-3 tracking-widest text-sm disabled:opacity-50">
-            {loading ? 'SIGNING IN…' : 'SIGN IN'}
-          </button>
-        </form>
+            <div>
+              <label>Password</label>
+              <div className="relative">
+                <input
+                  type={showPw ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPw((v) => !v)}
+                  tabIndex={-1}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] text-xs"
+                >
+                  {showPw ? (
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                      <line x1="1" y1="1" x2="23" y2="23" />
+                    </svg>
+                  ) : (
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
+            {error && (
+              <div className="bg-red-900/20 border border-red-800 text-red-400 px-3 py-2 text-sm">
+                {error}
+              </div>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn btn-primary w-full py-3 tracking-widest text-sm disabled:opacity-50"
+            >
+              {loading ? 'SIGNING IN…' : 'SIGN IN'}
+            </button>
+          </form>
         </div>
       </div>
     </div>

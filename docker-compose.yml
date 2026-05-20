@@ -21,7 +21,7 @@ services:
 
   server:
     build:
-      context: ./server
+      context: .
       dockerfile: Dockerfile
     container_name: cevop-server
     restart: unless-stopped

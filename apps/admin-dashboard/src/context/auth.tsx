@@ -1,7 +1,15 @@
-import React, { createContext, useContext, useState, useEffect, useRef, ReactNode, useCallback } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+  ReactNode,
+  useCallback,
+} from 'react';
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
 
-const API_BASE = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '');
+const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 
 export interface OrgInfo {
   id: string;
@@ -13,11 +21,21 @@ export interface OrgInfo {
   planStatus: string;
   trialEndsAt?: string;
 }
-export interface BranchInfo { id: string; name: string; slug: string; }
+export interface BranchInfo {
+  id: string;
+  name: string;
+  slug: string;
+}
 export interface AuthUser {
-  id: string; name: string; email: string; role: string;
-  organizationId: string; branchId: string | null;
-  organization: OrgInfo; branch: BranchInfo | null;
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  emailVerified: boolean;
+  organizationId: string;
+  branchId: string | null;
+  organization: OrgInfo;
+  branch: BranchInfo | null;
 }
 
 interface AuthContextType {
@@ -56,17 +74,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const silentRefresh = useCallback(async (): Promise<string | null> => {
     // Debounce
     if (Date.now() - lastRefreshedAt.current < 30_000) {
-      return token;  // Return current in-memory token
+      return token; // Return current in-memory token
     }
 
     try {
       const res = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
-        credentials: 'include',  // Cookie is sent automatically
+        credentials: 'include', // Cookie is sent automatically
         headers: { 'Content-Type': 'application/json' },
         // No body
       });
-      if (!res.ok) { logout(); return null; }
+      if (!res.ok) {
+        logout();
+        return null;
+      }
       const { data } = await res.json();
       setToken(data.accessToken);
       lastRefreshedAt.current = Date.now();
@@ -91,23 +112,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [silentRefresh, token]);
 
   useEffect(() => {
-    // Attempt to restore session from httpOnly cookie via silent refresh
+    // Attempt to restore session from httpOnly cookie, or from URL token (Impersonation)
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
-          method: 'POST',
-          credentials: 'include',  // Required — sends the cookie
-          headers: { 'Content-Type': 'application/json' },
-          // No body — token comes from cookie
-        });
-        if (!res.ok) { setLoading(false); return; }
-        const { data } = await res.json();
-        setToken(data.accessToken);
-        scheduleRefresh(data.accessToken);
-        
+        const urlParams = new URLSearchParams(window.location.search);
+        let tokenFromUrl = urlParams.get('token');
+
+        if (tokenFromUrl) {
+          // Save to sessionStorage to survive StrictMode double-mount and page refreshes
+          sessionStorage.setItem('impersonate_token', tokenFromUrl);
+          // Clear token from URL so it's not bookmarked
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } else {
+          // If not in URL, check if we have an active impersonation session
+          tokenFromUrl = sessionStorage.getItem('impersonate_token');
+        }
+
+        let activeToken = tokenFromUrl;
+
+        if (!tokenFromUrl) {
+          const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+            method: 'POST',
+            credentials: 'include', // Required — sends the cookie
+            headers: { 'Content-Type': 'application/json' },
+          });
+          if (!res.ok) {
+            setLoading(false);
+            return;
+          }
+          const { data } = await res.json();
+          activeToken = data.accessToken;
+        }
+
+        if (!activeToken) {
+          setLoading(false);
+          return;
+        }
+
+        setToken(activeToken);
+        scheduleRefresh(activeToken);
+
         // Then fetch /me to get user details
         const meRes = await fetch(`${API_BASE}/api/auth/me`, {
-          headers: { Authorization: `Bearer ${data.accessToken}` },
+          headers: { Authorization: `Bearer ${activeToken}` },
         });
         const { data: userData } = await meRes.json();
         if (userData) {
@@ -122,18 +169,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     })();
-    return () => { if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current); };
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
   }, []);
 
   async function login(email: string, password: string) {
     const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
-      credentials: 'include',  // Required — server sets the cookie on this response
+      credentials: 'include', // Required — server sets the cookie on this response
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || 'Login failed');
+
+    if (body.data.user.role === 'SUPERADMIN') {
+      throw new Error('This account belongs to the Ops team. Please use the Ops Portal.');
+    }
 
     setToken(body.data.accessToken);
     setUser(body.data.user);
@@ -145,18 +198,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await fetch(`${API_BASE}/api/auth/logout`, {
         method: 'POST',
-        credentials: 'include',  // Sends cookie so server can revoke it
+        credentials: 'include', // Sends cookie so server can revoke it
         headers: { 'Content-Type': 'application/json' },
       });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    sessionStorage.removeItem('impersonate_token');
     setToken(null);
     setUser(null);
     setActiveBranchFilter(null);
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, activeBranchFilter, setActiveBranchFilter, login, logout, loading }}>
+    <AuthContext.Provider
+      value={{ user, token, activeBranchFilter, setActiveBranchFilter, login, logout, loading }}
+    >
       {children}
     </AuthContext.Provider>
   );
@@ -199,11 +257,17 @@ export function useApi() {
     get: (path: string, params?: Record<string, string>) =>
       fetch(buildUrl(path, params), { headers }).then(handleResponse),
     post: (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) }).then(handleResponse),
+      fetch(`${API_BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) }).then(
+        handleResponse,
+      ),
     put: (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'PUT', headers, body: JSON.stringify(body) }).then(handleResponse),
+      fetch(`${API_BASE}${path}`, { method: 'PUT', headers, body: JSON.stringify(body) }).then(
+        handleResponse,
+      ),
     patch: (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'PATCH', headers, body: JSON.stringify(body) }).then(handleResponse),
+      fetch(`${API_BASE}${path}`, { method: 'PATCH', headers, body: JSON.stringify(body) }).then(
+        handleResponse,
+      ),
     delete: (path: string) =>
       fetch(`${API_BASE}${path}`, { method: 'DELETE', headers }).then(handleResponse),
   };
@@ -211,9 +275,31 @@ export function useApi() {
 
 // Keep for backward compat where needed
 export const API = (token: string | null) => ({
-  get: (path: string) => fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()),
-  post: (path: string, body: unknown) => fetch(`${API_BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) }).then((r) => r.json()),
-  put: (path: string, body: unknown) => fetch(`${API_BASE}${path}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) }).then((r) => r.json()),
-  patch: (path: string, body: unknown) => fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) }).then((r) => r.json()),
-  delete: (path: string) => fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()),
+  get: (path: string) =>
+    fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${token}` } }).then((r) =>
+      r.json(),
+    ),
+  post: (path: string, body: unknown) =>
+    fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    }).then((r) => r.json()),
+  put: (path: string, body: unknown) =>
+    fetch(`${API_BASE}${path}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    }).then((r) => r.json()),
+  patch: (path: string, body: unknown) =>
+    fetch(`${API_BASE}${path}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    }).then((r) => r.json()),
+  delete: (path: string) =>
+    fetch(`${API_BASE}${path}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    }).then((r) => r.json()),
 });

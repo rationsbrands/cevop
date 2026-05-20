@@ -62,16 +62,28 @@ export function LoginPage() {
           </h2>
           <div className="grid gap-3">
             <div className="card p-4">
-              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">Orders</div>
-              <div className="mt-1 text-sm font-semibold text-[var(--text)]">Track and manage orders across tables.</div>
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Orders
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                Track and manage orders across tables.
+              </div>
             </div>
             <div className="card p-4">
-              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">Help Options</div>
-              <div className="mt-1 text-sm font-semibold text-[var(--text)]">Waiter calls and service requests, organised.</div>
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Help Options
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                Waiter calls and service requests, organised.
+              </div>
             </div>
             <div className="card p-4">
-              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">Branches</div>
-              <div className="mt-1 text-sm font-semibold text-[var(--text)]">Operate multi-branch with clear controls.</div>
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Branches
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                Operate multi-branch with clear controls.
+              </div>
             </div>
           </div>
         </div>
@@ -84,7 +96,9 @@ export function LoginPage() {
       <div className="flex items-center justify-center p-6">
         <div className="w-full max-w-md space-y-8 animate-in">
           <div className="space-y-2">
-            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">CEVOP</div>
+            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">
+              CEVOP
+            </div>
             <h1 className="font-display text-3xl text-[var(--text)]">Sign in</h1>
             <p className="text-sm text-[var(--muted)]">Access your admin dashboard.</p>
           </div>
@@ -96,7 +110,7 @@ export function LoginPage() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@restaurant.com"
+                placeholder="name@restaurant.com"
                 autoComplete="email"
                 required
               />
@@ -132,12 +146,19 @@ export function LoginPage() {
               </div>
             )}
 
-            <button type="submit" disabled={loading} className="btn btn-primary w-full py-3 tracking-widest text-sm">
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn btn-primary w-full py-3 tracking-widest text-sm"
+            >
               {loading ? 'SIGNING IN…' : 'SIGN IN'}
             </button>
 
             <div className="flex items-center justify-between text-xs">
-              <Link to="/forgot-password" className="text-[var(--muted)] hover:text-[var(--accent)] transition-colors">
+              <Link
+                to="/forgot-password"
+                className="text-[var(--muted)] hover:text-[var(--accent)] transition-colors"
+              >
                 Forgot password?
               </Link>
               <a href="/signup" className="text-[var(--accent)] hover:underline font-semibold">

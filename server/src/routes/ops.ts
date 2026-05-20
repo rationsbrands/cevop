@@ -9,6 +9,7 @@ import { prisma } from '../services/prisma';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { logger } from '../services/logger';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
 const PLATFORM_SLUG = 'cevop-internal'; // Internal platform org — excluded from client metrics
 
@@ -20,7 +21,8 @@ opsRouter.get('/metrics', async (_req, res: Response) => {
   try {
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const today = new Date(now); today.setHours(0, 0, 0, 0);
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
 
     const [
       totalOrgs,
@@ -38,10 +40,16 @@ opsRouter.get('/metrics', async (_req, res: Response) => {
     ] = await Promise.all([
       prisma.organization.count({ where: { slug: { not: PLATFORM_SLUG } } }),
       prisma.organization.count({ where: { planStatus: 'active', slug: { not: PLATFORM_SLUG } } }),
-      prisma.organization.count({ where: { planStatus: 'trialing', slug: { not: PLATFORM_SLUG } } }),
-      prisma.organization.count({ where: { planStatus: 'suspended', slug: { not: PLATFORM_SLUG } } }),
+      prisma.organization.count({
+        where: { planStatus: 'trialing', slug: { not: PLATFORM_SLUG } },
+      }),
+      prisma.organization.count({
+        where: { planStatus: 'suspended', slug: { not: PLATFORM_SLUG } },
+      }),
       prisma.organization.count({ where: { selfSignup: true, slug: { not: PLATFORM_SLUG } } }),
-      prisma.organization.count({ where: { createdAt: { gte: thirtyDaysAgo }, slug: { not: PLATFORM_SLUG } } }),
+      prisma.organization.count({
+        where: { createdAt: { gte: thirtyDaysAgo }, slug: { not: PLATFORM_SLUG } },
+      }),
       prisma.organization.count({ where: { plan: 'free', slug: { not: PLATFORM_SLUG } } }),
       prisma.user.count({ where: { isActive: true, role: { not: 'SUPERADMIN' } } }),
       prisma.order.count(),
@@ -53,7 +61,15 @@ opsRouter.get('/metrics', async (_req, res: Response) => {
     res.json({
       success: true,
       data: {
-        orgs: { total: totalOrgs, active: activeOrgs, trialing: trialingOrgs, suspended: suspendedOrgs, selfSignup: selfSignupOrgs, newThisMonth: newOrgsThisMonth, free: freeOrgs },
+        orgs: {
+          total: totalOrgs,
+          active: activeOrgs,
+          trialing: trialingOrgs,
+          suspended: suspendedOrgs,
+          selfSignup: selfSignupOrgs,
+          newThisMonth: newOrgsThisMonth,
+          free: freeOrgs,
+        },
         users: { total: totalUsers },
         orders: { total: totalOrders, today: ordersToday },
         branches: { total: totalBranches },
@@ -68,7 +84,13 @@ opsRouter.get('/metrics', async (_req, res: Response) => {
 // ─── List all organisations ───────────────────────────────────────────────────
 opsRouter.get('/orgs', async (req: AuthRequest, res: Response) => {
   try {
-    const { search, planStatus, plan, page = '1', limit = '20' } = req.query as Record<string, string>;
+    const {
+      search,
+      planStatus,
+      plan,
+      page = '1',
+      limit = '20',
+    } = req.query as Record<string, string>;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const where: Prisma.OrganizationWhereInput = { slug: { not: PLATFORM_SLUG } };
@@ -98,7 +120,12 @@ opsRouter.get('/orgs', async (req: AuthRequest, res: Response) => {
     res.json({
       success: true,
       data: orgs,
-      meta: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) },
+      meta: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit)),
+      },
     });
   } catch (err: unknown) {
     res.status(500).json({ success: false, error: 'Failed to fetch organisations' });
@@ -112,11 +139,28 @@ opsRouter.get('/orgs/:orgId', async (req: AuthRequest, res: Response) => {
       where: { id: req.params.orgId },
       include: {
         _count: { select: { users: true, branches: true, orders: true, tables: true } },
-        branches: { orderBy: { createdAt: 'asc' }, include: { _count: { select: { users: true, orders: true } } } },
-        users: { where: { role: { in: ['ADMIN', 'BRANCH_ADMIN'] } }, select: { id: true, name: true, email: true, role: true, isActive: true, lastLoginAt: true, branchId: true } },
+        branches: {
+          orderBy: { createdAt: 'asc' },
+          include: { _count: { select: { users: true, orders: true } } },
+        },
+        users: {
+          where: { role: { in: ['ADMIN', 'BRANCH_ADMIN'] } },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            isActive: true,
+            lastLoginAt: true,
+            branchId: true,
+          },
+        },
       },
     });
-    if (!org) { res.status(404).json({ success: false, error: 'Organisation not found' }); return; }
+    if (!org) {
+      res.status(404).json({ success: false, error: 'Organisation not found' });
+      return;
+    }
 
     // Revenue for this org
     const revenue = await prisma.order.aggregate({
@@ -126,7 +170,10 @@ opsRouter.get('/orgs/:orgId', async (req: AuthRequest, res: Response) => {
 
     // Orders last 30 days
     const recentOrders = await prisma.order.count({
-      where: { organizationId: org.id, createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } },
+      where: {
+        organizationId: org.id,
+        createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      },
     });
 
     res.json({
@@ -159,7 +206,9 @@ opsRouter.patch('/orgs/:orgId', async (req: AuthRequest, res: Response) => {
     const updateData: Prisma.OrganizationUpdateInput = {
       ...data,
       ...(data.trialEndsAt ? { trialEndsAt: new Date(data.trialEndsAt) } : {}),
-      ...(data.planStatus === 'active' ? { verifiedAt: new Date(), verifiedBy: req.user!.userId } : {}),
+      ...(data.planStatus === 'active'
+        ? { verifiedAt: new Date(), verifiedBy: req.user!.userId }
+        : {}),
     };
 
     const org = await prisma.organization.update({
@@ -169,7 +218,10 @@ opsRouter.patch('/orgs/:orgId', async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, data: org });
   } catch (err: unknown) {
-    if (err instanceof z.ZodError) { res.status(400).json({ success: false, error: 'Validation error', details: err.errors }); return; }
+    if (err instanceof z.ZodError) {
+      res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+      return;
+    }
     res.status(500).json({ success: false, error: 'Failed to update organisation' });
   }
 });
@@ -191,11 +243,82 @@ opsRouter.post('/orgs/:orgId/activate', async (req: AuthRequest, res: Response) 
   try {
     const org = await prisma.organization.update({
       where: { id: req.params.orgId },
-      data: { planStatus: 'active', isActive: true, verifiedAt: new Date(), verifiedBy: req.user!.userId },
+      data: {
+        planStatus: 'active',
+        isActive: true,
+        verifiedAt: new Date(),
+        verifiedBy: req.user!.userId,
+      },
     });
     res.json({ success: true, data: org, message: 'Organisation activated' });
   } catch {
     res.status(500).json({ success: false, error: 'Failed to activate' });
+  }
+});
+
+// ─── Soft Delete org ──────────────────────────────────────────────────────────
+opsRouter.delete('/orgs/:orgId', async (req: AuthRequest, res: Response) => {
+  try {
+    const org = await prisma.organization.findUnique({ where: { id: req.params.orgId } });
+    if (!org) {
+      res.status(404).json({ success: false, error: 'Organisation not found' });
+      return;
+    }
+    if (org.slug === PLATFORM_SLUG) {
+      res.status(403).json({ success: false, error: 'Cannot delete platform org' });
+      return;
+    }
+
+    const deleteDate = new Date();
+    deleteDate.setDate(deleteDate.getDate() + 30);
+
+    await prisma.organization.update({
+      where: { id: req.params.orgId },
+      data: { scheduledForDeletionAt: deleteDate, planStatus: 'cancelled', isActive: false },
+    });
+
+    logger.info('Organization scheduled for deletion', {
+      orgId: req.params.orgId,
+      by: req.user!.userId,
+    });
+    res.json({ success: true, message: 'Organisation scheduled for deletion in 30 days' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Failed to schedule deletion' });
+  }
+});
+
+// ─── Impersonate org admin ────────────────────────────────────────────────────
+opsRouter.post('/orgs/:orgId/impersonate', async (req: AuthRequest, res: Response) => {
+  try {
+    const org = await prisma.organization.findUnique({ where: { id: req.params.orgId } });
+    if (!org) {
+      res.status(404).json({ success: false, error: 'Organisation not found' });
+      return;
+    }
+    if (org.slug === PLATFORM_SLUG) {
+      res.status(403).json({ success: false, error: 'Cannot impersonate platform org' });
+      return;
+    }
+
+    const payload = {
+      userId: req.user!.userId, // Track original ops user
+      organizationId: org.id, // Target org
+      role: 'ADMIN', // Elevated role for the target org
+      branchId: null,
+      impersonating: true,
+    };
+
+    const secret = process.env.ACCESS_TOKEN_SECRET || process.env.JWT_SECRET!;
+    const token = jwt.sign(payload, secret, { expiresIn: '2h' });
+
+    logger.info('Ops user impersonating organization', {
+      orgId: org.id,
+      opsUserId: req.user!.userId,
+    });
+
+    res.json({ success: true, data: { token } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Failed to impersonate' });
   }
 });
 
@@ -206,7 +329,15 @@ opsRouter.get('/activity', async (_req, res: Response) => {
       prisma.organization.findMany({
         orderBy: { createdAt: 'desc' },
         take: 5,
-        select: { id: true, name: true, slug: true, plan: true, planStatus: true, selfSignup: true, createdAt: true },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          plan: true,
+          planStatus: true,
+          selfSignup: true,
+          createdAt: true,
+        },
       }),
       prisma.order.findMany({
         orderBy: { createdAt: 'desc' },
@@ -216,13 +347,55 @@ opsRouter.get('/activity', async (_req, res: Response) => {
       prisma.auditLog.findMany({
         orderBy: { createdAt: 'desc' },
         take: 20,
-        include: { organization: { select: { name: true } }, user: { select: { name: true, email: true } } },
+        include: {
+          organization: { select: { name: true } },
+          user: { select: { name: true, email: true } },
+        },
       }),
     ]);
 
     res.json({ success: true, data: { recentOrgs, recentOrders, recentAudit } });
   } catch {
     res.status(500).json({ success: false, error: 'Failed to fetch activity' });
+  }
+});
+
+// ─── Audit Logs ───────────────────────────────────────────────────────────────
+opsRouter.get('/audit', async (req: AuthRequest, res: Response) => {
+  try {
+    const { page = '1', limit = '50', orgId, action } = req.query as Record<string, string>;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const where: Prisma.AuditLogWhereInput = {};
+    if (orgId) where.organizationId = orgId;
+    if (action) where.action = action;
+
+    const [logs, total] = await Promise.all([
+      prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: parseInt(limit),
+        include: {
+          organization: { select: { name: true, slug: true } },
+          user: { select: { name: true, email: true } },
+        },
+      }),
+      prisma.auditLog.count({ where }),
+    ]);
+
+    res.json({
+      success: true,
+      data: logs,
+      meta: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Failed to fetch audit logs' });
   }
 });
 
@@ -269,10 +442,13 @@ opsRouter.post('/team', async (req: AuthRequest, res: Response) => {
     const schema = z.object({
       name: z.string().min(2).max(100).trim(),
       email: z.string().email().toLowerCase().trim(),
-      password: z.string().min(8).regex(
-        /^(?=.*[A-Z])(?=.*\d).+$/,
-        'Password must contain at least one uppercase letter and one number'
-      ),
+      password: z
+        .string()
+        .min(8)
+        .regex(
+          /^(?=.*[A-Z])(?=.*\d).+$/,
+          'Password must contain at least one uppercase letter and one number',
+        ),
     });
     const { name, email, password } = schema.parse(req.body);
 
@@ -337,10 +513,13 @@ opsRouter.post('/team/change-password', async (req: AuthRequest, res: Response) 
   try {
     const schema = z.object({
       currentPassword: z.string().min(1),
-      newPassword: z.string().min(8).regex(
-        /^(?=.*[A-Z])(?=.*\d).+$/,
-        'Password must contain at least one uppercase letter and one number'
-      ),
+      newPassword: z
+        .string()
+        .min(8)
+        .regex(
+          /^(?=.*[A-Z])(?=.*\d).+$/,
+          'Password must contain at least one uppercase letter and one number',
+        ),
     });
     const { currentPassword, newPassword } = schema.parse(req.body);
 

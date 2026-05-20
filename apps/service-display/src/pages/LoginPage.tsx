@@ -61,12 +61,20 @@ export function LoginPage() {
         </div>
         <div className="space-y-3 max-w-md">
           <div className="card p-4">
-            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">Real-time</div>
-            <div className="mt-1 text-sm font-semibold text-[var(--text)]">Keep staff aligned with what’s next.</div>
+            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+              Real-time
+            </div>
+            <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+              Keep staff aligned with what’s next.
+            </div>
           </div>
           <div className="card p-4">
-            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">Focused</div>
-            <div className="mt-1 text-sm font-semibold text-[var(--text)]">Built for speed and clarity.</div>
+            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+              Focused
+            </div>
+            <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+              Built for speed and clarity.
+            </div>
           </div>
         </div>
         <div className="text-xs text-[var(--muted)] font-medium">
@@ -77,61 +85,63 @@ export function LoginPage() {
       <div className="flex items-center justify-center p-6">
         <div className="w-full max-w-md space-y-8 animate-in">
           <div className="space-y-2">
-            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">CEVOP</div>
+            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">
+              CEVOP
+            </div>
             <h1 className="font-display text-3xl text-[var(--text)]">Service display sign in</h1>
             <p className="text-sm text-[var(--muted)]">Access the service board.</p>
           </div>
 
           <form onSubmit={handleSubmit} className="card p-6 space-y-5">
-          <div>
-            <label>Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-              placeholder="service@restaurant.com"
-              autoComplete="email"
-            />
-          </div>
-
-          <div>
-            <label>Password</label>
-            <div className="relative">
+            <div>
+              <label>Email</label>
               <input
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 required
-                placeholder="••••••••"
-                autoComplete="current-password"
-                className="pr-10"
+                placeholder="name@restaurant.com"
+                autoComplete="email"
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(v => !v)}
-                tabIndex={-1}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] text-xs"
-              >
-                {showPassword ? 'hide' : 'show'}
-              </button>
             </div>
-          </div>
 
-          {error && (
-            <div className="border border-[var(--danger)] text-[var(--danger)] bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] px-3 py-2 text-sm">
-              {error}
+            <div>
+              <label>Password</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  placeholder="••••••••"
+                  autoComplete="current-password"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  tabIndex={-1}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] text-xs"
+                >
+                  {showPassword ? 'hide' : 'show'}
+                </button>
+              </div>
             </div>
-          )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn btn-primary w-full py-3 tracking-widest text-sm"
-          >
-            {loading ? 'SIGNING IN...' : 'SIGN IN'}
-          </button>
-        </form>
+            {error && (
+              <div className="border border-[var(--danger)] text-[var(--danger)] bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] px-3 py-2 text-sm">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn btn-primary w-full py-3 tracking-widest text-sm"
+            >
+              {loading ? 'SIGNING IN...' : 'SIGN IN'}
+            </button>
+          </form>
         </div>
       </div>
     </div>
