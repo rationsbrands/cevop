@@ -191,5 +191,7 @@ export function useApi() {
       fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: h, body: JSON.stringify(body) }).then(
         (r) => r.json(),
       ),
+    delete: (path: string) =>
+      fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: h }).then((r) => r.json()),
   };
 }
