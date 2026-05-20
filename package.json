@@ -13,7 +13,7 @@
     "db:migrate": "npm run db:migrate -w cevop-server",
     "db:seed": "npm run db:seed -w cevop-server",
     "db:generate": "npm run db:generate -w cevop-server",
-    "prepare": "husky"
+    "prepare": "husky || true"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
