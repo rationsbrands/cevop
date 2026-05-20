@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useApi } from '../context/auth';
 
 interface TeamMember {
@@ -22,7 +22,7 @@ export function TeamPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  async function loadTeam() {
+  const loadTeam = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.get('/api/ops/team');
@@ -30,11 +30,12 @@ export function TeamPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [api]);
 
   useEffect(() => {
-    loadTeam();
-  }, []);
+    const t = window.setTimeout(() => void loadTeam(), 0);
+    return () => window.clearTimeout(t);
+  }, [loadTeam]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -167,8 +168,8 @@ export function TeamPage() {
           <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
         </div>
       ) : (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="card overflow-x-auto">
+          <table className="min-w-[720px] w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--border)]">
                 <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">
