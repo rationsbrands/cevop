@@ -2,13 +2,26 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/auth';
+import { SocketProvider } from './context/socket';
 import { Shell } from './components/Shell';
-import { LoginPage } from './pages/LoginPage';
-import { SignupPage } from './pages/SignupPage';
-import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
-import { ResetPasswordPage } from './pages/ResetPasswordPage';
-import { VerifyEmailPage } from './pages/VerifyEmailPage';
-import { AcceptInvitePage } from './pages/AcceptInvitePage';
+const LoginPage = React.lazy(() =>
+  import('./pages/LoginPage').then((m) => ({ default: m.LoginPage })),
+);
+const SignupPage = React.lazy(() =>
+  import('./pages/SignupPage').then((m) => ({ default: m.SignupPage })),
+);
+const ForgotPasswordPage = React.lazy(() =>
+  import('./pages/ForgotPasswordPage').then((m) => ({ default: m.ForgotPasswordPage })),
+);
+const ResetPasswordPage = React.lazy(() =>
+  import('./pages/ResetPasswordPage').then((m) => ({ default: m.ResetPasswordPage })),
+);
+const VerifyEmailPage = React.lazy(() =>
+  import('./pages/VerifyEmailPage').then((m) => ({ default: m.VerifyEmailPage })),
+);
+const AcceptInvitePage = React.lazy(() =>
+  import('./pages/AcceptInvitePage').then((m) => ({ default: m.AcceptInvitePage })),
+);
 import { ThemeProvider } from './context/theme';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './index.css';
@@ -57,16 +70,43 @@ function RequireOrgAdmin({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function SocketWrapper({ children }: { children: React.ReactNode }) {
+  const { token, user } = useAuth();
+  return (
+    <SocketProvider token={token} organizationId={user?.organizationId} branchId={user?.branchId}>
+      {children}
+    </SocketProvider>
+  );
+}
+
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center h-48">
+      <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
+
+import { Outlet } from 'react-router-dom';
+
 function AppRoutes() {
   return (
     <Routes>
       {/* Public */}
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/signup" element={<SignupPage />} />
-      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-      <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
-      <Route path="/verify-email/:token" element={<VerifyEmailPage />} />
-      <Route path="/accept-invite/:token" element={<AcceptInvitePage />} />
+      <Route
+        element={
+          <React.Suspense fallback={<PageLoader />}>
+            <Outlet />
+          </React.Suspense>
+        }
+      >
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
+        <Route path="/verify-email/:token" element={<VerifyEmailPage />} />
+        <Route path="/accept-invite/:token" element={<AcceptInvitePage />} />
+      </Route>
 
       {/* Protected */}
       <Route
@@ -80,7 +120,9 @@ function AppRoutes() {
                 </div>
               }
             >
-              <Shell />
+              <SocketWrapper>
+                <Shell />
+              </SocketWrapper>
             </React.Suspense>
           </Protected>
         }

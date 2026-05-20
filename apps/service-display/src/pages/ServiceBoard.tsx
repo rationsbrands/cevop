@@ -97,7 +97,15 @@ export function ServiceBoard() {
   const [activeTab, setActiveTab] = useState<'orders' | 'calls'>('orders');
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const socketRef = useRef<Socket | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Track items currently being updated to prevent double-clicks
+  const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
+
+  // Mutable ref for token so socket reconnects use the latest token without tearing down the connection
+  const tokenRef = useRef(token);
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
 
   const playAlert = useCallback(() => {
     try {
@@ -111,7 +119,9 @@ export function ServiceBoard() {
       gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
       osc.start(ctx.currentTime);
       osc.stop(ctx.currentTime + 0.3);
-    } catch {}
+    } catch {
+      void 0;
+    }
   }, []);
 
   // Load initial data
@@ -139,15 +149,23 @@ export function ServiceBoard() {
       if (serviceData.success) setServiceRequests(serviceData.data);
     }
     loadData().catch(console.error);
-  }, [token]);
+  }, [token, user?.branchId]);
 
   // Socket setup
   useEffect(() => {
-    if (!token || !user) return;
+    if (!user) return; // Wait until user is fully loaded
 
-    const socket = io(API_BASE || 'http://localhost:4000', {
-      auth: { token },
+    const SOCKET_URL = API_BASE || (import.meta.env.DEV ? undefined : window.location.origin);
+    const socket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
+      auth: (cb) => {
+        cb({ token: tokenRef.current });
+      },
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
     });
     socketRef.current = socket;
 
@@ -169,7 +187,9 @@ export function ServiceBoard() {
     socket.on('ORDER_UPDATED', (order: Order) => {
       setOrders((prev) => {
         if (!ACTIVE_STATUSES.includes(order.status)) return prev.filter((o) => o.id !== order.id);
-        return prev.map((o) => (o.id === order.id ? order : o));
+        const exists = prev.some((o) => o.id === order.id);
+        if (exists) return prev.map((o) => (o.id === order.id ? order : o));
+        return [order, ...prev]; // Add if it wasn't in state
       });
     });
 
@@ -179,11 +199,12 @@ export function ServiceBoard() {
     });
 
     socket.on('WAITER_CALL_UPDATED', (call: WaiterCall) => {
-      setWaiterCalls((prev) =>
-        call.status !== 'PENDING'
-          ? prev.filter((c) => c.id !== call.id)
-          : prev.map((c) => (c.id === call.id ? call : c)),
-      );
+      setWaiterCalls((prev) => {
+        if (call.status !== 'PENDING') return prev.filter((c) => c.id !== call.id);
+        const exists = prev.some((c) => c.id === call.id);
+        if (exists) return prev.map((c) => (c.id === call.id ? call : c));
+        return [call, ...prev];
+      });
     });
 
     socket.on('SERVICE_REQUESTED', (req: ServiceRequest) => {
@@ -192,17 +213,18 @@ export function ServiceBoard() {
     });
 
     socket.on('SERVICE_REQUEST_UPDATED', (req: ServiceRequest) => {
-      setServiceRequests((prev) =>
-        req.status !== 'PENDING'
-          ? prev.filter((r) => r.id !== req.id)
-          : prev.map((r) => (r.id === req.id ? req : r)),
-      );
+      setServiceRequests((prev) => {
+        if (req.status !== 'PENDING') return prev.filter((r) => r.id !== req.id);
+        const exists = prev.some((r) => r.id === req.id);
+        if (exists) return prev.map((r) => (r.id === req.id ? req : r));
+        return [req, ...prev];
+      });
     });
 
     return () => {
       socket.disconnect();
     };
-  }, [token, user, playAlert]);
+  }, [user, playAlert]); // Omitted `token` intentionally so it doesn't reconnect on token refresh
 
   // Online/offline
   useEffect(() => {
@@ -217,28 +239,58 @@ export function ServiceBoard() {
   }, []);
 
   async function updateOrderStatus(orderId: string, status: string) {
-    const res = await fetch(`${API_BASE}/api/orders/${orderId}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ status }),
-    });
-    if (!res.ok) console.error('Failed to update order status');
+    if (updatingItems.has(orderId)) return;
+    setUpdatingItems((prev) => new Set(prev).add(orderId));
+    try {
+      const res = await fetch(`${API_BASE}/api/orders/${orderId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) console.error('Failed to update order status');
+    } finally {
+      setUpdatingItems((prev) => {
+        const n = new Set(prev);
+        n.delete(orderId);
+        return n;
+      });
+    }
   }
 
   async function acknowledgeWaiterCall(callId: string) {
-    await fetch(`${API_BASE}/api/waiter-calls/${callId}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ status: 'RESOLVED' }),
-    });
+    if (updatingItems.has(callId)) return;
+    setUpdatingItems((prev) => new Set(prev).add(callId));
+    try {
+      await fetch(`${API_BASE}/api/waiter-calls/${callId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status: 'RESOLVED' }),
+      });
+    } finally {
+      setUpdatingItems((prev) => {
+        const n = new Set(prev);
+        n.delete(callId);
+        return n;
+      });
+    }
   }
 
   async function acknowledgeService(reqId: string) {
-    await fetch(`${API_BASE}/api/service-requests/${reqId}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ status: 'RESOLVED' }),
-    });
+    if (updatingItems.has(reqId)) return;
+    setUpdatingItems((prev) => new Set(prev).add(reqId));
+    try {
+      await fetch(`${API_BASE}/api/service-requests/${reqId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status: 'RESOLVED' }),
+      });
+    } finally {
+      setUpdatingItems((prev) => {
+        const n = new Set(prev);
+        n.delete(reqId);
+        return n;
+      });
+    }
   }
 
   const pendingCallsCount = waiterCalls.length + serviceRequests.length;
@@ -404,9 +456,10 @@ export function ServiceBoard() {
                     {NEXT_STATUS[order.status] && (
                       <button
                         onClick={() => updateOrderStatus(order.id, NEXT_STATUS[order.status])}
-                        className="w-full text-xs py-1.5 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black hover:border-[var(--accent)] transition-all duration-150"
+                        disabled={updatingItems.has(order.id)}
+                        className="w-full text-xs py-1.5 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black hover:border-[var(--accent)] transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {NEXT_LABEL[order.status]}
+                        {updatingItems.has(order.id) ? 'UPDATING...' : NEXT_LABEL[order.status]}
                       </button>
                     )}
                   </div>
@@ -443,9 +496,10 @@ export function ServiceBoard() {
                   {call.reason && <p className="text-xs text-[var(--text)]">"{call.reason}"</p>}
                   <button
                     onClick={() => acknowledgeWaiterCall(call.id)}
-                    className="w-full text-xs py-1.5 font-bold border border-yellow-800 hover:bg-yellow-500 hover:text-black transition-all"
+                    disabled={updatingItems.has(call.id)}
+                    className="w-full text-xs py-1.5 font-bold border border-yellow-800 hover:bg-yellow-500 hover:text-black transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    RESOLVE
+                    {updatingItems.has(call.id) ? 'RESOLVING...' : 'RESOLVE'}
                   </button>
                 </div>
               ))}
@@ -479,9 +533,10 @@ export function ServiceBoard() {
                   {req.notes && <p className="text-xs text-[var(--muted)]">"{req.notes}"</p>}
                   <button
                     onClick={() => acknowledgeService(req.id)}
-                    className="w-full text-xs py-1.5 font-bold border border-purple-800 hover:bg-purple-500 hover:text-black transition-all"
+                    disabled={updatingItems.has(req.id)}
+                    className="w-full text-xs py-1.5 font-bold border border-purple-800 hover:bg-purple-500 hover:text-black transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    RESOLVE
+                    {updatingItems.has(req.id) ? 'RESOLVING...' : 'RESOLVE'}
                   </button>
                 </div>
               ))}

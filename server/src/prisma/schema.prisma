@@ -208,6 +208,7 @@ model Category {
 
   @@index([organizationId])
   @@index([branchId])
+  @@index([organizationId, isActive])
   @@map("categories")
 }
 
@@ -232,6 +233,8 @@ model MenuItem {
   @@index([organizationId])
   @@index([branchId])
   @@index([categoryId])
+  @@index([organizationId, isAvailable])
+  @@index([categoryId, isAvailable])
   @@map("menu_items")
 }
 
@@ -256,6 +259,10 @@ model Order {
   @@index([tableId])
   @@index([status])
   @@index([createdAt])
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([organizationId, branchId, status])
+  @@index([organizationId, branchId, createdAt(sort: Desc)])
   @@map("orders")
 }
 
@@ -292,6 +299,8 @@ model WaiterCall {
   @@index([organizationId])
   @@index([branchId])
   @@index([status])
+  @@index([organizationId, status])
+  @@index([organizationId, branchId, status])
   @@map("waiter_calls")
 }
 
@@ -314,6 +323,8 @@ model ServiceRequest {
 
   @@index([organizationId])
   @@index([branchId])
+  @@index([organizationId, status])
+  @@index([organizationId, branchId, status])
   @@map("service_requests")
 }
 

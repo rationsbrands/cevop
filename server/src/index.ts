@@ -40,8 +40,10 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map((s) => s.trim
   'http://localhost:5176',
 ];
 
+const isDev = process.env.NODE_ENV !== 'production';
+
 export const io = new SocketServer(httpServer, {
-  cors: { origin: allowedOrigins, methods: ['GET', 'POST'], credentials: true },
+  cors: { origin: isDev ? true : allowedOrigins, methods: ['GET', 'POST'], credentials: true },
 });
 
 // Security headers
@@ -59,12 +61,14 @@ app.use(
 app.set('trust proxy', 1);
 
 // CORS
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(cors({ origin: isDev ? true : allowedOrigins, credentials: true }));
 app.use(cookieParser());
 app.use(compression());
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
+// Use minimal format in production — 'combined' is too verbose and slow at high traffic
+const morganFormat = process.env.NODE_ENV === 'production' ? 'tiny' : 'combined';
+app.use(morgan(morganFormat, { stream: { write: (msg) => logger.info(msg.trim()) } }));
 
 // ---------------------------------------------------------------------------
 // Rate limiting — Upstash Redis when available, in-memory fallback otherwise
@@ -96,19 +100,19 @@ const publicFallback = rateLimit({
 });
 
 // Build Upstash-backed limiters if Redis is configured
-function makeUpstashLimiter(requests: number, window: Duration): Ratelimit | null {
+function makeUpstashLimiter(requests: number, window: Duration, prefix: string): Ratelimit | null {
   const redis = getRedisClient();
   if (!redis) return null;
   return new Ratelimit({
     redis,
     limiter: Ratelimit.slidingWindow(requests, window),
-    prefix: 'cevop:rl2',
+    prefix: `cevop:rl2:${prefix}`,
   });
 }
 
-const upstashAuth = makeUpstashLimiter(100, '15 m');
-const upstashApi = makeUpstashLimiter(3000, '15 m');
-const upstashPublic = makeUpstashLimiter(120, '1 m');
+const upstashAuth = makeUpstashLimiter(100, '15 m', 'auth');
+const upstashApi = makeUpstashLimiter(3000, '15 m', 'api');
+const upstashPublic = makeUpstashLimiter(120, '1 m', 'public');
 // Wraps an Upstash limiter into Express middleware, falls back to in-memory
 function makeLimiter(
   upstash: Ratelimit | null,

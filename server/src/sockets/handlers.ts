@@ -14,7 +14,8 @@ export function initSocketHandlers(io: Server): void {
     }
 
     try {
-      const payload = jwt.verify(token, process.env.JWT_SECRET!) as AuthPayload;
+      const secret = process.env.ACCESS_TOKEN_SECRET || process.env.JWT_SECRET!;
+      const payload = jwt.verify(token, secret) as AuthPayload;
       socket.data.user = payload;
       return next();
     } catch {
@@ -53,27 +54,50 @@ export function initSocketHandlers(io: Server): void {
       }
     }
 
-    // Allow explicit room join — validate JWT before allowing
-    socket.on('JOIN_ORG', (orgId: string) => {
-      if (!user || (user.organizationId !== orgId && user.role !== 'SUPERADMIN')) {
-        socket.emit('ERROR', { message: 'Unauthorized room join' });
-        return;
+    socket.on('JOIN_ORG', async (orgId: string) => {
+      if (user) {
+        if (user.organizationId !== orgId && user.role !== 'SUPERADMIN') {
+          socket.emit('ERROR', { message: 'Unauthorized room join' });
+          return;
+        }
+      } else {
+        const exists = await prisma.organization.findUnique({
+          where: { id: orgId },
+          select: { id: true },
+        });
+        if (!exists) {
+          socket.emit('ERROR', { message: 'Unauthorized room join' });
+          return;
+        }
       }
+
       socket.join(orgId);
       logger.info('Socket joined org room via event', { orgId, socketId: socket.id });
       socket.emit('JOINED', { orgId });
     });
 
     // Join a specific branch room (for branch-scoped service displays)
-    socket.on('JOIN_BRANCH', ({ orgId, branchId }: { orgId: string; branchId: string }) => {
-      if (!user || user.organizationId !== orgId) {
-        socket.emit('ERROR', { message: 'Unauthorized room join' });
-        return;
+    socket.on('JOIN_BRANCH', async ({ orgId, branchId }: { orgId: string; branchId: string }) => {
+      if (user) {
+        if (user.organizationId !== orgId) {
+          socket.emit('ERROR', { message: 'Unauthorized room join' });
+          return;
+        }
+        if (user.branchId && user.branchId !== branchId) {
+          socket.emit('ERROR', { message: 'Unauthorized room join' });
+          return;
+        }
+      } else {
+        const exists = await prisma.branch.findFirst({
+          where: { id: branchId, organizationId: orgId, isActive: true },
+          select: { id: true },
+        });
+        if (!exists) {
+          socket.emit('ERROR', { message: 'Unauthorized room join' });
+          return;
+        }
       }
-      if (user.branchId && user.branchId !== branchId) {
-        socket.emit('ERROR', { message: 'Unauthorized room join' });
-        return;
-      }
+
       const room = `${orgId}:${branchId}`;
       socket.join(room);
       logger.info('Socket joined branch room via event', { room, socketId: socket.id });

@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || '';
+export const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 
 export async function fetchTableInfo(orgId: string, tableId: string) {
   const res = await fetch(`${API_BASE}/api/tables/public/${orgId}/${tableId}`);
@@ -38,7 +38,8 @@ export async function submitOrder(payload: {
 }
 
 export async function fetchHelpOptions(orgId: string, branchId?: string | null) {
-  const url = new URL(`${API_BASE}/api/help-options`);
+  const baseUrl = API_BASE || window.location.origin;
+  const url = new URL(`${baseUrl}/api/help-options`);
   url.searchParams.set('organizationId', orgId);
   if (branchId) url.searchParams.set('branchId', branchId);
   const res = await fetch(url.toString());
@@ -67,7 +68,11 @@ export async function callWaiter(payload: {
   });
   if (!res.ok) {
     let errBody: any = {};
-    try { errBody = await res.json(); } catch {}
+    try {
+      errBody = await res.json();
+    } catch {
+      void 0;
+    }
     throw new Error(errBody.error || errBody.message || res.statusText || 'Failed to call waiter');
   }
   return res.json();
@@ -87,8 +92,14 @@ export async function requestService(payload: {
   });
   if (!res.ok) {
     let errBody: any = {};
-    try { errBody = await res.json(); } catch {}
-    throw new Error(errBody.error || errBody.message || res.statusText || 'Failed to submit service request');
+    try {
+      errBody = await res.json();
+    } catch {
+      void 0;
+    }
+    throw new Error(
+      errBody.error || errBody.message || res.statusText || 'Failed to submit service request',
+    );
   }
   return res.json();
 }

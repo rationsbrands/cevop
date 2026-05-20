@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth, useApi } from '../context/auth';
 import { useTheme } from '../context/theme';
+import { useSocket } from '../context/socket';
 import {
   IconDashboard,
   IconMenu,
@@ -11,7 +12,6 @@ import {
   IconHelp,
   IconBranches,
   IconSettings,
-  IconOnboard,
   IconLogout,
   IconChevronLeft,
   IconX,
@@ -24,11 +24,16 @@ interface BranchOption {
 }
 
 export function Shell() {
-  const { user, logout, activeBranchFilter, setActiveBranchFilter, loading } = useAuth();
+  const { user, logout, activeBranchFilter, setActiveBranchFilter } = useAuth();
   const { mode, setMode } = useTheme();
+  const { connected } = useSocket();
   const api = useApi();
   const navigate = useNavigate();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const location = useLocation();
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.innerWidth >= 1024;
+  });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [resendStatus, setResendStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [branches, setBranches] = useState<BranchOption[]>([]);
@@ -40,10 +45,16 @@ export function Shell() {
   const isBranchScoped = !!user?.branchId;
   const isOrgAdmin = user?.role === 'ADMIN';
 
-  // Close sidebar by default on mobile, open on desktop
   useEffect(() => {
-    const isMobile = window.innerWidth < 1024;
-    setSidebarOpen(!isMobile);
+    const onResize = () => {
+      const isMobile = window.innerWidth < 1024;
+      setSidebarOpen((prev) => {
+        const next = !isMobile;
+        return prev === next ? prev : next;
+      });
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
   useEffect(() => {
@@ -53,13 +64,15 @@ export function Shell() {
       .then(({ data }) => {
         if (data) setBranches(data);
       })
-      .catch(() => {});
-  }, [isOrgAdmin]);
+      .catch(() => {
+        void 0;
+      });
+  }, [api, isOrgAdmin]);
 
-  // Close mobile menu on route change
   useEffect(() => {
-    setMobileMenuOpen(false);
-  }, [navigate]);
+    const t = window.setTimeout(() => setMobileMenuOpen(false), 0);
+    return () => window.clearTimeout(t);
+  }, [location.pathname]);
 
   const NAV = [
     { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true, show: true },
@@ -291,9 +304,13 @@ export function Shell() {
           </div>
 
           <div className="flex items-center gap-4 shrink-0">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-[var(--muted)] font-bold bg-[var(--surface2)] px-2 py-1 rounded-full border border-[var(--border)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)] animate-pulse" />
-              Live
+            <div className="flex items-center gap-1.5">
+              <div
+                className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`}
+              />
+              <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">
+                {connected ? 'Live' : 'Offline'}
+              </span>
             </div>
           </div>
         </header>

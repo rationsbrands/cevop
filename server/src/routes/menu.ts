@@ -14,13 +14,12 @@ menuRouter.get('/public/:orgId', async (req: Request, res: Response) => {
     const { orgId } = req.params;
     const { branchId } = req.query as { branchId?: string };
 
-    // Resolve org ID — accept cuid or slug
-    let organizationId = orgId;
-    const orgById = await prisma.organization.findUnique({ where: { id: orgId }, select: { id: true } });
-    if (!orgById) {
-      const orgBySlug = await prisma.organization.findUnique({ where: { slug: orgId }, select: { id: true } });
-      if (orgBySlug) organizationId = orgBySlug.id;
-    }
+    // Resolve org in a single query — accept either cuid or slug
+    const org = await prisma.organization.findFirst({
+      where: { OR: [{ id: orgId }, { slug: orgId }] },
+      select: { id: true },
+    });
+    const organizationId = org?.id ?? orgId;
 
     const categoryWhere: Prisma.CategoryWhereInput = { organizationId, isActive: true };
     const itemWhere: Prisma.MenuItemWhereInput = { isAvailable: true };
@@ -46,6 +45,9 @@ menuRouter.get('/public/:orgId', async (req: Request, res: Response) => {
       },
     });
 
+    // Cache for 60 seconds in CDN/browser, allow stale for 30 seconds while revalidating
+    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=30');
+    res.set('Vary', 'Accept-Encoding');
     res.json({ success: true, data: categories });
   } catch (err: unknown) {
     res.status(500).json({ success: false, error: 'Failed to fetch menu' });
@@ -89,49 +91,80 @@ const categorySchema = z.object({
   branchId: z.string().optional(),
 });
 
-menuRouter.post('/categories', requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'), async (req: AuthRequest, res: Response) => {
-  try {
-    const data = categorySchema.parse(req.body);
-    const branchId = req.user!.branchId ?? data.branchId ?? null;
+menuRouter.post(
+  '/categories',
+  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const data = categorySchema.parse(req.body);
+      const branchId = req.user!.branchId ?? data.branchId ?? null;
 
-    const category = await prisma.category.create({
-      data: { ...data, branchId, organizationId: req.user!.organizationId },
-    });
-    io.to(req.user!.organizationId).emit('MENU_UPDATED', { action: 'category_created', category });
-    res.status(201).json({ success: true, data: category });
-  } catch (err: unknown) {
-    if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
-      return;
+      const category = await prisma.category.create({
+        data: { ...data, branchId, organizationId: req.user!.organizationId },
+      });
+      io.to(req.user!.organizationId).emit('MENU_UPDATED', {
+        action: 'category_created',
+        category,
+      });
+      res.status(201).json({ success: true, data: category });
+    } catch (err: unknown) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+        return;
+      }
+      res.status(500).json({ success: false, error: 'Failed to create category' });
     }
-    res.status(500).json({ success: false, error: 'Failed to create category' });
-  }
-});
+  },
+);
 
-menuRouter.put('/categories/:id', requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'), async (req: AuthRequest, res: Response) => {
-  try {
-    const data = categorySchema.partial().parse(req.body);
-    const existingCat = await prisma.category.findFirst({ where: { id: req.params.id, organizationId: req.user!.organizationId } });
-    if (!existingCat) { res.status(404).json({ success: false, error: 'Category not found' }); return; }
-    const category = await prisma.category.update({ where: { id: req.params.id }, data });
-    io.to(req.user!.organizationId).emit('MENU_UPDATED', { action: 'category_updated', category });
-    res.json({ success: true, data: category });
-  } catch (err: unknown) {
-    res.status(500).json({ success: false, error: 'Failed to update category' });
-  }
-});
+menuRouter.put(
+  '/categories/:id',
+  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const data = categorySchema.partial().parse(req.body);
+      const existingCat = await prisma.category.findFirst({
+        where: { id: req.params.id, organizationId: req.user!.organizationId },
+      });
+      if (!existingCat) {
+        res.status(404).json({ success: false, error: 'Category not found' });
+        return;
+      }
+      const category = await prisma.category.update({ where: { id: req.params.id }, data });
+      io.to(req.user!.organizationId).emit('MENU_UPDATED', {
+        action: 'category_updated',
+        category,
+      });
+      res.json({ success: true, data: category });
+    } catch (err: unknown) {
+      res.status(500).json({ success: false, error: 'Failed to update category' });
+    }
+  },
+);
 
-menuRouter.delete('/categories/:id', requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'), async (req: AuthRequest, res: Response) => {
-  try {
-    const existingCat2 = await prisma.category.findFirst({ where: { id: req.params.id, organizationId: req.user!.organizationId } });
-    if (!existingCat2) { res.status(404).json({ success: false, error: 'Category not found' }); return; }
-    await prisma.category.delete({ where: { id: req.params.id } });
-    io.to(req.user!.organizationId).emit('MENU_UPDATED', { action: 'category_deleted', id: req.params.id });
-    res.json({ success: true, message: 'Category deleted' });
-  } catch (err: unknown) {
-    res.status(500).json({ success: false, error: 'Failed to delete category' });
-  }
-});
+menuRouter.delete(
+  '/categories/:id',
+  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const existingCat2 = await prisma.category.findFirst({
+        where: { id: req.params.id, organizationId: req.user!.organizationId },
+      });
+      if (!existingCat2) {
+        res.status(404).json({ success: false, error: 'Category not found' });
+        return;
+      }
+      await prisma.category.delete({ where: { id: req.params.id } });
+      io.to(req.user!.organizationId).emit('MENU_UPDATED', {
+        action: 'category_deleted',
+        id: req.params.id,
+      });
+      res.json({ success: true, message: 'Category deleted' });
+    } catch (err: unknown) {
+      res.status(500).json({ success: false, error: 'Failed to delete category' });
+    }
+  },
+);
 
 // ─── Menu Items ───────────────────────────────────────────────────────────────
 
@@ -146,67 +179,102 @@ const menuItemSchema = z.object({
   branchId: z.string().optional(),
 });
 
-menuRouter.post('/items', requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'), async (req: AuthRequest, res: Response) => {
-  try {
-    const data = menuItemSchema.parse(req.body);
-    const branchId = req.user!.branchId ?? data.branchId ?? null;
+menuRouter.post(
+  '/items',
+  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const data = menuItemSchema.parse(req.body);
+      const branchId = req.user!.branchId ?? data.branchId ?? null;
 
-    const item = await prisma.menuItem.create({
-      data: { ...data, branchId, organizationId: req.user!.organizationId },
-      include: { category: true },
-    });
-    io.to(req.user!.organizationId).emit('MENU_UPDATED', { action: 'item_created', item });
-    res.status(201).json({ success: true, data: item });
-  } catch (err: unknown) {
-    if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
-      return;
+      const item = await prisma.menuItem.create({
+        data: { ...data, branchId, organizationId: req.user!.organizationId },
+        include: { category: true },
+      });
+      io.to(req.user!.organizationId).emit('MENU_UPDATED', { action: 'item_created', item });
+      res.status(201).json({ success: true, data: item });
+    } catch (err: unknown) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+        return;
+      }
+      res.status(500).json({ success: false, error: 'Failed to create menu item' });
     }
-    res.status(500).json({ success: false, error: 'Failed to create menu item' });
-  }
-});
+  },
+);
 
-menuRouter.put('/items/:id', requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'), async (req: AuthRequest, res: Response) => {
-  try {
-    const data = menuItemSchema.partial().parse(req.body);
-    const existing = await prisma.menuItem.findFirst({ where: { id: req.params.id, organizationId: req.user!.organizationId } });
-    if (!existing) { res.status(404).json({ success: false, error: 'Item not found' }); return; }
-    const item = await prisma.menuItem.update({
-      where: { id: req.params.id },
-      data,
-      include: { category: true },
-    });
-    io.to(req.user!.organizationId).emit('MENU_UPDATED', { action: 'item_updated', item });
-    res.json({ success: true, data: item });
-  } catch (err: unknown) {
-    res.status(500).json({ success: false, error: 'Failed to update menu item' });
-  }
-});
+menuRouter.put(
+  '/items/:id',
+  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const data = menuItemSchema.partial().parse(req.body);
+      const existing = await prisma.menuItem.findFirst({
+        where: { id: req.params.id, organizationId: req.user!.organizationId },
+      });
+      if (!existing) {
+        res.status(404).json({ success: false, error: 'Item not found' });
+        return;
+      }
+      const item = await prisma.menuItem.update({
+        where: { id: req.params.id },
+        data,
+        include: { category: true },
+      });
+      io.to(req.user!.organizationId).emit('MENU_UPDATED', { action: 'item_updated', item });
+      res.json({ success: true, data: item });
+    } catch (err: unknown) {
+      res.status(500).json({ success: false, error: 'Failed to update menu item' });
+    }
+  },
+);
 
-menuRouter.patch('/items/:id/toggle', requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN', 'SERVICE'), async (req: AuthRequest, res: Response) => {
-  try {
-    const item = await prisma.menuItem.findUnique({ where: { id: req.params.id } });
-    if (!item) { res.status(404).json({ success: false, error: 'Item not found' }); return; }
+menuRouter.patch(
+  '/items/:id/toggle',
+  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN', 'SERVICE'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const item = await prisma.menuItem.findUnique({ where: { id: req.params.id } });
+      if (!item) {
+        res.status(404).json({ success: false, error: 'Item not found' });
+        return;
+      }
 
-    const updated = await prisma.menuItem.update({
-      where: { id: req.params.id },
-      data: { isAvailable: !item.isAvailable },
-    });
-    io.to(req.user!.organizationId).emit('MENU_UPDATED', { action: 'item_toggled', item: updated });
-    res.json({ success: true, data: updated });
-  } catch (err: unknown) {
-    res.status(500).json({ success: false, error: 'Failed to toggle menu item' });
-  }
-});
+      const updated = await prisma.menuItem.update({
+        where: { id: req.params.id },
+        data: { isAvailable: !item.isAvailable },
+      });
+      io.to(req.user!.organizationId).emit('MENU_UPDATED', {
+        action: 'item_toggled',
+        item: updated,
+      });
+      res.json({ success: true, data: updated });
+    } catch (err: unknown) {
+      res.status(500).json({ success: false, error: 'Failed to toggle menu item' });
+    }
+  },
+);
 
-menuRouter.delete('/items/:id', requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'), async (req: AuthRequest, res: Response) => {
-  try {
-    const existingItem = await prisma.menuItem.findFirst({ where: { id: req.params.id, organizationId: req.user!.organizationId } });
-    if (!existingItem) { res.status(404).json({ success: false, error: 'Item not found' }); return; }
-    await prisma.menuItem.delete({ where: { id: req.params.id } });
-    io.to(req.user!.organizationId).emit('MENU_UPDATED', { action: 'item_deleted', id: req.params.id });
-    res.json({ success: true, message: 'Item deleted' });
-  } catch (err: unknown) {
-    res.status(500).json({ success: false, error: 'Failed to delete menu item' });
-  }
-});
+menuRouter.delete(
+  '/items/:id',
+  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const existingItem = await prisma.menuItem.findFirst({
+        where: { id: req.params.id, organizationId: req.user!.organizationId },
+      });
+      if (!existingItem) {
+        res.status(404).json({ success: false, error: 'Item not found' });
+        return;
+      }
+      await prisma.menuItem.delete({ where: { id: req.params.id } });
+      io.to(req.user!.organizationId).emit('MENU_UPDATED', {
+        action: 'item_deleted',
+        id: req.params.id,
+      });
+      res.json({ success: true, message: 'Item deleted' });
+    } catch (err: unknown) {
+      res.status(500).json({ success: false, error: 'Failed to delete menu item' });
+    }
+  },
+);

@@ -10,6 +10,7 @@ import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { logger } from '../services/logger';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { invalidatePlanCache } from '../middleware/planGuard';
 
 const PLATFORM_SLUG = 'cevop-internal'; // Internal platform org — excluded from client metrics
 
@@ -17,8 +18,18 @@ export const opsRouter = Router();
 opsRouter.use(authenticate, requireRole('SUPERADMIN'));
 
 // ─── Platform metrics ─────────────────────────────────────────────────────────
+// In-memory cache for ops metrics — 60s TTL (ops dashboard doesn't need real-time)
+let metricsCache: { data: unknown; expiresAt: number } | null = null;
+
 opsRouter.get('/metrics', async (_req, res: Response) => {
   try {
+    const nowCache = Date.now();
+
+    if (metricsCache && metricsCache.expiresAt > nowCache) {
+      res.json({ success: true, data: metricsCache.data });
+      return;
+    }
+
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const today = new Date(now);
@@ -58,24 +69,24 @@ opsRouter.get('/metrics', async (_req, res: Response) => {
       prisma.order.aggregate({ where: { status: { not: 'CANCELLED' } }, _sum: { total: true } }),
     ]);
 
-    res.json({
-      success: true,
-      data: {
-        orgs: {
-          total: totalOrgs,
-          active: activeOrgs,
-          trialing: trialingOrgs,
-          suspended: suspendedOrgs,
-          selfSignup: selfSignupOrgs,
-          newThisMonth: newOrgsThisMonth,
-          free: freeOrgs,
-        },
-        users: { total: totalUsers },
-        orders: { total: totalOrders, today: ordersToday },
-        branches: { total: totalBranches },
-        revenue: { total: Number(totalRevenue._sum.total ?? 0) },
+    const data = {
+      orgs: {
+        total: totalOrgs,
+        active: activeOrgs,
+        trialing: trialingOrgs,
+        suspended: suspendedOrgs,
+        selfSignup: selfSignupOrgs,
+        newThisMonth: newOrgsThisMonth,
+        free: freeOrgs,
       },
-    });
+      users: { total: totalUsers },
+      orders: { total: totalOrders, today: ordersToday },
+      branches: { total: totalBranches },
+      revenue: { total: Number(totalRevenue._sum.total ?? 0) },
+    };
+
+    metricsCache = { data, expiresAt: nowCache + 60_000 };
+    res.json({ success: true, data });
   } catch (err: unknown) {
     res.status(500).json({ success: false, error: 'Failed to fetch metrics' });
   }
@@ -216,6 +227,8 @@ opsRouter.patch('/orgs/:orgId', async (req: AuthRequest, res: Response) => {
       data: updateData,
     });
 
+    invalidatePlanCache(req.params.orgId);
+
     res.json({ success: true, data: org });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
@@ -233,6 +246,7 @@ opsRouter.post('/orgs/:orgId/suspend', async (req: AuthRequest, res: Response) =
       where: { id: req.params.orgId },
       data: { planStatus: 'suspended', isActive: false },
     });
+    invalidatePlanCache(req.params.orgId);
     res.json({ success: true, data: org, message: 'Organisation suspended' });
   } catch {
     res.status(500).json({ success: false, error: 'Failed to suspend' });
@@ -250,6 +264,7 @@ opsRouter.post('/orgs/:orgId/activate', async (req: AuthRequest, res: Response) 
         verifiedBy: req.user!.userId,
       },
     });
+    invalidatePlanCache(req.params.orgId);
     res.json({ success: true, data: org, message: 'Organisation activated' });
   } catch {
     res.status(500).json({ success: false, error: 'Failed to activate' });
@@ -276,6 +291,7 @@ opsRouter.delete('/orgs/:orgId', async (req: AuthRequest, res: Response) => {
       where: { id: req.params.orgId },
       data: { scheduledForDeletionAt: deleteDate, planStatus: 'cancelled', isActive: false },
     });
+    invalidatePlanCache(req.params.orgId);
 
     logger.info('Organization scheduled for deletion', {
       orgId: req.params.orgId,
