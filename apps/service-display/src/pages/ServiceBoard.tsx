@@ -49,9 +49,9 @@ const STATUS_COLOR: Record<string, string> = {
   SERVED: 'border-[var(--served)]',
 };
 const STATUS_TEXT: Record<string, string> = {
-  RECEIVED: 'text-blue-400',
-  PREPARING: 'text-yellow-400',
-  READY: 'text-green-400',
+  RECEIVED: 'text-blue-700 dark:text-blue-300',
+  PREPARING: 'text-amber-700 dark:text-amber-300',
+  READY: 'text-emerald-700 dark:text-emerald-300',
   SERVED: 'text-gray-500',
 };
 const NEXT_STATUS: Record<string, string> = {
@@ -249,7 +249,7 @@ export function ServiceBoard() {
     if (updatingItems.has(orderId)) return;
     setUpdatingItems((prev) => new Set(prev).add(orderId));
     try {
-      const freshToken = (await silentRefresh()) ?? token;
+      const freshToken = await silentRefresh();
       if (!freshToken) return;
       const res = await fetch(`${API_BASE}/api/orders/${orderId}/status`, {
         method: 'PATCH',
@@ -280,7 +280,7 @@ export function ServiceBoard() {
     if (updatingItems.has(callId)) return;
     setUpdatingItems((prev) => new Set(prev).add(callId));
     try {
-      const freshToken = (await silentRefresh()) ?? token;
+      const freshToken = await silentRefresh();
       if (!freshToken) return;
       const res = await fetch(`${API_BASE}/api/waiter-calls/${callId}/status`, {
         method: 'PATCH',
@@ -301,7 +301,7 @@ export function ServiceBoard() {
     if (updatingItems.has(reqId)) return;
     setUpdatingItems((prev) => new Set(prev).add(reqId));
     try {
-      const freshToken = (await silentRefresh()) ?? token;
+      const freshToken = await silentRefresh();
       if (!freshToken) return;
       const res = await fetch(`${API_BASE}/api/service-requests/${reqId}/status`, {
         method: 'PATCH',
@@ -405,15 +405,16 @@ export function ServiceBoard() {
       <div className="flex border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
         <button
           onClick={() => setActiveTab('orders')}
-          className={`px-6 py-2.5 text-sm font-bold tracking-wider transition-all ${activeTab === 'orders' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
+          className={`px-4 sm:px-6 py-2.5 text-xs sm:text-sm font-bold tracking-wider transition-all ${activeTab === 'orders' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
         >
           ORDERS ({orders.length})
         </button>
         <button
           onClick={() => setActiveTab('calls')}
-          className={`px-6 py-2.5 text-sm font-bold tracking-wider transition-all relative ${activeTab === 'calls' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
+          className={`px-4 sm:px-6 py-2.5 text-xs sm:text-sm font-bold tracking-wider transition-all relative ${activeTab === 'calls' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
         >
-          CALLS & REQUESTS
+          <span className="sm:hidden">CALLS</span>
+          <span className="hidden sm:inline">CALLS & REQUESTS</span>
           {pendingCallsCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center font-bold">
               {pendingCallsCount}
@@ -438,7 +439,7 @@ export function ServiceBoard() {
                   ({activeOrdersByStatus[status].length})
                 </span>
               </div>
-              <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              <div className="flex-1 overflow-y-visible lg:overflow-y-auto p-3 space-y-3">
                 {activeOrdersByStatus[status].length === 0 && (
                   <div className="text-center text-[var(--muted)] text-xs pt-8">— Empty —</div>
                 )}

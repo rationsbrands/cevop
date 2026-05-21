@@ -52,6 +52,38 @@ export function OrdersPage() {
   const [editSaving, setEditSaving] = useState(false);
 
   const [refreshing, setRefreshing] = useState(false);
+  const [onlineWaiters, setOnlineWaiters] = useState<
+    { id: string; name: string; online: boolean }[]
+  >([]);
+
+  // Fetch online waiters
+  useEffect(() => {
+    api
+      .get('/api/waiter-calls/waiters/online')
+      .then((res) => {
+        if (res.success) setOnlineWaiters(res.data);
+      })
+      .catch(() => void 0);
+  }, [api, activeBranchFilter]);
+
+  // Update on socket events
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (payload: any) => {
+      setOnlineWaiters((prev) =>
+        prev.map((w) => ({
+          ...w,
+          online: payload.onlineWaiters.includes(w.id),
+        })),
+      );
+    };
+    socket.on('WAITER_ONLINE', handler);
+    socket.on('WAITER_OFFLINE', handler);
+    return () => {
+      socket.off('WAITER_ONLINE', handler);
+      socket.off('WAITER_OFFLINE', handler);
+    };
+  }, [socket]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -184,6 +216,28 @@ export function OrdersPage() {
 
   return (
     <div className="space-y-6 animate-in">
+      {onlineWaiters.length > 0 && (
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--surface2)] overflow-x-auto">
+          <span className="text-[10px] font-bold tracking-widest text-[var(--muted)] uppercase shrink-0">
+            Waiters
+          </span>
+          {onlineWaiters.map((w) => (
+            <div
+              key={w.id}
+              className={`flex items-center gap-1.5 px-2 py-1 text-xs border shrink-0 ${
+                w.online
+                  ? 'border-green-800 text-green-400 bg-green-900/10'
+                  : 'border-[var(--border)] text-[var(--muted)]'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${w.online ? 'bg-green-400' : 'bg-[var(--muted)]'}`}
+              />
+              {w.name}
+            </div>
+          ))}
+        </div>
+      )}
       {/* Tabs */}
       <div className="flex flex-col gap-4">
         <div className="flex border-b border-[var(--border)] overflow-x-auto scrollbar-hide shrink-0">

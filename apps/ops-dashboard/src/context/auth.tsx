@@ -39,14 +39,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRefreshedAt = useRef<number>(0);
+  const silentRefreshRef = useRef<() => void>(() => void 0);
 
-  function scheduleRefresh(accessToken: string) {
+  const scheduleRefresh = useCallback((accessToken: string) => {
     if (timer.current) clearTimeout(timer.current);
     const exp = getTokenExpiry(accessToken);
     if (!exp) return;
     const msUntilRefresh = Math.max(exp - Date.now() - 2 * 60 * 1000, 0);
-    timer.current = setTimeout(silentRefresh, msUntilRefresh);
-  }
+    timer.current = setTimeout(() => silentRefreshRef.current(), msUntilRefresh);
+  }, []);
 
   const silentRefresh = useCallback(async (): Promise<string | null> => {
     if (Date.now() - lastRefreshedAt.current < 30_000) {
@@ -60,8 +61,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: AUTH_HEADERS,
       });
       if (!res.ok) {
-        doLogout();
-        return null;
+        if (res.status === 401) {
+          doLogout();
+          return null;
+        }
+        return token;
       }
       const { data } = await res.json();
       setToken(data.accessToken);
@@ -69,10 +73,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       scheduleRefresh(data.accessToken);
       return data.accessToken;
     } catch {
-      doLogout();
-      return null;
+      return token;
     }
-  }, [token]);
+  }, [scheduleRefresh, token]);
+
+  useEffect(() => {
+    silentRefreshRef.current = () => {
+      silentRefresh().catch(() => void 0);
+    };
+  }, [silentRefresh]);
 
   function doLogout() {
     setToken(null);
@@ -129,7 +138,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, []);
+  }, [scheduleRefresh]);
 
   async function login(email: string, password: string) {
     const res = await fetch(`${API_BASE}/api/auth/login`, {

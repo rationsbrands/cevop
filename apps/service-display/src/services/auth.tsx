@@ -40,14 +40,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRefreshedAt = useRef<number>(0);
+  const silentRefreshRef = useRef<() => void>(() => void 0);
 
-  function scheduleRefresh(accessToken: string) {
+  function doLogout() {
+    setToken(null);
+    setUser(null);
+  }
+
+  const scheduleRefresh = useCallback((accessToken: string) => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     const exp = getTokenExpiry(accessToken);
     if (!exp) return;
     const msUntilRefresh = Math.max(exp - Date.now() - 2 * 60 * 1000, 0);
-    refreshTimerRef.current = setTimeout(silentRefresh, msUntilRefresh);
-  }
+    refreshTimerRef.current = setTimeout(() => silentRefreshRef.current(), msUntilRefresh);
+  }, []);
 
   const silentRefresh = useCallback(async (): Promise<string | null> => {
     if (Date.now() - lastRefreshedAt.current < 30_000) {
@@ -61,8 +67,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: AUTH_HEADERS,
       });
       if (!res.ok) {
-        logout();
-        return null;
+        if (res.status === 401) {
+          doLogout();
+          return null;
+        }
+        return token;
       }
       const { data } = await res.json();
       setToken(data.accessToken);
@@ -70,10 +79,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       scheduleRefresh(data.accessToken);
       return data.accessToken;
     } catch {
-      logout();
-      return null;
+      return token;
     }
-  }, [token]);
+  }, [scheduleRefresh, token]);
+
+  useEffect(() => {
+    silentRefreshRef.current = () => {
+      silentRefresh().catch(() => void 0);
+    };
+  }, [silentRefresh]);
 
   useEffect(() => {
     async function handleWake() {
@@ -110,10 +124,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (userData) {
           setUser(userData);
         } else {
-          logout();
+          doLogout();
         }
       } catch {
-        logout();
+        doLogout();
       } finally {
         setLoading(false);
       }
@@ -122,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     };
-  }, []);
+  }, [scheduleRefresh]);
 
   async function logout() {
     try {
@@ -134,8 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
-    setToken(null);
-    setUser(null);
+    doLogout();
   }
 
   async function login(email: string, password: string) {

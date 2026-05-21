@@ -111,6 +111,9 @@ model User {
   mustChangePassword  Boolean        @default(false)
   emailVerified       DateTime?
   emailVerificationToken String?     @unique
+  waiterCallAssignments    WaiterCall[]     @relation("WaiterCallAssignments")
+  serviceRequestAssignments ServiceRequest[] @relation("ServiceRequestAssignments")
+  orderWaiterAssignments   Order[]          @relation("OrderWaiterAssignments")
   auditLogs           AuditLog[]
   refreshTokens       RefreshToken[]
   branch              Branch?        @relation(fields: [branchId], references: [id])
@@ -246,6 +249,9 @@ model Order {
   status         OrderStatus  @default(RECEIVED)
   total          Decimal      @db.Decimal(10, 2)
   notes          String?
+  assignedWaiter     String?
+  assignedWaiterAt   DateTime?
+  assignedWaiterUser User?    @relation("OrderWaiterAssignments", fields: [assignedWaiter], references: [id], onDelete: SetNull)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   branchId       String?
@@ -263,6 +269,7 @@ model Order {
   @@index([organizationId, createdAt(sort: Desc)])
   @@index([organizationId, branchId, status])
   @@index([organizationId, branchId, createdAt(sort: Desc)])
+  @@index([assignedWaiter])
   @@map("orders")
 }
 
@@ -292,6 +299,9 @@ model WaiterCall {
   notes          String?
   resolvedBy     String?
   resolvedAt     DateTime?
+  assignedTo   String?
+  assignedAt   DateTime?
+  assignedUser User?    @relation("WaiterCallAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
   branch         Branch?          @relation(fields: [branchId], references: [id])
   organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   table          Table            @relation(fields: [tableId], references: [id], onDelete: Cascade)
@@ -301,6 +311,7 @@ model WaiterCall {
   @@index([status])
   @@index([organizationId, status])
   @@index([organizationId, branchId, status])
+  @@index([assignedTo])
   @@map("waiter_calls")
 }
 
@@ -317,6 +328,9 @@ model ServiceRequest {
   adminNotes     String?
   resolvedBy     String?
   resolvedAt     DateTime?
+  assignedTo   String?
+  assignedAt   DateTime?
+  assignedUser User?    @relation("ServiceRequestAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
   branch         Branch?              @relation(fields: [branchId], references: [id])
   organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   table          Table                @relation(fields: [tableId], references: [id], onDelete: Cascade)
@@ -325,6 +339,7 @@ model ServiceRequest {
   @@index([branchId])
   @@index([organizationId, status])
   @@index([organizationId, branchId, status])
+  @@index([assignedTo])
   @@map("service_requests")
 }
 

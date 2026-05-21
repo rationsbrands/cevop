@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { logger } from '../services/logger';
 import { prisma } from '../services/prisma';
 import type { AuthPayload } from '../../../shared/types';
+import { registerWaiter, unregisterWaiter, getOnlineWaiters } from '../services/waiterAssignment';
 
 export function initSocketHandlers(io: Server): void {
   io.use((socket: Socket, next) => {
@@ -51,6 +52,31 @@ export function initSocketHandlers(io: Server): void {
         } catch (err: unknown) {
           logger.error('Failed to fetch branches for socket room join', { err });
         }
+      }
+
+      // Register waiter as online if they have the WAITER role
+      if (user.role === 'WAITER') {
+        registerWaiter(user.organizationId, user.branchId ?? null, user.userId, socket.id);
+
+        // Notify admins that this waiter is now online
+        const waiterOnlinePayload = {
+          userId: user.userId,
+          organizationId: user.organizationId,
+          branchId: user.branchId ?? null,
+          onlineWaiters: getOnlineWaiters(user.organizationId, user.branchId ?? null),
+        };
+        if (user.branchId) {
+          io.to(`${user.organizationId}:${user.branchId}`).emit(
+            'WAITER_ONLINE',
+            waiterOnlinePayload,
+          );
+        }
+        io.to(user.organizationId).emit('WAITER_ONLINE', waiterOnlinePayload);
+      }
+
+      // Every authenticated user joins their personal room for direct messages
+      if (user.userId) {
+        socket.join(`waiter:${user.userId}`);
       }
     }
 
@@ -114,6 +140,21 @@ export function initSocketHandlers(io: Server): void {
 
     socket.on('disconnect', () => {
       logger.info('Socket disconnected', { socketId: socket.id });
+
+      // Unregister waiter if they were one
+      const unregistered = unregisterWaiter(socket.id);
+      if (unregistered && user?.organizationId) {
+        const offlinePayload = {
+          userId: unregistered.userId,
+          organizationId: user.organizationId,
+          branchId: user?.branchId ?? null,
+          onlineWaiters: getOnlineWaiters(user.organizationId, user?.branchId ?? null),
+        };
+        if (user.branchId) {
+          io.to(`${user.organizationId}:${user.branchId}`).emit('WAITER_OFFLINE', offlinePayload);
+        }
+        io.to(user.organizationId).emit('WAITER_OFFLINE', offlinePayload);
+      }
     });
 
     socket.on('error', (err) => {

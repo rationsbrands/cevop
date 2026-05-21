@@ -6,6 +6,9 @@ import './index.css';
 const ServiceBoard = React.lazy(() =>
   import('./pages/ServiceBoard').then((m) => ({ default: m.ServiceBoard })),
 );
+const WaiterBoard = React.lazy(() =>
+  import('./pages/WaiterBoard').then((m) => ({ default: m.WaiterBoard })),
+);
 const LoginPage = React.lazy(() =>
   import('./pages/LoginPage').then((m) => ({ default: m.LoginPage })),
 );
@@ -23,6 +26,13 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function RoleRouter() {
+  const { user } = useAuth();
+  // WAITER role gets the waiter dashboard; everyone else gets the service board
+  if (user?.role === 'WAITER') return <WaiterBoard />;
+  return <ServiceBoard />;
+}
+
 function AppRoutes() {
   return (
     <React.Suspense
@@ -38,7 +48,7 @@ function AppRoutes() {
           path="/"
           element={
             <ProtectedRoute>
-              <ServiceBoard />
+              <RoleRouter />
             </ProtectedRoute>
           }
         />

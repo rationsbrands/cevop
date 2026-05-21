@@ -6,6 +6,7 @@ import { authenticate, requireRole, requireBranchAccess, AuthRequest } from '../
 import { notifyNewOrder } from '../services/notifications';
 import { io } from '../index';
 import { logger } from '../services/logger';
+import { findLeastLoadedWaiter } from '../services/waiterAssignment';
 
 // Simple in-memory analytics cache — 30 second TTL
 const analyticsCache = new Map<string, { data: unknown; expiresAt: number }>();
@@ -176,7 +177,7 @@ ordersRouter.get('/public/:orderId', async (req: Request, res: Response) => {
       return;
     }
     res.json({ success: true, data: order });
-  } catch (err: unknown) {
+  } catch {
     res.status(500).json({ success: false, error: 'Failed to fetch order' });
   }
 });
@@ -314,7 +315,7 @@ ordersRouter.get(
       analyticsCache.set(cacheKey, { data: result, expiresAt: now + 30_000 });
 
       res.json({ success: true, data: result });
-    } catch (err: unknown) {
+    } catch {
       res.status(500).json({ success: false, error: 'Failed to fetch analytics' });
     }
   },
@@ -349,10 +350,48 @@ ordersRouter.patch(
         include: { items: { include: { menuItem: true } }, table: true },
       });
 
-      if (order.branchId) {
-        io.to(`${req.user!.organizationId}:${order.branchId}`).emit('ORDER_UPDATED', order);
+      let finalOrder = order;
+
+      if (status === 'READY') {
+        // Auto-assign a waiter to deliver this order
+        const assignedWaiterId = await findLeastLoadedWaiter(
+          req.user!.organizationId,
+          order.branchId ?? null,
+        ).catch(() => null);
+
+        if (assignedWaiterId) {
+          finalOrder = await prisma.order.update({
+            where: { id: order.id },
+            data: { assignedWaiter: assignedWaiterId, assignedWaiterAt: new Date() },
+            include: { items: { include: { menuItem: true } }, table: true },
+          });
+
+          io.to(`waiter:${assignedWaiterId}`).emit('TASK_ASSIGNED', {
+            type: 'ORDER_READY',
+            task: finalOrder,
+          });
+        } else {
+          // No waiter online — emit as unassigned
+          if (order.branchId) {
+            io.to(`${req.user!.organizationId}:${order.branchId}`).emit('TASK_UNASSIGNED', {
+              type: 'ORDER_READY',
+              task: order,
+            });
+          }
+          io.to(req.user!.organizationId).emit('TASK_UNASSIGNED', {
+            type: 'ORDER_READY',
+            task: order,
+          });
+        }
       }
-      io.to(req.user!.organizationId).emit('ORDER_UPDATED', order);
+
+      if (finalOrder.branchId) {
+        io.to(`${req.user!.organizationId}:${finalOrder.branchId}`).emit(
+          'ORDER_UPDATED',
+          finalOrder,
+        );
+      }
+      io.to(req.user!.organizationId).emit('ORDER_UPDATED', finalOrder);
 
       // Invalidate analytics cache for this org
       analyticsCache.delete(`${req.user!.organizationId}:all`);
@@ -365,6 +404,90 @@ ordersRouter.patch(
         return;
       }
       res.status(500).json({ success: false, error: 'Failed to update order status' });
+    }
+  },
+);
+
+ordersRouter.patch(
+  '/:id/claim',
+  requireRole('WAITER', 'ADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const where: Prisma.OrderWhereInput = {
+        id: req.params.id,
+        organizationId: req.user!.organizationId,
+        status: 'READY',
+        assignedWaiter: null,
+      };
+      if (req.branchScope) where.branchId = req.branchScope;
+
+      const result = await prisma.order.updateMany({
+        where,
+        data: { assignedWaiter: req.user!.userId, assignedWaiterAt: new Date() },
+      });
+      if (result.count === 0) {
+        res.status(404).json({ success: false, error: 'Task not found or already assigned' });
+        return;
+      }
+
+      const updated = await prisma.order.findUnique({
+        where: { id: req.params.id },
+        include: { items: { include: { menuItem: true } }, table: true },
+      });
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Order not found' });
+        return;
+      }
+
+      if (updated.branchId) {
+        io.to(`${req.user!.organizationId}:${updated.branchId}`).emit('TASK_CLAIMED', {
+          type: 'ORDER_READY',
+          task: updated,
+        });
+        io.to(`${req.user!.organizationId}:${updated.branchId}`).emit('ORDER_UPDATED', updated);
+      }
+      io.to(req.user!.organizationId).emit('TASK_CLAIMED', { type: 'ORDER_READY', task: updated });
+      io.to(req.user!.organizationId).emit('ORDER_UPDATED', updated);
+
+      res.json({ success: true, data: updated });
+    } catch {
+      res.status(500).json({ success: false, error: 'Failed to claim task' });
+    }
+  },
+);
+
+ordersRouter.patch(
+  '/:id/assign-waiter',
+  requireRole('ADMIN', 'BRANCH_ADMIN', 'SUPERADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { waiterId } = z.object({ waiterId: z.string().nullable() }).parse(req.body);
+
+      const order = await prisma.order.update({
+        where: { id: req.params.id, organizationId: req.user!.organizationId },
+        data: {
+          assignedWaiter: waiterId,
+          assignedWaiterAt: waiterId ? new Date() : null,
+        },
+        include: { items: { include: { menuItem: true } }, table: true },
+      });
+
+      if (order.branchId) {
+        io.to(`${req.user!.organizationId}:${order.branchId}`).emit('ORDER_UPDATED', order);
+      }
+      io.to(req.user!.organizationId).emit('ORDER_UPDATED', order);
+
+      if (waiterId) {
+        io.to(`waiter:${waiterId}`).emit('TASK_ASSIGNED', { type: 'ORDER_READY', task: order });
+      }
+
+      res.json({ success: true, data: order });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: err.errors[0].message });
+        return;
+      }
+      res.status(500).json({ success: false, error: 'Failed to assign waiter' });
     }
   },
 );

@@ -52,10 +52,6 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-async function apiCall(path: string, options: RequestInit): Promise<Response> {
-  return fetch(`${API_BASE}${path}`, options);
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -63,15 +59,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [activeBranchFilter, setActiveBranchFilter] = useState<BranchInfo | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRefreshedAt = useRef<number>(0);
+  const silentRefreshRef = useRef<() => void>(() => void 0);
 
-  function scheduleRefresh(accessToken: string) {
+  const scheduleRefresh = useCallback((accessToken: string) => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     const exp = getTokenExpiry(accessToken);
     if (!exp) return;
-    // Refresh 2 minutes before the token actually expires
     const msUntilRefresh = Math.max(exp - Date.now() - 2 * 60 * 1000, 0);
-    refreshTimerRef.current = setTimeout(silentRefresh, msUntilRefresh);
-  }
+    refreshTimerRef.current = setTimeout(() => silentRefreshRef.current(), msUntilRefresh);
+  }, []);
 
   const silentRefresh = useCallback(async (): Promise<string | null> => {
     // Debounce
@@ -87,8 +83,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // No body
       });
       if (!res.ok) {
-        logout();
-        return null;
+        if (res.status === 401) {
+          logout();
+          return null;
+        }
+        return token;
       }
       const { data } = await res.json();
       setToken(data.accessToken);
@@ -96,10 +95,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       scheduleRefresh(data.accessToken);
       return data.accessToken;
     } catch {
-      logout();
-      return null;
+      return token;
     }
-  }, [token]);
+  }, [scheduleRefresh, token]);
+
+  useEffect(() => {
+    silentRefreshRef.current = () => {
+      silentRefresh().catch(() => void 0);
+    };
+  }, [silentRefresh]);
 
   useEffect(() => {
     async function handleWake() {
@@ -174,7 +178,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     };
-  }, []);
+  }, [scheduleRefresh]);
 
   async function login(email: string, password: string) {
     const res = await fetch(`${API_BASE}/api/auth/login`, {

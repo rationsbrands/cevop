@@ -272,9 +272,9 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
       plan: stored.user.organization?.plan ?? 'free',
     });
 
-    res.cookie(COOKIE_NAME, newRawRefresh, COOKIE_OPTIONS);
+    res.cookie(getRefreshCookieName(req), newRawRefresh, COOKIE_OPTIONS);
     res.json({ success: true, data: { accessToken: newAccess, expiresIn: 900 } });
-  } catch (err: unknown) {
+  } catch {
     res.status(500).json({ success: false, error: 'Token refresh failed' });
   }
 });
@@ -393,7 +393,7 @@ authRouter.post('/forgot-password', async (req: Request, res: Response) => {
     }
 
     res.json({ success: true, message: 'If that email exists, a reset link has been sent.' });
-  } catch (err: unknown) {
+  } catch {
     res.status(500).json({ success: false, error: 'Failed to process request' });
   }
 });
