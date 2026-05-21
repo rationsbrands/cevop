@@ -10,6 +10,7 @@ COPY package.json package-lock.json ./
 # Copy shared types and server package
 COPY shared/ ./shared/
 COPY server/package.json ./server/
+COPY server/src/prisma ./server/src/prisma
 
 # Install all dependencies using npm ci from root
 RUN npm ci
