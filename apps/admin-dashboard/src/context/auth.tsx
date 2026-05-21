@@ -11,6 +11,7 @@ import React, {
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
+const AUTH_HEADERS = { 'Content-Type': 'application/json', 'x-cevop-app': 'admin' };
 
 export interface OrgInfo {
   id: string;
@@ -82,7 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
         credentials: 'include', // Cookie is sent automatically
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTH_HEADERS,
         // No body
       });
       if (!res.ok) {
@@ -135,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const res = await fetch(`${API_BASE}/api/auth/refresh`, {
             method: 'POST',
             credentials: 'include', // Required — sends the cookie
-            headers: { 'Content-Type': 'application/json' },
+            headers: AUTH_HEADERS,
           });
           if (!res.ok) {
             setLoading(false);
@@ -179,7 +180,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       credentials: 'include', // Required — server sets the cookie on this response
-      headers: { 'Content-Type': 'application/json' },
+      headers: AUTH_HEADERS,
       body: JSON.stringify({ email, password }),
     });
     const body = await res.json();
@@ -200,7 +201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await fetch(`${API_BASE}/api/auth/logout`, {
         method: 'POST',
         credentials: 'include', // Sends cookie so server can revoke it
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTH_HEADERS,
       });
     } catch {
       /* ignore */

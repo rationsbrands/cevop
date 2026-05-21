@@ -22,7 +22,16 @@ const APP_HEADER = 'x-cevop-app';
 function getRefreshCookieName(req: Request): string {
   const app = (req.headers[APP_HEADER] as string | undefined)?.toLowerCase();
   if (app === 'service') return SERVICE_COOKIE_NAME;
-  return COOKIE_NAME;
+
+  const origin = (req.headers.origin as string | undefined)?.toLowerCase() ?? '';
+  const referer = (req.headers.referer as string | undefined)?.toLowerCase() ?? '';
+  const isService =
+    origin.includes('service.cevop.com') ||
+    referer.includes('service.cevop.com') ||
+    origin.includes('localhost:5174') ||
+    referer.includes('localhost:5174');
+
+  return isService ? SERVICE_COOKIE_NAME : COOKIE_NAME;
 }
 const COOKIE_OPTIONS = {
   httpOnly: true,

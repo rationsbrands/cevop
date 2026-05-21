@@ -9,6 +9,12 @@ import { logger } from '../services/logger';
 
 export const tablesRouter = Router();
 
+function getCustomerPwaBaseUrl(): string {
+  if (process.env.CUSTOMER_PWA_URL) return process.env.CUSTOMER_PWA_URL;
+  if (process.env.NODE_ENV === 'production') return 'https://order.cevop.com';
+  return 'http://localhost:5173';
+}
+
 // PUBLIC: Get table info (for QR scan)
 tablesRouter.get('/public/:orgId/:tableId', async (req: Request, res: Response) => {
   try {
@@ -74,7 +80,7 @@ tablesRouter.get('/:id/qr', async (req: Request, res: Response) => {
       return;
     }
 
-    const customerUrl = `${process.env.CUSTOMER_PWA_URL || 'http://localhost:5173'}/menu/${table.organizationId}/${table.id}`;
+    const customerUrl = `${getCustomerPwaBaseUrl()}/menu/${table.organizationId}/${table.id}`;
     const format = (req.query.format as string) || 'svg';
 
     if (format === 'png') {
@@ -214,7 +220,7 @@ tablesRouter.get(
       if (req.branchScope) where.branchId = req.branchScope;
 
       const tables = await prisma.table.findMany({ where, orderBy: { number: 'asc' } });
-      const baseUrl = process.env.CUSTOMER_PWA_URL || 'http://localhost:5173';
+      const baseUrl = getCustomerPwaBaseUrl();
 
       const qrCodes = await Promise.all(
         tables.map(

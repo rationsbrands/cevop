@@ -11,6 +11,7 @@ import React, {
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
+const AUTH_HEADERS = { 'Content-Type': 'application/json', 'x-cevop-app': 'ops' };
 
 export interface OpsUser {
   id: string;
@@ -56,7 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTH_HEADERS,
       });
       if (!res.ok) {
         doLogout();
@@ -100,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const res = await fetch(`${API_BASE}/api/auth/refresh`, {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: AUTH_HEADERS,
         });
         if (!res.ok) {
           setLoading(false);
@@ -134,7 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: AUTH_HEADERS,
       body: JSON.stringify({ email, password }),
     });
     const body = await res.json();
@@ -150,7 +151,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await fetch(`${API_BASE}/api/auth/logout`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTH_HEADERS,
       });
     } catch {
       /* ignore */
