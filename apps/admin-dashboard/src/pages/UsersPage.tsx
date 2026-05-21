@@ -53,6 +53,9 @@ export function UsersPage() {
   const [inviting, setInviting] = useState(false);
   const [inviteResult, setInviteResult] = useState<any>(null);
   const [inviteError, setInviteError] = useState('');
+  const [passwordResetResult, setPasswordResetResult] = useState<any>(null);
+  const [actionLoading, setActionLoading] = useState<Set<string>>(new Set());
+  const [actionError, setActionError] = useState('');
 
   const isOrgAdmin = me?.role === 'ADMIN' || me?.role === 'SUPERADMIN';
   const isBranchAdmin = me?.role === 'BRANCH_ADMIN';
@@ -142,6 +145,55 @@ export function UsersPage() {
     if (success) setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, ...data } : u)));
   }
 
+  async function resetPassword(user: User) {
+    if (actionLoading.has(user.id)) return;
+    setPasswordResetResult(null);
+    setActionError('');
+    setActionLoading((prev) => new Set(prev).add(user.id));
+    try {
+      const {
+        success,
+        data,
+        error: err,
+      } = await api.post(`/api/users/${user.id}/password-reset`, {});
+      if (!success) {
+        setActionError(err || 'Failed to generate reset link');
+        return;
+      }
+      setPasswordResetResult(data);
+    } finally {
+      setActionLoading((prev) => {
+        const n = new Set(prev);
+        n.delete(user.id);
+        return n;
+      });
+    }
+  }
+
+  async function deleteUser(user: User) {
+    if (actionLoading.has(user.id)) return;
+    const ok = window.confirm(
+      `Deactivate ${user.name}? They will be logged out and won’t be able to sign in.`,
+    );
+    if (!ok) return;
+    setActionError('');
+    setActionLoading((prev) => new Set(prev).add(user.id));
+    try {
+      const { success, error: err } = await api.delete(`/api/users/${user.id}`);
+      if (!success) {
+        setActionError(err || 'Failed to deactivate user');
+        return;
+      }
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, isActive: false } : u)));
+    } finally {
+      setActionLoading((prev) => {
+        const n = new Set(prev);
+        n.delete(user.id);
+        return n;
+      });
+    }
+  }
+
   if (loading) return <div className="text-[var(--muted)] text-sm">Loading…</div>;
   if (error) return <div className="text-red-400 text-sm">{error}</div>;
 
@@ -199,6 +251,35 @@ export function UsersPage() {
           </div>
           <p className="text-xs text-[var(--muted)]">
             Expires: {new Date(inviteResult.expiresAt).toLocaleString()}
+          </p>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="bg-red-900/20 border border-red-800 text-red-400 px-3 py-2 text-sm">
+          {actionError}
+        </div>
+      )}
+
+      {passwordResetResult && (
+        <div className="card p-4 border-[var(--accent)] bg-[var(--accent-dim)] space-y-2">
+          <p className="text-sm font-semibold text-[var(--text)]">
+            Password reset link generated for {passwordResetResult.email}
+          </p>
+          <p className="text-xs text-[var(--muted)]">Share this link with them:</p>
+          <div className="flex items-center gap-2">
+            <code className="text-xs bg-[var(--surface2)] border border-[var(--border)] px-2 py-1 flex-1 break-all">
+              {passwordResetResult.resetUrl}
+            </code>
+            <button
+              onClick={() => navigator.clipboard.writeText(passwordResetResult.resetUrl)}
+              className="btn btn-secondary btn-sm shrink-0"
+            >
+              Copy
+            </button>
+          </div>
+          <p className="text-xs text-[var(--muted)]">
+            Expires: {new Date(passwordResetResult.expiresAt).toLocaleString()}
           </p>
         </div>
       )}
@@ -476,12 +557,31 @@ export function UsersPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     {u.id !== me?.id && (isOrgAdmin || isBranchAdmin) && (
-                      <button
-                        onClick={() => toggleActive(u)}
-                        className="text-xs text-[var(--muted)] hover:text-[var(--danger)] transition-colors"
-                      >
-                        {u.isActive ? 'Deactivate' : 'Activate'}
-                      </button>
+                      <div className="flex items-center justify-end gap-3">
+                        <button
+                          onClick={() => resetPassword(u)}
+                          disabled={actionLoading.has(u.id) || !u.isActive}
+                          className="text-xs text-[var(--muted)] hover:text-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {actionLoading.has(u.id) ? 'Working…' : 'Reset Password'}
+                        </button>
+                        <button
+                          onClick={() => toggleActive(u)}
+                          disabled={actionLoading.has(u.id)}
+                          className="text-xs text-[var(--muted)] hover:text-[var(--danger)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {u.isActive ? 'Deactivate' : 'Activate'}
+                        </button>
+                        {u.isActive && (
+                          <button
+                            onClick={() => deleteUser(u)}
+                            disabled={actionLoading.has(u.id)}
+                            className="text-xs text-[var(--danger)] hover:opacity-80 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     )}
                   </td>
                 </tr>

@@ -45,6 +45,18 @@ export function MenuPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [activeCat, setActiveCat] = useState<string>('');
+  const [draggingCategoryId, setDraggingCategoryId] = useState<string | null>(null);
+  const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+
+  function moveById<T extends { id: string }>(list: T[], fromId: string, toId: string): T[] {
+    const fromIndex = list.findIndex((x) => x.id === fromId);
+    const toIndex = list.findIndex((x) => x.id === toId);
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return list;
+    const next = [...list];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    return next;
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,13 +68,50 @@ export function MenuPage() {
     setLoading(false);
   }, [api]);
 
+  const persistCategoryOrder = useCallback(
+    async (nextCategories: Category[]) => {
+      try {
+        const updated = nextCategories.map((c, i) => ({ ...c, sortOrder: i * 10 }));
+        setCategories(updated);
+        await Promise.all(
+          updated.map((c) => api.put('/api/menu/categories/' + c.id, { sortOrder: c.sortOrder })),
+        );
+      } catch {
+        setError('Failed to save category order');
+        load();
+      }
+    },
+    [api, load],
+  );
+
+  const persistItemOrder = useCallback(
+    async (categoryId: string, nextItems: MenuItem[]) => {
+      try {
+        const updatedItems = nextItems.map((it, i) => ({ ...it, sortOrder: i * 10 }));
+        setCategories((prev) =>
+          prev.map((c) => (c.id === categoryId ? { ...c, menuItems: updatedItems } : c)),
+        );
+        await Promise.all(
+          updatedItems.map((it) =>
+            api.put('/api/menu/items/' + it.id, { sortOrder: it.sortOrder }),
+          ),
+        );
+      } catch {
+        setError('Failed to save item order');
+        load();
+      }
+    },
+    [api, load],
+  );
+
   useEffect(() => {
     const t = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(t);
   }, [load]);
 
   function openAddCat() {
-    setCatForm({ name: '', description: '', sortOrder: 0, isActive: true });
+    const nextSort = categories.reduce((max, c) => Math.max(max, c.sortOrder ?? 0), 0) + 10;
+    setCatForm({ name: '', description: '', sortOrder: nextSort, isActive: true });
     setModal('add-cat');
     setError('');
   }
@@ -78,12 +127,15 @@ export function MenuPage() {
     setError('');
   }
   function openAddItem(catId: string) {
+    const cat = categories.find((c) => c.id === catId);
+    const nextSort =
+      (cat?.menuItems ?? []).reduce((max, it) => Math.max(max, it.sortOrder ?? 0), 0) + 10;
     setItemForm({
       name: '',
       description: '',
       price: '',
       categoryId: catId,
-      sortOrder: 0,
+      sortOrder: nextSort,
       isAvailable: true,
     });
     setModal('add-item');
@@ -187,31 +239,71 @@ export function MenuPage() {
           {categories.map((cat) => (
             <div
               key={cat.id}
-              onClick={() => setActiveCat(cat.id)}
+              data-reorder-id={cat.id}
               className={
-                'p-3 cursor-pointer border transition-all shrink-0 w-48 lg:w-auto ' +
+                'p-3 border transition-all shrink-0 w-48 lg:w-auto ' +
                 (activeCat === cat.id
                   ? 'border-[var(--accent)] bg-[var(--accent-dim)]'
                   : 'card hover:border-[var(--accent)]')
               }
             >
-              {' '}
-              <div className="flex items-center justify-between">
-                <span
-                  className={
-                    'text-sm font-semibold ' +
-                    (activeCat === cat.id ? 'text-[var(--accent)]' : 'text-[var(--text)]')
-                  }
+              <div className="flex items-start gap-2">
+                <button
+                  type="button"
+                  className="touch-none select-none cursor-grab active:cursor-grabbing text-[var(--muted)] hover:text-[var(--text)] px-1 -ml-1"
+                  onPointerDown={(e) => {
+                    setDraggingCategoryId(cat.id);
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  }}
+                  onPointerMove={(e) => {
+                    if (!draggingCategoryId) return;
+                    const el = document.elementFromPoint(
+                      e.clientX,
+                      e.clientY,
+                    ) as HTMLElement | null;
+                    const target = el?.closest('[data-reorder-id]') as HTMLElement | null;
+                    const overId = target?.dataset.reorderId;
+                    if (!overId || overId === draggingCategoryId) return;
+                    setCategories((prev) => moveById(prev, draggingCategoryId, overId));
+                  }}
+                  onPointerUp={async (e) => {
+                    if (!draggingCategoryId) return;
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                    const finalId = draggingCategoryId;
+                    setDraggingCategoryId(null);
+                    const el = document.elementFromPoint(
+                      e.clientX,
+                      e.clientY,
+                    ) as HTMLElement | null;
+                    const target = el?.closest('[data-reorder-id]') as HTMLElement | null;
+                    const overId = target?.dataset.reorderId;
+                    const next = overId ? moveById(categories, finalId, overId) : categories;
+                    if (next !== categories) setCategories(next);
+                    await persistCategoryOrder(next);
+                  }}
+                  aria-label="Reorder category"
                 >
-                  {cat.name}
-                </span>
-                <span className={'badge ' + (cat.isActive ? 'badge-active' : 'badge-inactive')}>
-                  {cat.isActive ? 'ON' : 'OFF'}
-                </span>
+                  ≡
+                </button>
+                <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setActiveCat(cat.id)}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={
+                        'text-sm font-semibold ' +
+                        (activeCat === cat.id ? 'text-[var(--accent)]' : 'text-[var(--text)]')
+                      }
+                    >
+                      {cat.name}
+                    </span>
+                    <span className={'badge ' + (cat.isActive ? 'badge-active' : 'badge-inactive')}>
+                      {cat.isActive ? 'ON' : 'OFF'}
+                    </span>
+                  </div>
+                  <span className="text-xs text-[var(--muted)]">
+                    {cat.menuItems?.length ?? 0} items
+                  </span>
+                </div>
               </div>
-              <span className="text-xs text-[var(--muted)]">
-                {cat.menuItems?.length ?? 0} items
-              </span>
             </div>
           ))}
         </div>
@@ -252,6 +344,7 @@ export function MenuPage() {
                 <table className="min-w-[720px]">
                   <thead>
                     <tr>
+                      <th></th>
                       <th>Name</th>
                       <th>Description</th>
                       <th>Price</th>
@@ -262,13 +355,72 @@ export function MenuPage() {
                   <tbody>
                     {(currentCat.menuItems ?? []).length === 0 && (
                       <tr>
-                        <td colSpan={5} className="text-center text-[var(--muted)] py-6 text-sm">
+                        <td colSpan={6} className="text-center text-[var(--muted)] py-6 text-sm">
                           No items yet.
                         </td>
                       </tr>
                     )}
                     {(currentCat.menuItems ?? []).map((item) => (
-                      <tr key={item.id}>
+                      <tr key={item.id} data-reorder-id={item.id}>
+                        <td className="w-10">
+                          <button
+                            type="button"
+                            className="touch-none select-none cursor-grab active:cursor-grabbing text-[var(--muted)] hover:text-[var(--text)] px-2"
+                            onPointerDown={(e) => {
+                              setDraggingItemId(item.id);
+                              e.currentTarget.setPointerCapture(e.pointerId);
+                            }}
+                            onPointerMove={(e) => {
+                              if (!draggingItemId) return;
+                              const el = document.elementFromPoint(
+                                e.clientX,
+                                e.clientY,
+                              ) as HTMLElement | null;
+                              const target = el?.closest(
+                                'tr[data-reorder-id]',
+                              ) as HTMLElement | null;
+                              const overId = target?.dataset.reorderId;
+                              if (!overId || overId === draggingItemId) return;
+                              setCategories((prev) =>
+                                prev.map((c) =>
+                                  c.id === currentCat.id
+                                    ? {
+                                        ...c,
+                                        menuItems: moveById(
+                                          c.menuItems ?? [],
+                                          draggingItemId,
+                                          overId,
+                                        ),
+                                      }
+                                    : c,
+                                ),
+                              );
+                            }}
+                            onPointerUp={async (e) => {
+                              if (!draggingItemId) return;
+                              e.currentTarget.releasePointerCapture(e.pointerId);
+                              const finalId = draggingItemId;
+                              setDraggingItemId(null);
+                              const el = document.elementFromPoint(
+                                e.clientX,
+                                e.clientY,
+                              ) as HTMLElement | null;
+                              const target = el?.closest(
+                                'tr[data-reorder-id]',
+                              ) as HTMLElement | null;
+                              const overId = target?.dataset.reorderId;
+                              const currentItems = (categories.find((c) => c.id === currentCat.id)
+                                ?.menuItems ?? currentCat.menuItems) as MenuItem[];
+                              const nextItems = overId
+                                ? moveById(currentItems, finalId, overId)
+                                : currentItems;
+                              await persistItemOrder(currentCat.id, nextItems);
+                            }}
+                            aria-label="Reorder menu item"
+                          >
+                            ≡
+                          </button>
+                        </td>
                         <td className="font-medium">{item.name}</td>
                         <td className="text-[var(--muted)] text-xs max-w-xs truncate">
                           {item.description || '—'}
@@ -347,16 +499,6 @@ export function MenuPage() {
                     onChange={(e) => setCatForm({ ...catForm, description: e.target.value })}
                   />
                 </div>
-                <div>
-                  <label>Sort Order</label>
-                  <input
-                    type="number"
-                    value={catForm.sortOrder}
-                    onChange={(e) =>
-                      setCatForm({ ...catForm, sortOrder: parseInt(e.target.value) || 0 })
-                    }
-                  />
-                </div>
                 <div className="flex items-center gap-2">
                   <input
                     type="checkbox"
@@ -412,16 +554,6 @@ export function MenuPage() {
                       </option>
                     ))}
                   </select>
-                </div>
-                <div>
-                  <label>Sort Order</label>
-                  <input
-                    type="number"
-                    value={itemForm.sortOrder}
-                    onChange={(e) =>
-                      setItemForm({ ...itemForm, sortOrder: parseInt(e.target.value) || 0 })
-                    }
-                  />
                 </div>
                 <div className="flex items-center gap-2">
                   <input

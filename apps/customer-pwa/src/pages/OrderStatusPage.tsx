@@ -4,6 +4,8 @@ import { io } from 'socket.io-client';
 import { fetchOrderStatus, API_BASE } from '../services/api';
 import { formatPrice } from '../../../../shared/utils/currency';
 
+const DEV_SOCKET_URL = 'http://127.0.0.1:4000';
+
 interface OrderItem {
   id: string;
   quantity: number;
@@ -96,7 +98,7 @@ export function OrderStatusPage() {
     if (!orderId) return;
     if (!order?.organizationId) return;
 
-    const SOCKET_URL = API_BASE || (import.meta.env.DEV ? undefined : window.location.origin);
+    const SOCKET_URL = import.meta.env.DEV ? DEV_SOCKET_URL : API_BASE || window.location.origin;
     const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'] });
 
     socket.on('connect', () => {

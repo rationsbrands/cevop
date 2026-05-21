@@ -16,6 +16,14 @@ const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_MS = 18 * 60 * 60 * 1000; // 18-hour refresh token TTL — one restaurant shift
 
 const COOKIE_NAME = 'cevop_refresh';
+const SERVICE_COOKIE_NAME = 'cevop_refresh_service';
+const APP_HEADER = 'x-cevop-app';
+
+function getRefreshCookieName(req: Request): string {
+  const app = (req.headers[APP_HEADER] as string | undefined)?.toLowerCase();
+  if (app === 'service') return SERVICE_COOKIE_NAME;
+  return COOKIE_NAME;
+}
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
@@ -163,7 +171,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       })
       .catch(() => {});
 
-    res.cookie(COOKIE_NAME, rawRefresh, COOKIE_OPTIONS);
+    res.cookie(getRefreshCookieName(req), rawRefresh, COOKIE_OPTIONS);
     res.json({
       success: true,
       data: {
@@ -208,7 +216,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 // ─── POST /auth/refresh ───────────────────────────────────────────────────────
 authRouter.post('/refresh', async (req: Request, res: Response) => {
   try {
-    const rawRefresh = req.cookies?.[COOKIE_NAME];
+    const rawRefresh = req.cookies?.[getRefreshCookieName(req)];
     if (!rawRefresh) {
       res.status(401).json({ success: false, error: 'No refresh token' });
       return;
@@ -265,7 +273,8 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
 // ─── POST /auth/logout ────────────────────────────────────────────────────────
 authRouter.post('/logout', async (req: Request, res: Response) => {
   try {
-    const rawRefresh = req.cookies?.[COOKIE_NAME];
+    const cookieName = getRefreshCookieName(req);
+    const rawRefresh = req.cookies?.[cookieName];
     if (rawRefresh) {
       const tokenHash = hashToken(rawRefresh);
       await prisma.refreshToken.updateMany({
@@ -273,10 +282,10 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
         data: { revokedAt: new Date() },
       });
     }
-    res.clearCookie(COOKIE_NAME, { path: '/api/auth' });
+    res.clearCookie(cookieName, { path: '/api/auth' });
     res.json({ success: true });
   } catch {
-    res.clearCookie(COOKIE_NAME, { path: '/api/auth' });
+    res.clearCookie(getRefreshCookieName(req), { path: '/api/auth' });
     res.json({ success: true }); // Always succeed on logout
   }
 });

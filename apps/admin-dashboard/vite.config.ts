@@ -20,7 +20,16 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': { target: 'http://127.0.0.1:4000', changeOrigin: true },
-      '/socket.io': { target: 'http://127.0.0.1:4000', ws: true, changeOrigin: true },
+      '/socket.io': {
+        target: 'http://127.0.0.1:4000',
+        ws: true,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            if ((err as any)?.code === 'EPIPE' || (err as any)?.code === 'ECONNRESET') return;
+          });
+        },
+      },
     },
   },
 });

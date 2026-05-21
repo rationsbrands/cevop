@@ -1,14 +1,25 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, useRef, useCallback } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  ReactNode,
+  useRef,
+  useCallback,
+} from 'react';
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
 
-const API_BASE = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '');
+const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 
 interface User {
-  id: string; name: string; email: string; role: string;
+  id: string;
+  name: string;
+  email: string;
+  role: string;
   organizationId: string;
   branchId?: string | null;
-  branch?: { id: string; name: string; } | null;
-  organization: { id: string; name: string; slug: string; };
+  branch?: { id: string; name: string } | null;
+  organization: { id: string; name: string; slug: string };
 }
 
 interface AuthContextType {
@@ -20,6 +31,7 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
+const AUTH_HEADERS = { 'Content-Type': 'application/json', 'x-cevop-app': 'service' };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -45,9 +57,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTH_HEADERS,
       });
-      if (!res.ok) { logout(); return null; }
+      if (!res.ok) {
+        logout();
+        return null;
+      }
       const { data } = await res.json();
       setToken(data.accessToken);
       lastRefreshedAt.current = Date.now();
@@ -77,14 +92,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const res = await fetch(`${API_BASE}/api/auth/refresh`, {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: AUTH_HEADERS,
         });
-        if (!res.ok) { setLoading(false); return; }
+        if (!res.ok) {
+          setLoading(false);
+          return;
+        }
         const { data } = await res.json();
         setToken(data.accessToken);
         scheduleRefresh(data.accessToken);
 
-        const meRes = await fetch(`${API_BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${data.accessToken}` } });
+        const meRes = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${data.accessToken}` },
+        });
         const { data: userData } = await meRes.json();
         if (userData) {
           setUser(userData);
@@ -98,7 +118,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     })();
 
-    return () => { if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current); };
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
   }, []);
 
   async function logout() {
@@ -106,9 +128,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await fetch(`${API_BASE}/api/auth/logout`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTH_HEADERS,
       });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     setToken(null);
     setUser(null);
   }
@@ -117,7 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: AUTH_HEADERS,
       body: JSON.stringify({ email, password }),
     });
     const { data, error } = await res.json();
@@ -134,7 +158,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     scheduleRefresh(data.accessToken);
   }
 
-  return <AuthContext.Provider value={{ user, token, loading, login, logout }}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ user, token, loading, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {

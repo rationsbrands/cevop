@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useRef, useState, ReactNod
 import { io, Socket } from 'socket.io-client';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
+const DEV_SOCKET_URL = 'http://127.0.0.1:4000';
 
 interface SocketContextType {
   socket: Socket | null;
@@ -32,7 +33,7 @@ export function SocketProvider({
   useEffect(() => {
     if (!token || !organizationId) return;
 
-    const SOCKET_URL = API_BASE || (import.meta.env.DEV ? undefined : window.location.origin);
+    const SOCKET_URL = import.meta.env.DEV ? DEV_SOCKET_URL : API_BASE || window.location.origin;
 
     const s = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],

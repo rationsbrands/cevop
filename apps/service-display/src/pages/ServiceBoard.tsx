@@ -5,6 +5,7 @@ import { useTheme } from '../context/theme';
 import { formatPrice } from '../../../../shared/utils/currency';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
+const DEV_SOCKET_URL = 'http://127.0.0.1:4000';
 
 interface OrderItem {
   id: string;
@@ -101,6 +102,15 @@ export function ServiceBoard() {
   // Track items currently being updated to prevent double-clicks
   const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
 
+  const applyOrderUpdate = useCallback((order: Order) => {
+    setOrders((prev) => {
+      if (!ACTIVE_STATUSES.includes(order.status)) return prev.filter((o) => o.id !== order.id);
+      const exists = prev.some((o) => o.id === order.id);
+      if (exists) return prev.map((o) => (o.id === order.id ? order : o));
+      return [order, ...prev];
+    });
+  }, []);
+
   // Mutable ref for token so socket reconnects use the latest token without tearing down the connection
   const tokenRef = useRef(token);
   useEffect(() => {
@@ -124,38 +134,42 @@ export function ServiceBoard() {
     }
   }, []);
 
-  // Load initial data
+  const loadData = useCallback(async () => {
+    if (!token) return;
+    const headers = { Authorization: `Bearer ${token}` };
+    const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
+    const [ordersRes, callsRes, serviceRes] = await Promise.all([
+      fetch(
+        `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&status=READY&limit=50${branchParam}`,
+        { headers },
+      ),
+      fetch(`${API_BASE}/api/waiter-calls?status=PENDING${branchParam}`, { headers }),
+      fetch(`${API_BASE}/api/service-requests?status=PENDING${branchParam}`, { headers }),
+    ]);
+    const [ordersData, callsData, serviceData] = await Promise.all([
+      ordersRes.json(),
+      callsRes.json(),
+      serviceRes.json(),
+    ]);
+    if (ordersData.success)
+      setOrders(ordersData.data.filter((o: Order) => ACTIVE_STATUSES.includes(o.status)));
+    if (callsData.success) setWaiterCalls(callsData.data);
+    if (serviceData.success) setServiceRequests(serviceData.data);
+  }, [token, user]);
+
   useEffect(() => {
     if (!token) return;
-    async function loadData() {
-      const headers = { Authorization: `Bearer ${token}` };
-      const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
-      const [ordersRes, callsRes, serviceRes] = await Promise.all([
-        fetch(
-          `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&status=READY&limit=50${branchParam}`,
-          { headers },
-        ),
-        fetch(`${API_BASE}/api/waiter-calls?status=PENDING${branchParam}`, { headers }),
-        fetch(`${API_BASE}/api/service-requests?status=PENDING${branchParam}`, { headers }),
-      ]);
-      const [ordersData, callsData, serviceData] = await Promise.all([
-        ordersRes.json(),
-        callsRes.json(),
-        serviceRes.json(),
-      ]);
-      if (ordersData.success)
-        setOrders(ordersData.data.filter((o: Order) => ACTIVE_STATUSES.includes(o.status)));
-      if (callsData.success) setWaiterCalls(callsData.data);
-      if (serviceData.success) setServiceRequests(serviceData.data);
-    }
-    loadData().catch(console.error);
-  }, [token, user?.branchId]);
+    const t = setTimeout(() => {
+      loadData().catch(() => void 0);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [loadData, token]);
 
   // Socket setup
   useEffect(() => {
     if (!user) return; // Wait until user is fully loaded
 
-    const SOCKET_URL = API_BASE || (import.meta.env.DEV ? undefined : window.location.origin);
+    const SOCKET_URL = import.meta.env.DEV ? DEV_SOCKET_URL : API_BASE || window.location.origin;
     const socket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
       auth: (cb) => {
@@ -184,14 +198,7 @@ export function ServiceBoard() {
       setOrders((prev) => [order, ...prev.filter((o) => o.id !== order.id)]);
     });
 
-    socket.on('ORDER_UPDATED', (order: Order) => {
-      setOrders((prev) => {
-        if (!ACTIVE_STATUSES.includes(order.status)) return prev.filter((o) => o.id !== order.id);
-        const exists = prev.some((o) => o.id === order.id);
-        if (exists) return prev.map((o) => (o.id === order.id ? order : o));
-        return [order, ...prev]; // Add if it wasn't in state
-      });
-    });
+    socket.on('ORDER_UPDATED', (order: Order) => applyOrderUpdate(order));
 
     socket.on('WAITER_CALLED', (call: WaiterCall) => {
       playAlert();
@@ -224,7 +231,7 @@ export function ServiceBoard() {
     return () => {
       socket.disconnect();
     };
-  }, [user, playAlert]); // Omitted `token` intentionally so it doesn't reconnect on token refresh
+  }, [user, playAlert, applyOrderUpdate]); // Omitted `token` intentionally so it doesn't reconnect on token refresh
 
   // Online/offline
   useEffect(() => {
@@ -239,6 +246,7 @@ export function ServiceBoard() {
   }, []);
 
   async function updateOrderStatus(orderId: string, status: string) {
+    if (!token) return;
     if (updatingItems.has(orderId)) return;
     setUpdatingItems((prev) => new Set(prev).add(orderId));
     try {
@@ -247,7 +255,17 @@ export function ServiceBoard() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ status }),
       });
-      if (!res.ok) console.error('Failed to update order status');
+      let body: any = null;
+      try {
+        body = await res.json();
+      } catch {
+        body = null;
+      }
+      if (!res.ok || !body?.success) {
+        await loadData();
+        return;
+      }
+      if (body?.data) applyOrderUpdate(body.data);
     } finally {
       setUpdatingItems((prev) => {
         const n = new Set(prev);
@@ -258,14 +276,16 @@ export function ServiceBoard() {
   }
 
   async function acknowledgeWaiterCall(callId: string) {
+    if (!token) return;
     if (updatingItems.has(callId)) return;
     setUpdatingItems((prev) => new Set(prev).add(callId));
     try {
-      await fetch(`${API_BASE}/api/waiter-calls/${callId}/status`, {
+      const res = await fetch(`${API_BASE}/api/waiter-calls/${callId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ status: 'RESOLVED' }),
       });
+      if (!res.ok) await loadData();
     } finally {
       setUpdatingItems((prev) => {
         const n = new Set(prev);
@@ -276,14 +296,16 @@ export function ServiceBoard() {
   }
 
   async function acknowledgeService(reqId: string) {
+    if (!token) return;
     if (updatingItems.has(reqId)) return;
     setUpdatingItems((prev) => new Set(prev).add(reqId));
     try {
-      await fetch(`${API_BASE}/api/service-requests/${reqId}/status`, {
+      const res = await fetch(`${API_BASE}/api/service-requests/${reqId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ status: 'RESOLVED' }),
       });
+      if (!res.ok) await loadData();
     } finally {
       setUpdatingItems((prev) => {
         const n = new Set(prev);

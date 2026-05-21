@@ -36,6 +36,28 @@ export function HelpOptionsPage() {
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+
+  function moveById<T extends { id: string }>(list: T[], fromId: string, toId: string): T[] {
+    const fromIndex = list.findIndex((x) => x.id === fromId);
+    const toIndex = list.findIndex((x) => x.id === toId);
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return list;
+    const next = [...list];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    return next;
+  }
+
+  const persistOrder = useCallback(
+    async (next: HelpOption[]) => {
+      const updated = next.map((o, i) => ({ ...o, sortOrder: i * 10 }));
+      setOptions(updated);
+      await Promise.all(
+        updated.map((o) => api.patch(`/api/help-options/${o.id}`, { sortOrder: o.sortOrder })),
+      );
+    },
+    [api],
+  );
 
   const isOrgAdmin = me?.role === 'ADMIN' || me?.role === 'SUPERADMIN';
 
@@ -145,11 +167,12 @@ export function HelpOptionsPage() {
         <button
           onClick={() => {
             setEditingId(null);
+            const nextSort = options.reduce((max, o) => Math.max(max, o.sortOrder ?? 0), 0) + 10;
             setForm({
               type: 'SERVICE',
               label: '',
               icon: '',
-              sortOrder: options.length,
+              sortOrder: nextSort,
               isActive: true,
               branchId: activeBranchFilter?.id || me?.branchId || '',
             });
@@ -174,12 +197,53 @@ export function HelpOptionsPage() {
           </div>
         ) : (
           options.map((opt) => (
-            <div key={opt.id} className="card p-4 flex items-center justify-between group">
-              <div className="flex items-center gap-4">
+            <div
+              key={opt.id}
+              data-reorder-id={opt.id}
+              className="card p-4 flex items-center justify-between group"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <button
+                  type="button"
+                  className="touch-none select-none cursor-grab active:cursor-grabbing text-[var(--muted)] hover:text-[var(--text)] px-2 -ml-2"
+                  onPointerDown={(e) => {
+                    setDraggingId(opt.id);
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  }}
+                  onPointerMove={(e) => {
+                    if (!draggingId) return;
+                    const el = document.elementFromPoint(
+                      e.clientX,
+                      e.clientY,
+                    ) as HTMLElement | null;
+                    const target = el?.closest('[data-reorder-id]') as HTMLElement | null;
+                    const overId = target?.dataset.reorderId;
+                    if (!overId || overId === draggingId) return;
+                    setOptions((prev) => moveById(prev, draggingId, overId));
+                  }}
+                  onPointerUp={async (e) => {
+                    if (!draggingId) return;
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                    const finalId = draggingId;
+                    setDraggingId(null);
+                    const el = document.elementFromPoint(
+                      e.clientX,
+                      e.clientY,
+                    ) as HTMLElement | null;
+                    const target = el?.closest('[data-reorder-id]') as HTMLElement | null;
+                    const overId = target?.dataset.reorderId;
+                    const next = overId ? moveById(options, finalId, overId) : options;
+                    if (next !== options) setOptions(next);
+                    await persistOrder(next);
+                  }}
+                  aria-label="Reorder help option"
+                >
+                  ≡
+                </button>
                 <div className="text-2xl w-12 h-12 flex items-center justify-center bg-[var(--surface2)] rounded-lg shrink-0 border border-[var(--border)]">
                   {opt.icon || (opt.type === 'WAITER' ? '🛎️' : '✨')}
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-[var(--text)]">{opt.label}</span>
                     <span
@@ -194,8 +258,7 @@ export function HelpOptionsPage() {
                     )}
                   </div>
                   <div className="text-[var(--muted)] text-xs mt-0.5">
-                    Order: {opt.sortOrder}{' '}
-                    {opt.branchId ? '• Branch Specific' : '• Organization Wide'}
+                    {opt.branchId ? 'Branch Specific' : 'Organization Wide'}
                   </div>
                 </div>
               </div>
@@ -251,14 +314,6 @@ export function HelpOptionsPage() {
                   <option value="SERVICE">Service Request</option>
                   <option value="WAITER">Call Waiter</option>
                 </select>
-              </div>
-              <div>
-                <label>Sort Order</label>
-                <input
-                  type="number"
-                  value={form.sortOrder}
-                  onChange={(e) => setForm({ ...form, sortOrder: parseInt(e.target.value) })}
-                />
               </div>
             </div>
 
