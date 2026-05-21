@@ -26,7 +26,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, organizationId?: string) => Promise<void>;
   logout: () => void;
   silentRefresh: () => Promise<string | null>;
 }
@@ -151,15 +151,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     doLogout();
   }
 
-  async function login(email: string, password: string) {
+  async function login(email: string, password: string, organizationId?: string) {
     const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       credentials: 'include',
       headers: AUTH_HEADERS,
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, ...(organizationId ? { organizationId } : {}) }),
     });
     const { data, error } = await res.json();
-    if (!res.ok) throw new Error(error || 'Login failed');
+    if (!res.ok) {
+      if (res.status === 409 && (data as any)?.accounts) {
+        const err: any = new Error(error || 'Multiple accounts found');
+        err.code = 'MULTI_ACCOUNT';
+        err.accounts = (data as any).accounts;
+        throw err;
+      }
+      throw new Error(error || 'Login failed');
+    }
 
     // Enforce that only service/admin/branch_admin roles can log in here
     const allowedRoles = ['SERVICE', 'ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN', 'WAITER'];

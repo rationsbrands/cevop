@@ -70,14 +70,16 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     const schema = z.object({
       email: z.string().email().toLowerCase().trim(),
       password: z.string().min(1),
+      organizationId: z.string().optional(),
     });
-    const { email, password } = schema.parse(req.body);
+    const { email, password, organizationId } = schema.parse(req.body);
     const ip = getClientIp(req);
 
     // Find all active users with this email (could span multiple orgs if email reused)
     const candidates = await prisma.user.findMany({
-      where: { email, isActive: true },
+      where: { email, isActive: true, ...(organizationId ? { organizationId } : {}) },
       include: { organization: true, branch: true },
+      orderBy: { createdAt: 'desc' },
     });
 
     if (candidates.length === 0) {
@@ -86,8 +88,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
-    // Find the user whose password matches — iterate candidates
-    let matchedUser: (typeof candidates)[0] | null = null;
+    const matchedUsers: typeof candidates = [];
 
     for (const candidate of candidates) {
       // Check lockout
@@ -97,13 +98,12 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 
       const valid = await bcrypt.compare(password, candidate.passwordHash);
       if (valid) {
-        matchedUser = candidate;
-        break;
+        matchedUsers.push(candidate);
       }
     }
 
     // If no match found, increment attempts on all candidates and lock if needed
-    if (!matchedUser) {
+    if (matchedUsers.length === 0) {
       for (const candidate of candidates) {
         const newAttempts = candidate.loginAttempts + 1;
         const lockUntil =
@@ -131,6 +131,25 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       res.status(401).json({ success: false, error: 'Invalid email or password' });
       return;
     }
+
+    if (!organizationId && matchedUsers.length > 1) {
+      res.status(409).json({
+        success: false,
+        error: 'Multiple accounts found. Select your organisation.',
+        data: {
+          accounts: matchedUsers.map((u) => ({
+            organizationId: u.organizationId,
+            organizationName: u.organization?.name ?? '',
+            role: u.role,
+            branchId: u.branchId ?? null,
+            branchName: u.branch?.name ?? null,
+          })),
+        },
+      });
+      return;
+    }
+
+    const matchedUser = matchedUsers[0];
 
     // Block removed: Unverified users can now login, frontend will show a banner
 
@@ -466,6 +485,22 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
     });
     if (existing) {
       res.status(409).json({ success: false, error: 'An account with this email already exists' });
+      return;
+    }
+
+    const existingOtherOrg = await prisma.user.findFirst({
+      where: {
+        email: invite.email,
+        isActive: true,
+        NOT: { organizationId: invite.organizationId },
+      },
+      select: { id: true },
+    });
+    if (existingOtherOrg) {
+      res.status(409).json({
+        success: false,
+        error: 'This email is already used in another organisation. Use a different email.',
+      });
       return;
     }
 

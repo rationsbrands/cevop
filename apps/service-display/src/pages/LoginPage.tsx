@@ -12,6 +12,8 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [accounts, setAccounts] = useState<any[] | null>(null);
+  const [selectedOrgId, setSelectedOrgId] = useState('');
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
@@ -26,9 +28,23 @@ export function LoginPage() {
     setLoading(true);
     setError('');
     try {
-      await login(email, password);
+      if (accounts) {
+        await login(email, password, selectedOrgId);
+      } else {
+        await login(email, password);
+      }
       navigate('/', { replace: true });
-    } catch (err: unknown) {
+    } catch (err: any) {
+      if (err?.code === 'MULTI_ACCOUNT' && Array.isArray(err.accounts)) {
+        setAccounts(err.accounts);
+        const saved = localStorage.getItem(`cevop_last_org:${email.toLowerCase()}`) || '';
+        const initial = err.accounts.some((a: any) => a.organizationId === saved)
+          ? saved
+          : err.accounts[0]?.organizationId || '';
+        setSelectedOrgId(initial);
+        setLoading(false);
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Invalid credentials');
     } finally {
       setLoading(false);
@@ -98,7 +114,11 @@ export function LoginPage() {
               <input
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setAccounts(null);
+                  setSelectedOrgId('');
+                }}
                 required
                 placeholder="name@restaurant.com"
                 autoComplete="email"
@@ -111,7 +131,11 @@ export function LoginPage() {
                 <input
                   type={showPassword ? 'text' : 'password'}
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setAccounts(null);
+                    setSelectedOrgId('');
+                  }}
                   required
                   placeholder="••••••••"
                   autoComplete="current-password"
@@ -127,6 +151,32 @@ export function LoginPage() {
                 </button>
               </div>
             </div>
+
+            {accounts && (
+              <div>
+                <label>Select organisation</label>
+                <select
+                  value={selectedOrgId}
+                  onChange={(e) => {
+                    setSelectedOrgId(e.target.value);
+                    localStorage.setItem(`cevop_last_org:${email.toLowerCase()}`, e.target.value);
+                  }}
+                  required
+                >
+                  {accounts.map((a: any) => (
+                    <option key={a.organizationId} value={a.organizationId}>
+                      {(a.organizationName || 'Organisation') +
+                        ' • ' +
+                        (a.role || 'ROLE') +
+                        (a.branchName ? ` • ${a.branchName}` : '')}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-[var(--muted)] mt-2">
+                  This email exists in multiple organisations. Pick the correct one to continue.
+                </p>
+              </div>
+            )}
 
             {error && (
               <div className="border border-[var(--danger)] text-[var(--danger)] bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] px-3 py-2 text-sm">

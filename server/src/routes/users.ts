@@ -25,6 +25,15 @@ usersRouter.get(
 
       // Branch-scoped users only see staff in their branch
       if (req.branchScope) where.branchId = req.branchScope;
+      if (req.user!.role === 'BRANCH_ADMIN') {
+        if (!req.branchScope) {
+          res
+            .status(403)
+            .json({ success: false, error: 'Branch admins must be assigned to a branch' });
+          return;
+        }
+        where.role = { notIn: ['ADMIN', 'SUPERADMIN'] };
+      }
 
       const users = await prisma.user.findMany({
         where,
@@ -41,7 +50,7 @@ usersRouter.get(
         orderBy: { createdAt: 'desc' },
       });
       res.json({ success: true, data: users });
-    } catch (err: unknown) {
+    } catch {
       res.status(500).json({ success: false, error: 'Failed to fetch users' });
     }
   },
@@ -64,16 +73,45 @@ usersRouter.post(
       const { name, email, password, role, branchId } = createUserSchema.parse(req.body);
       const passwordHash = await bcrypt.hash(password, 12);
 
+      const existingAnyOrg = await prisma.user.findFirst({
+        where: { email, isActive: true, NOT: { organizationId: req.user!.organizationId } },
+        select: { id: true },
+      });
+      if (existingAnyOrg) {
+        res.status(409).json({
+          success: false,
+          error: 'This email is already used in another organisation. Use a different email.',
+        });
+        return;
+      }
+
       // BRANCH_ADMIN must have a branchId
       if (role === 'BRANCH_ADMIN' && !branchId) {
         res.status(400).json({ success: false, error: 'BRANCH_ADMIN role requires a branchId' });
         return;
       }
 
+      let finalBranchId: string | null = branchId ?? null;
+      if ((role === 'WAITER' || role === 'SERVICE') && !finalBranchId) {
+        const branches = await prisma.branch.findMany({
+          where: { organizationId: req.user!.organizationId, isActive: true },
+          select: { id: true },
+        });
+        if (branches.length === 1) {
+          finalBranchId = branches[0].id;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: `${role} role requires a branch when your organisation has multiple branches`,
+          });
+          return;
+        }
+      }
+
       // Confirm branchId belongs to this org if provided
-      if (branchId) {
+      if (finalBranchId) {
         const branch = await prisma.branch.findFirst({
-          where: { id: branchId, organizationId: req.user!.organizationId },
+          where: { id: finalBranchId, organizationId: req.user!.organizationId },
         });
         if (!branch) {
           res.status(404).json({ success: false, error: 'Branch not found' });
@@ -84,7 +122,7 @@ usersRouter.post(
       const user = await prisma.user.create({
         data: {
           organizationId: req.user!.organizationId,
-          branchId: branchId ?? null,
+          branchId: finalBranchId,
           name,
           email,
           passwordHash,
@@ -131,12 +169,10 @@ usersRouter.patch(
       // BRANCH_ADMIN cannot promote anyone to ADMIN or change branchId
       if (req.user!.role === 'BRANCH_ADMIN') {
         if ((data.role as string) === 'ADMIN' || (data.role as string) === 'SUPERADMIN') {
-          res
-            .status(403)
-            .json({
-              success: false,
-              error: 'Branch admins cannot assign ADMIN or SUPERADMIN roles',
-            });
+          res.status(403).json({
+            success: false,
+            error: 'Branch admins cannot assign ADMIN or SUPERADMIN roles',
+          });
           return;
         }
         if ('branchId' in data) {
@@ -165,9 +201,28 @@ usersRouter.patch(
       }
 
       const { password, ...rest } = data;
-      const updateData: Prisma.UserUpdateInput = { ...rest };
+      const updateData: Prisma.UserUncheckedUpdateInput = { ...rest };
       if (password) {
         updateData.passwordHash = await bcrypt.hash(password, 12);
+      }
+
+      const nextRole = (data.role as UserRole | undefined) ?? targetUser.role;
+      const nextBranchId =
+        'branchId' in data ? (data.branchId as string | null | undefined) : targetUser.branchId;
+      if ((nextRole === 'WAITER' || nextRole === 'SERVICE') && !nextBranchId) {
+        const branches = await prisma.branch.findMany({
+          where: { organizationId: req.user!.organizationId, isActive: true },
+          select: { id: true },
+        });
+        if (branches.length === 1) {
+          updateData.branchId = branches[0].id;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: `${nextRole} role requires a branch when your organisation has multiple branches`,
+          });
+          return;
+        }
       }
 
       const user = await prisma.user.update({
@@ -289,7 +344,7 @@ usersRouter.delete(
         data: { revokedAt: new Date() },
       });
       res.json({ success: true, message: 'User deactivated' });
-    } catch (err: unknown) {
+    } catch {
       res.status(500).json({ success: false, error: 'Failed to deactivate user' });
     }
   },

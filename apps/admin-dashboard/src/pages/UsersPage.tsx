@@ -12,7 +12,7 @@ interface User {
   role: string;
   isActive: boolean;
   createdAt: string;
-  branchId?: string;
+  branchId?: string | null;
   branch?: { id: string; name: string } | null;
 }
 
@@ -56,6 +56,10 @@ export function UsersPage() {
   const [passwordResetResult, setPasswordResetResult] = useState<any>(null);
   const [actionLoading, setActionLoading] = useState<Set<string>>(new Set());
   const [actionError, setActionError] = useState('');
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editForm, setEditForm] = useState({ role: 'WAITER', branchId: '' });
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
 
   const isOrgAdmin = me?.role === 'ADMIN' || me?.role === 'SUPERADMIN';
   const isBranchAdmin = me?.role === 'BRANCH_ADMIN';
@@ -191,6 +195,51 @@ export function UsersPage() {
         n.delete(user.id);
         return n;
       });
+    }
+  }
+
+  async function saveUserEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingUser) return;
+    setEditSaving(true);
+    setEditError('');
+    try {
+      const role = editForm.role;
+      const orgHasMultipleBranches = isOrgAdmin && branches.length > 1;
+      const roleRequiresBranch =
+        role === 'BRANCH_ADMIN' ||
+        ((role === 'WAITER' || role === 'SERVICE') && orgHasMultipleBranches);
+
+      let branchId: string | null = editForm.branchId ? editForm.branchId : null;
+
+      if (isOrgAdmin) {
+        if (role === 'ADMIN') branchId = null;
+        if (roleRequiresBranch && !branchId && branches.length === 1) {
+          branchId = branches[0].id;
+        }
+        if (roleRequiresBranch && !branchId) {
+          setEditError('This role requires a branch assignment.');
+          return;
+        }
+      }
+
+      const payload: any = { role };
+      if (isOrgAdmin) payload.branchId = branchId;
+      const {
+        success,
+        error: err,
+        data,
+      } = await api.patch(`/api/users/${editingUser.id}`, payload);
+      if (!success) {
+        setEditError(err || 'Failed to update user');
+        return;
+      }
+      setUsers((prev) => prev.map((u) => (u.id === editingUser.id ? { ...u, ...data } : u)));
+      setEditingUser(null);
+    } catch {
+      setEditError('Failed to update user');
+    } finally {
+      setEditSaving(false);
     }
   }
 
@@ -559,6 +608,17 @@ export function UsersPage() {
                     {u.id !== me?.id && (isOrgAdmin || isBranchAdmin) && (
                       <div className="flex items-center justify-end gap-3">
                         <button
+                          onClick={() => {
+                            setEditingUser(u);
+                            setEditForm({ role: u.role, branchId: u.branchId ?? '' });
+                            setEditError('');
+                          }}
+                          disabled={actionLoading.has(u.id)}
+                          className="text-xs text-[var(--muted)] hover:text-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {isOrgAdmin ? 'Edit Role/Branch' : 'Edit Role'}
+                        </button>
+                        <button
                           onClick={() => resetPassword(u)}
                           disabled={actionLoading.has(u.id) || !u.isActive}
                           className="text-xs text-[var(--muted)] hover:text-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -652,6 +712,89 @@ export function UsersPage() {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {editingUser && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setEditingUser(null)}
+        >
+          <div
+            className="card w-full max-w-md p-6 space-y-4 animate-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h2 className="font-display text-2xl">EDIT STAFF</h2>
+              <p className="text-xs text-[var(--muted)] mt-1">
+                {editingUser.name} • {editingUser.email}
+              </p>
+            </div>
+
+            <form onSubmit={saveUserEdit} className="space-y-3">
+              <div>
+                <label>Role *</label>
+                <select
+                  value={editForm.role}
+                  onChange={(e) => setEditForm((f) => ({ ...f, role: e.target.value }))}
+                >
+                  {availableRoles.map((r) => (
+                    <option key={r} value={r}>
+                      {ROLE_LABELS[r]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {isOrgAdmin && branches.length > 0 && editForm.role !== 'ADMIN' && (
+                <div>
+                  <label>
+                    Branch{' '}
+                    {editForm.role === 'BRANCH_ADMIN' ||
+                    ((editForm.role === 'WAITER' || editForm.role === 'SERVICE') &&
+                      branches.length > 1)
+                      ? '*'
+                      : '(optional)'}
+                  </label>
+                  <select
+                    value={editForm.branchId}
+                    onChange={(e) => setEditForm((f) => ({ ...f, branchId: e.target.value }))}
+                    required={
+                      editForm.role === 'BRANCH_ADMIN' ||
+                      ((editForm.role === 'WAITER' || editForm.role === 'SERVICE') &&
+                        branches.length > 1)
+                    }
+                  >
+                    <option value="">— Org-wide —</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {editError && <div className="text-red-400 text-sm">{editError}</div>}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingUser(null)}
+                  className="btn btn-secondary flex-1 py-2 text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={editSaving}
+                  className="btn btn-primary flex-1 py-2 text-sm disabled:opacity-50"
+                >
+                  {editSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

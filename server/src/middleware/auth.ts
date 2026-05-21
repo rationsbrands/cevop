@@ -55,6 +55,16 @@ export function requireBranchAccess(req: AuthRequest, res: Response, next: NextF
     return;
   }
 
+  if (
+    (req.user.role === 'BRANCH_ADMIN' ||
+      req.user.role === 'WAITER' ||
+      req.user.role === 'SERVICE') &&
+    !req.user.branchId
+  ) {
+    res.status(403).json({ success: false, error: 'This account must be assigned to a branch' });
+    return;
+  }
+
   if (req.user.branchId) {
     // Branch-scoped user: always locked to their branch
     req.branchScope = req.user.branchId;
@@ -70,7 +80,7 @@ export function requireBranchAccess(req: AuthRequest, res: Response, next: NextF
 }
 
 export function requireOrg(req: AuthRequest, res: Response, next: NextFunction): void {
-  const orgId = req.params.orgId || req.query.orgId as string || req.body.organizationId;
+  const orgId = req.params.orgId || (req.query.orgId as string) || req.body.organizationId;
   if (!req.user) {
     res.status(401).json({ success: false, error: 'Unauthenticated' });
     return;

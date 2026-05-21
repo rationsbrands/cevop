@@ -45,7 +45,7 @@ interface AuthContextType {
   token: string | null;
   activeBranchFilter: BranchInfo | null;
   setActiveBranchFilter: (branch: BranchInfo | null) => void;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, organizationId?: string) => Promise<void>;
   logout: () => Promise<void>;
   loading: boolean;
 }
@@ -180,15 +180,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [scheduleRefresh]);
 
-  async function login(email: string, password: string) {
+  async function login(email: string, password: string, organizationId?: string) {
     const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       credentials: 'include', // Required — server sets the cookie on this response
       headers: AUTH_HEADERS,
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, ...(organizationId ? { organizationId } : {}) }),
     });
     const body = await res.json();
-    if (!res.ok) throw new Error(body.error || 'Login failed');
+    if (!res.ok) {
+      if (res.status === 409 && body?.data?.accounts) {
+        const err: any = new Error(body.error || 'Multiple accounts found');
+        err.code = 'MULTI_ACCOUNT';
+        err.accounts = body.data.accounts;
+        throw err;
+      }
+      throw new Error(body.error || 'Login failed');
+    }
 
     if (body.data.user.role === 'SUPERADMIN') {
       throw new Error('This account belongs to the Ops team. Please use the Ops Portal.');
