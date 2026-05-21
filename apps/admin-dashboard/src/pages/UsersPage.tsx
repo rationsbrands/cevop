@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth, useApi } from '../context/auth';
 
 interface Branch {
@@ -24,10 +24,8 @@ const ROLE_LABELS: Record<string, string> = {
   SUPERADMIN: 'Superadmin',
 };
 
-const API_BASE = import.meta.env.VITE_API_URL || '';
-
 export function UsersPage() {
-  const { user: me, token } = useAuth();
+  const { user: me } = useAuth();
   const api = useApi();
 
   const [users, setUsers] = useState<User[]>([]);
@@ -64,7 +62,7 @@ export function UsersPage() {
     : ['ADMIN', 'BRANCH_ADMIN', 'SERVICE', 'WAITER'];
   const inviteRoles = isBranchAdmin ? ['SERVICE', 'WAITER'] : ['BRANCH_ADMIN', 'SERVICE', 'WAITER'];
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [usersRes, branchesRes, invitesRes] = await Promise.all([
@@ -80,11 +78,12 @@ export function UsersPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [api, isOrgAdmin]);
 
   useEffect(() => {
-    load();
-  }, []);
+    const t = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(t);
+  }, [load]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();

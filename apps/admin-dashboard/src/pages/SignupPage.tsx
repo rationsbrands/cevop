@@ -65,12 +65,12 @@ export function SignupPage() {
 
   // Debounced slug check
   useEffect(() => {
-    if (!orgSlug || orgSlug.length < 2) {
-      setSlugStatus('idle');
-      return;
-    }
-    setSlugStatus('checking');
     if (slugTimer.current) clearTimeout(slugTimer.current);
+    if (!orgSlug || orgSlug.length < 2) {
+      const t = window.setTimeout(() => setSlugStatus('idle'), 0);
+      return () => window.clearTimeout(t);
+    }
+    const t = window.setTimeout(() => setSlugStatus('checking'), 0);
     slugTimer.current = setTimeout(async () => {
       try {
         const res = await fetch(`${API_BASE}/api/auth/check-slug/${orgSlug}`);
@@ -81,6 +81,7 @@ export function SignupPage() {
       }
     }, 500);
     return () => {
+      window.clearTimeout(t);
       if (slugTimer.current) clearTimeout(slugTimer.current);
     };
   }, [orgSlug]);

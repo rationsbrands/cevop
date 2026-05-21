@@ -6,6 +6,7 @@ import React, {
   useRef,
   ReactNode,
   useCallback,
+  useMemo,
 } from 'react';
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
 
@@ -180,18 +181,38 @@ export function useAuth() {
 }
 export function useApi() {
   const { token } = useAuth();
-  const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
-  return {
-    get: (path: string) => fetch(`${API_BASE}${path}`, { headers: h }).then((r) => r.json()),
-    post: (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'POST', headers: h, body: JSON.stringify(body) }).then(
-        (r) => r.json(),
-      ),
-    patch: (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'PATCH', headers: h, body: JSON.stringify(body) }).then(
-        (r) => r.json(),
-      ),
-    delete: (path: string) =>
-      fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: h }).then((r) => r.json()),
-  };
+  const headers = useMemo(
+    () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }),
+    [token],
+  );
+
+  const get = useCallback(
+    (path: string) => fetch(`${API_BASE}${path}`, { headers }).then((r) => r.json()),
+    [headers],
+  );
+  const post = useCallback(
+    (path: string, body: unknown) =>
+      fetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      }).then((r) => r.json()),
+    [headers],
+  );
+  const patch = useCallback(
+    (path: string, body: unknown) =>
+      fetch(`${API_BASE}${path}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(body),
+      }).then((r) => r.json()),
+    [headers],
+  );
+  const del = useCallback(
+    (path: string) =>
+      fetch(`${API_BASE}${path}`, { method: 'DELETE', headers }).then((r) => r.json()),
+    [headers],
+  );
+
+  return useMemo(() => ({ get, post, patch, delete: del }), [del, get, patch, post]);
 }

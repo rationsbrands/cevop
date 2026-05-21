@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useApi } from '../context/auth';
 
 export function AuditLogsPage() {
@@ -10,26 +10,30 @@ export function AuditLogsPage() {
   const [filterOrg, setFilterOrg] = useState('');
   const [filterAction, setFilterAction] = useState('');
 
-  async function load(page = 1) {
-    setLoading(true);
-    try {
-      const q = new URLSearchParams({ page: page.toString(), limit: '50' });
-      if (filterOrg) q.set('orgId', filterOrg);
-      if (filterAction) q.set('action', filterAction);
+  const load = useCallback(
+    async (page = 1) => {
+      setLoading(true);
+      try {
+        const q = new URLSearchParams({ page: page.toString(), limit: '50' });
+        if (filterOrg) q.set('orgId', filterOrg);
+        if (filterAction) q.set('action', filterAction);
 
-      const res = await api.get(`/api/ops/audit?${q.toString()}`);
-      if (res.success) {
-        setLogs(res.data);
-        setMeta(res.meta);
+        const res = await api.get(`/api/ops/audit?${q.toString()}`);
+        if (res.success) {
+          setLogs(res.data);
+          setMeta(res.meta);
+        }
+      } finally {
+        setLoading(false);
       }
-    } finally {
-      setLoading(false);
-    }
-  }
+    },
+    [api, filterAction, filterOrg],
+  );
 
   useEffect(() => {
-    load(1);
-  }, [filterOrg, filterAction]);
+    const t = window.setTimeout(() => void load(1), 0);
+    return () => window.clearTimeout(t);
+  }, [load]);
 
   return (
     <div className="space-y-6 animate-in">
@@ -57,66 +61,64 @@ export function AuditLogsPage() {
         />
       </div>
 
-      <div className="card overflow-hidden">
+      <div className="card overflow-x-auto">
         {loading ? (
           <div className="p-8 text-center text-[var(--muted)]">Loading logs...</div>
         ) : logs.length === 0 ? (
           <div className="p-8 text-center text-[var(--muted)]">No logs found.</div>
         ) : (
-          <div className="overflow-x-auto">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Action</th>
-                  <th>Tenant</th>
-                  <th>User</th>
-                  <th>Entity</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logs.map((log: any) => (
-                  <tr key={log.id}>
-                    <td className="text-xs text-[var(--muted)] whitespace-nowrap">
-                      {new Date(log.createdAt).toLocaleString()}
-                    </td>
-                    <td>
-                      <span className="text-xs font-mono bg-[var(--background)] border border-[var(--border)] px-1.5 py-0.5 rounded">
-                        {log.action}
-                      </span>
-                    </td>
-                    <td>
-                      {log.organization ? (
-                        <div className="text-sm">
-                          <span className="font-medium">{log.organization.name}</span>
-                          <span className="text-[var(--muted)] text-xs ml-2">
-                            {log.organization.slug}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-[var(--muted)] text-xs">System</span>
-                      )}
-                    </td>
-                    <td>
-                      {log.user ? (
-                        <div className="text-sm">
-                          <span className="font-medium text-[var(--text)]">{log.user.name}</span>
-                          <span className="text-[var(--muted)] text-xs ml-2">{log.user.email}</span>
-                        </div>
-                      ) : (
-                        <span className="text-[var(--muted)] text-xs">System / Anonymous</span>
-                      )}
-                    </td>
-                    <td>
-                      <div className="text-xs text-[var(--muted)]">
-                        <span className="font-mono">{log.entity}</span>: {log.entityId}
+          <table className="min-w-[900px]">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Action</th>
+                <th>Tenant</th>
+                <th>User</th>
+                <th>Entity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((log: any) => (
+                <tr key={log.id}>
+                  <td className="text-xs text-[var(--muted)] whitespace-nowrap">
+                    {new Date(log.createdAt).toLocaleString()}
+                  </td>
+                  <td>
+                    <span className="text-xs font-mono bg-[var(--background)] border border-[var(--border)] px-1.5 py-0.5 rounded">
+                      {log.action}
+                    </span>
+                  </td>
+                  <td>
+                    {log.organization ? (
+                      <div className="text-sm">
+                        <span className="font-medium">{log.organization.name}</span>
+                        <span className="text-[var(--muted)] text-xs ml-2">
+                          {log.organization.slug}
+                        </span>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    ) : (
+                      <span className="text-[var(--muted)] text-xs">System</span>
+                    )}
+                  </td>
+                  <td>
+                    {log.user ? (
+                      <div className="text-sm">
+                        <span className="font-medium text-[var(--text)]">{log.user.name}</span>
+                        <span className="text-[var(--muted)] text-xs ml-2">{log.user.email}</span>
+                      </div>
+                    ) : (
+                      <span className="text-[var(--muted)] text-xs">System / Anonymous</span>
+                    )}
+                  </td>
+                  <td>
+                    <div className="text-xs text-[var(--muted)]">
+                      <span className="font-mono">{log.entity}</span>: {log.entityId}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
 

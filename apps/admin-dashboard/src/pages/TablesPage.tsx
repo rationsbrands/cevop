@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { useAuth, useApi } from '../context/auth';
+import React, { useEffect, useState, useCallback } from 'react';
+import { useApi } from '../context/auth';
 
 interface Table {
   id: string;
@@ -32,12 +32,12 @@ export function TablesPage() {
   const [qrLoading, setQrLoading] = useState(false);
   const [error, setError] = useState('');
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     const res = await api.get('/api/tables');
     if (res.success) setTables(res.data);
     setLoading(false);
-  }
+  }, [api]);
 
   async function loadQR() {
     setQrLoading(true);
@@ -47,8 +47,9 @@ export function TablesPage() {
   }
 
   useEffect(() => {
-    load();
-  }, []);
+    const t = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(t);
+  }, [load]);
 
   async function saveTable() {
     setSaving(true);
@@ -135,7 +136,7 @@ export function TablesPage() {
 
       {/* Tables grid */}
       <div className="card overflow-x-auto">
-        <table>
+        <table className="min-w-[720px]">
           <thead>
             <tr>
               <th>#</th>

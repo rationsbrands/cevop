@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useApi } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
@@ -35,7 +35,7 @@ export function OrgDetailPage() {
   const [editNotes, setEditNotes] = useState('');
   const [editTrialEnd, setEditTrialEnd] = useState('');
 
-  async function load() {
+  const load = useCallback(async () => {
     const res = await api.get(`/api/ops/orgs/${orgId}`);
     if (res.success) {
       setOrg(res.data);
@@ -47,11 +47,12 @@ export function OrgDetailPage() {
       );
     }
     setLoading(false);
-  }
+  }, [api, orgId]);
 
   useEffect(() => {
-    load();
-  }, [orgId]);
+    const t = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(t);
+  }, [load]);
 
   async function save() {
     setSaving(true);
@@ -132,8 +133,6 @@ export function OrgDetailPage() {
       </div>
     );
   if (!org) return <div className="text-red-400">Organisation not found</div>;
-
-  const adminDashUrl = `${import.meta.env.VITE_ADMIN_DASHBOARD_URL || 'http://localhost:5175'}`;
 
   return (
     <div className="space-y-6 animate-in max-w-4xl">
@@ -308,32 +307,34 @@ export function OrgDetailPage() {
           <div className="card-header">
             <h2 className="font-semibold text-sm">Branches ({org.branches.length})</h2>
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Slug</th>
-                <th>Users</th>
-                <th>Orders</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {org.branches.map((b: any) => (
-                <tr key={b.id}>
-                  <td className="font-medium">{b.name}</td>
-                  <td className="font-mono text-xs text-[var(--muted)]">{b.slug}</td>
-                  <td className="text-center text-[var(--muted)]">{b._count?.users}</td>
-                  <td className="text-center text-[var(--muted)]">{b._count?.orders}</td>
-                  <td>
-                    <span className={`text-xs ${b.isActive ? 'text-green-400' : 'text-red-400'}`}>
-                      {b.isActive ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="min-w-[720px]">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Slug</th>
+                  <th>Users</th>
+                  <th>Orders</th>
+                  <th>Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {org.branches.map((b: any) => (
+                  <tr key={b.id}>
+                    <td className="font-medium">{b.name}</td>
+                    <td className="font-mono text-xs text-[var(--muted)]">{b.slug}</td>
+                    <td className="text-center text-[var(--muted)]">{b._count?.users}</td>
+                    <td className="text-center text-[var(--muted)]">{b._count?.orders}</td>
+                    <td>
+                      <span className={`text-xs ${b.isActive ? 'text-green-400' : 'text-red-400'}`}>
+                        {b.isActive ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -343,40 +344,42 @@ export function OrgDetailPage() {
           <div className="card-header">
             <h2 className="font-semibold text-sm">Admin Users</h2>
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Last Login</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {org.users.map((u: any) => (
-                <tr key={u.id}>
-                  <td className="font-medium">{u.name}</td>
-                  <td className="text-[var(--muted)] text-sm">{u.email}</td>
-                  <td className="text-xs">
-                    <span
-                      className={`border px-2 py-0.5 ${u.role === 'ADMIN' ? 'border-[var(--accent)] text-[var(--accent)]' : 'border-blue-700 text-blue-400'}`}
-                    >
-                      {u.role}
-                    </span>
-                  </td>
-                  <td className="text-xs text-[var(--muted)]">
-                    {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'Never'}
-                  </td>
-                  <td>
-                    <span className={`text-xs ${u.isActive ? 'text-green-400' : 'text-red-400'}`}>
-                      {u.isActive ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="min-w-[800px]">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Last Login</th>
+                  <th>Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {org.users.map((u: any) => (
+                  <tr key={u.id}>
+                    <td className="font-medium">{u.name}</td>
+                    <td className="text-[var(--muted)] text-sm">{u.email}</td>
+                    <td className="text-xs">
+                      <span
+                        className={`border px-2 py-0.5 ${u.role === 'ADMIN' ? 'border-[var(--accent)] text-[var(--accent)]' : 'border-blue-700 text-blue-400'}`}
+                      >
+                        {u.role}
+                      </span>
+                    </td>
+                    <td className="text-xs text-[var(--muted)]">
+                      {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'Never'}
+                    </td>
+                    <td>
+                      <span className={`text-xs ${u.isActive ? 'text-green-400' : 'text-red-400'}`}>
+                        {u.isActive ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

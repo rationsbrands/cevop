@@ -30,12 +30,17 @@ export function OrgsPage() {
     if (search) qs.set('search', search);
     if (planStatus) qs.set('planStatus', planStatus);
     const res = await api.get(`/api/ops/orgs?${qs}`);
-    if (res.success) { setOrgs(res.data); setMeta(res.meta); }
+    if (res.success) {
+      setOrgs(res.data);
+      setMeta(res.meta);
+    }
     setLoading(false);
-  }, [search, planStatus, page]);
+  }, [api, search, planStatus, page]);
 
-  useEffect(() => { setPage(1); }, [search, planStatus]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const t = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(t);
+  }, [load]);
 
   return (
     <div className="space-y-6 animate-in">
@@ -44,7 +49,9 @@ export function OrgsPage() {
           <h1 className="font-display text-4xl">ORGANISATIONS</h1>
           <p className="text-[var(--muted)] text-sm mt-0.5">{meta.total} total</p>
         </div>
-        <Link to="/onboard" className="btn btn-primary btn-sm">+ Onboard New Org</Link>
+        <Link to="/onboard" className="btn btn-primary btn-sm">
+          + Onboard New Org
+        </Link>
       </div>
 
       {/* Filters */}
@@ -53,24 +60,45 @@ export function OrgsPage() {
           type="text"
           placeholder="Search name, slug, email…"
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(1);
+          }}
           className="w-full sm:w-64 text-sm"
         />
-        <select value={planStatus} onChange={e => setPlanStatus(e.target.value)} className="w-full sm:w-auto text-sm">
+        <select
+          value={planStatus}
+          onChange={(e) => {
+            setPlanStatus(e.target.value);
+            setPage(1);
+          }}
+          className="w-full sm:w-auto text-sm"
+        >
           <option value="">All Statuses</option>
           <option value="trialing">Trialing</option>
           <option value="active">Active</option>
           <option value="suspended">Suspended</option>
           <option value="cancelled">Cancelled</option>
         </select>
-        <button onClick={() => { setSearch(''); setPlanStatus(''); }} className="btn btn-secondary btn-sm w-full sm:w-auto">Clear</button>
+        <button
+          onClick={() => {
+            setSearch('');
+            setPlanStatus('');
+            setPage(1);
+          }}
+          className="btn btn-secondary btn-sm w-full sm:w-auto"
+        >
+          Clear
+        </button>
       </div>
 
       <div className="card overflow-x-auto">
         {loading ? (
-          <div className="flex items-center justify-center py-12"><div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" /></div>
+          <div className="flex items-center justify-center py-12">
+            <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+          </div>
         ) : (
-          <table>
+          <table className="min-w-[1100px]">
             <thead>
               <tr>
                 <th>Organisation</th>
@@ -86,25 +114,47 @@ export function OrgsPage() {
               </tr>
             </thead>
             <tbody>
-              {orgs.length === 0 && <tr><td colSpan={10} className="text-center text-[var(--muted)] py-10">No organisations found</td></tr>}
+              {orgs.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="text-center text-[var(--muted)] py-10">
+                    No organisations found
+                  </td>
+                </tr>
+              )}
               {orgs.map((org: any) => (
                 <tr key={org.id}>
                   <td>
                     <p className="font-semibold text-[var(--text)] text-sm">{org.name}</p>
-                    {org.contactEmail && <p className="text-xs text-[var(--muted)]">{org.contactEmail}</p>}
+                    {org.contactEmail && (
+                      <p className="text-xs text-[var(--muted)]">{org.contactEmail}</p>
+                    )}
                   </td>
                   <td className="font-mono text-xs text-[var(--muted)]">{org.slug}</td>
-                  <td className={`text-xs font-semibold uppercase ${PLAN_COLOR[org.plan] ?? 'text-[var(--muted)]'}`}>{org.plan}</td>
-                  <td>
-                    <span className={`text-xs border px-2 py-0.5 ${PLAN_STATUS_COLOR[org.planStatus] ?? ''}`}>{org.planStatus}</span>
+                  <td
+                    className={`text-xs font-semibold uppercase ${PLAN_COLOR[org.plan] ?? 'text-[var(--muted)]'}`}
+                  >
+                    {org.plan}
                   </td>
-                  <td className="text-xs text-[var(--muted)]">{org.selfSignup ? 'Self' : 'Manual'}</td>
+                  <td>
+                    <span
+                      className={`text-xs border px-2 py-0.5 ${PLAN_STATUS_COLOR[org.planStatus] ?? ''}`}
+                    >
+                      {org.planStatus}
+                    </span>
+                  </td>
+                  <td className="text-xs text-[var(--muted)]">
+                    {org.selfSignup ? 'Self' : 'Manual'}
+                  </td>
                   <td className="text-center text-[var(--muted)]">{org._count?.branches}</td>
                   <td className="text-center text-[var(--muted)]">{org._count?.users}</td>
                   <td className="text-center text-[var(--muted)]">{org._count?.orders}</td>
-                  <td className="text-xs text-[var(--muted)]">{new Date(org.createdAt).toLocaleDateString()}</td>
+                  <td className="text-xs text-[var(--muted)]">
+                    {new Date(org.createdAt).toLocaleDateString()}
+                  </td>
                   <td>
-                    <Link to={`/orgs/${org.id}`} className="btn btn-secondary btn-sm">View</Link>
+                    <Link to={`/orgs/${org.id}`} className="btn btn-secondary btn-sm">
+                      View
+                    </Link>
                   </td>
                 </tr>
               ))}
@@ -116,9 +166,23 @@ export function OrgsPage() {
       {/* Pagination */}
       {meta.pages > 1 && (
         <div className="flex items-center justify-center gap-2">
-          <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="btn btn-secondary btn-sm disabled:opacity-40">← Prev</button>
-          <span className="text-sm text-[var(--muted)]">Page {page} of {meta.pages}</span>
-          <button onClick={() => setPage(p => Math.min(meta.pages, p + 1))} disabled={page === meta.pages} className="btn btn-secondary btn-sm disabled:opacity-40">Next →</button>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1}
+            className="btn btn-secondary btn-sm disabled:opacity-40"
+          >
+            ← Prev
+          </button>
+          <span className="text-sm text-[var(--muted)]">
+            Page {page} of {meta.pages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(meta.pages, p + 1))}
+            disabled={page === meta.pages}
+            className="btn btn-secondary btn-sm disabled:opacity-40"
+          >
+            Next →
+          </button>
         </div>
       )}
     </div>

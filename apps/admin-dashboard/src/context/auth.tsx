@@ -6,6 +6,7 @@ import React, {
   useRef,
   ReactNode,
   useCallback,
+  useMemo,
 } from 'react';
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
 
@@ -231,46 +232,69 @@ export function useApi() {
   const { token, user, activeBranchFilter } = useAuth();
   const effectiveBranchId = user?.branchId ?? activeBranchFilter?.id ?? null;
 
-  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+  const headers = useMemo(
+    () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }),
+    [token],
+  );
 
-  function buildUrl(path: string, params?: Record<string, string>): string {
-    const base = API_BASE || '';
-    // Parse path — may already have query string
-    const [pathname, existingQs] = path.split('?');
-    const url = new URLSearchParams(existingQs || '');
-    if (effectiveBranchId && !url.has('branchId')) url.set('branchId', effectiveBranchId);
-    if (params) Object.entries(params).forEach(([k, v]) => url.set(k, v));
-    const qs = url.toString();
-    return `${base}${pathname}${qs ? '?' + qs : ''}`;
-  }
+  const buildUrl = useCallback(
+    (path: string, params?: Record<string, string>): string => {
+      const base = API_BASE || '';
+      // Parse path — may already have query string
+      const [pathname, existingQs] = path.split('?');
+      const url = new URLSearchParams(existingQs || '');
+      if (effectiveBranchId && !url.has('branchId')) url.set('branchId', effectiveBranchId);
+      if (params) Object.entries(params).forEach(([k, v]) => url.set(k, v));
+      const qs = url.toString();
+      return `${base}${pathname}${qs ? '?' + qs : ''}`;
+    },
+    [effectiveBranchId],
+  );
 
-  async function handleResponse(res: Response) {
+  const handleResponse = useCallback(async (res: Response) => {
     const data = await res.json();
     if (res.status === 402 && data.upgradeRequired) {
       alert(`Limit Reached:\n${data.error}\n\nPlease contact Cevop support to upgrade your plan.`);
     }
     return data;
-  }
+  }, []);
 
-  return {
-    effectiveBranchId,
-    get: (path: string, params?: Record<string, string>) =>
+  const get = useCallback(
+    (path: string, params?: Record<string, string>) =>
       fetch(buildUrl(path, params), { headers }).then(handleResponse),
-    post: (path: string, body: unknown) =>
+    [buildUrl, handleResponse, headers],
+  );
+  const post = useCallback(
+    (path: string, body: unknown) =>
       fetch(`${API_BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) }).then(
         handleResponse,
       ),
-    put: (path: string, body: unknown) =>
+    [handleResponse, headers],
+  );
+  const put = useCallback(
+    (path: string, body: unknown) =>
       fetch(`${API_BASE}${path}`, { method: 'PUT', headers, body: JSON.stringify(body) }).then(
         handleResponse,
       ),
-    patch: (path: string, body: unknown) =>
+    [handleResponse, headers],
+  );
+  const patch = useCallback(
+    (path: string, body: unknown) =>
       fetch(`${API_BASE}${path}`, { method: 'PATCH', headers, body: JSON.stringify(body) }).then(
         handleResponse,
       ),
-    delete: (path: string) =>
+    [handleResponse, headers],
+  );
+  const del = useCallback(
+    (path: string) =>
       fetch(`${API_BASE}${path}`, { method: 'DELETE', headers }).then(handleResponse),
-  };
+    [handleResponse, headers],
+  );
+
+  return useMemo(
+    () => ({ effectiveBranchId, get, post, put, patch, delete: del }),
+    [del, effectiveBranchId, get, patch, post, put],
+  );
 }
 
 // Keep for backward compat where needed

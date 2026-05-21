@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { useAuth, useApi } from '../context/auth';
+import React, { useEffect, useState, useCallback } from 'react';
+import { useApi } from '../context/auth';
 
 interface Branch {
   id: string;
@@ -20,7 +20,6 @@ function slugify(name: string): string {
 }
 
 export function BranchesPage() {
-  const {} = useAuth();
   const api = useApi();
 
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -46,7 +45,7 @@ export function BranchesPage() {
   const [adminSuccess, setAdminSuccess] = useState('');
   const [showAdminPassword, setShowAdminPassword] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const { data } = await api.get('/api/branches');
@@ -56,11 +55,12 @@ export function BranchesPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [api]);
 
   useEffect(() => {
-    load();
-  }, []);
+    const t = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(t);
+  }, [load]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();

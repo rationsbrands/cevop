@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '../context/auth';
 import { useTheme } from '../context/theme';
 
@@ -68,12 +68,11 @@ const PageShell = ({ children }: { children: React.ReactNode }) => {
 
 export function AcceptInvitePage() {
   const { token } = useParams<{ token: string }>();
-  const navigate = useNavigate();
   const { login } = useAuth();
 
   const [inviteInfo, setInviteInfo] = useState<InviteInfo | null>(null);
-  const [validating, setValidating] = useState(true);
-  const [invalidReason, setInvalidReason] = useState('');
+  const [validating, setValidating] = useState(() => !!token);
+  const [invalidReason, setInvalidReason] = useState(() => (token ? '' : 'Invalid invite link'));
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -83,11 +82,7 @@ export function AcceptInvitePage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!token) {
-      setInvalidReason('Invalid invite link');
-      setValidating(false);
-      return;
-    }
+    if (!token) return;
     fetch(`${API_BASE}/api/auth/validate-invite/${token}`)
       .then((r) => r.json())
       .then(({ success, data, error: err }) => {

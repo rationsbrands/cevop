@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth, useApi } from '../context/auth';
 
 interface Branch {
@@ -39,7 +39,7 @@ export function HelpOptionsPage() {
 
   const isOrgAdmin = me?.role === 'ADMIN' || me?.role === 'SUPERADMIN';
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -48,7 +48,6 @@ export function HelpOptionsPage() {
         api.get(`/api/help-options?organizationId=${me?.organizationId}&branchId=${branchId}`),
         isOrgAdmin ? api.get('/api/branches') : Promise.resolve({ data: [] }),
       ]);
-      console.log('Help Options Response:', optRes);
       if (!optRes.success) throw new Error(optRes.error || 'Failed to fetch options');
       setOptions(optRes.data ?? []);
       setBranches(branchesRes.data ?? []);
@@ -57,11 +56,12 @@ export function HelpOptionsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [activeBranchFilter, api, isOrgAdmin, me]);
 
   useEffect(() => {
-    load();
-  }, [activeBranchFilter, me?.branchId]);
+    const t = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(t);
+  }, [load]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();

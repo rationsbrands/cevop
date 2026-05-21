@@ -98,7 +98,7 @@ export function DashboardPage() {
             <h2 className="font-semibold text-sm">Recent Orders</h2>
           </div>
           <div className="overflow-x-auto">
-            <table>
+            <table className="min-w-[720px]">
               <thead>
                 <tr>
                   <th>Order ID</th>
