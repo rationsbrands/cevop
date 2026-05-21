@@ -322,7 +322,7 @@ ordersRouter.get(
 
 ordersRouter.patch(
   '/:id/status',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN', 'SERVICE'),
+  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN', 'SERVICE', 'WAITER'),
   async (req: AuthRequest, res: Response) => {
     try {
       const statusSchema = z.object({

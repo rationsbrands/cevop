@@ -33,17 +33,25 @@ import { logger } from './services/logger';
 const app = express();
 const httpServer = createServer(app);
 
-const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map((s) => s.trim()) || [
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',')
+  .map((s) => s.trim())
+  .filter(Boolean) || [
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:5175',
   'http://localhost:5176',
+  'https://admin.cevop.com',
+  'https://service.cevop.com',
+  'https://ops.cevop.com',
+  'https://order.cevop.com',
+  'https://www.cevop.com',
+  'https://cevop.com',
 ];
 
 const isDev = process.env.NODE_ENV !== 'production';
 
 export const io = new SocketServer(httpServer, {
-  cors: { origin: isDev ? true : allowedOrigins, methods: ['GET', 'POST'], credentials: true },
+  cors: { origin: corsOrigin, methods: ['GET', 'POST'], credentials: true },
 });
 
 // Security headers
@@ -60,8 +68,21 @@ app.use(
 );
 app.set('trust proxy', 1);
 
+function corsOrigin(origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) {
+  if (isDev) return cb(null, true);
+  if (!origin) return cb(null, true);
+  if (allowedOrigins.includes(origin)) return cb(null, true);
+  try {
+    const url = new URL(origin);
+    if (url.hostname.endsWith('.cevop.com')) return cb(null, true);
+  } catch {
+    // ignore
+  }
+  return cb(null, false);
+}
+
 // CORS
-app.use(cors({ origin: isDev ? true : allowedOrigins, credentials: true }));
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(cookieParser());
 app.use(compression());
 app.use(express.json({ limit: '100kb' }));
