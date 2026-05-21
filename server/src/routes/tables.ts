@@ -9,10 +9,11 @@ import { logger } from '../services/logger';
 
 export const tablesRouter = Router();
 
-function getCustomerPwaBaseUrl(): string {
+function getCustomerPwaBaseUrl(req: Request): string {
   if (process.env.CUSTOMER_PWA_URL) return process.env.CUSTOMER_PWA_URL;
-  if (process.env.NODE_ENV === 'production') return 'https://order.cevop.com';
-  return 'http://localhost:5173';
+  const host = (req.headers.host || '').toLowerCase();
+  if (host.includes('localhost') || host.includes('127.0.0.1')) return 'http://localhost:5173';
+  return 'https://order.cevop.com';
 }
 
 // PUBLIC: Get table info (for QR scan)
@@ -80,7 +81,7 @@ tablesRouter.get('/:id/qr', async (req: Request, res: Response) => {
       return;
     }
 
-    const customerUrl = `${getCustomerPwaBaseUrl()}/menu/${table.organizationId}/${table.id}`;
+    const customerUrl = `${getCustomerPwaBaseUrl(req)}/menu/${table.organizationId}/${table.id}`;
     const format = (req.query.format as string) || 'svg';
 
     if (format === 'png') {
@@ -220,7 +221,7 @@ tablesRouter.get(
       if (req.branchScope) where.branchId = req.branchScope;
 
       const tables = await prisma.table.findMany({ where, orderBy: { number: 'asc' } });
-      const baseUrl = getCustomerPwaBaseUrl();
+      const baseUrl = getCustomerPwaBaseUrl(req);
 
       const qrCodes = await Promise.all(
         tables.map(

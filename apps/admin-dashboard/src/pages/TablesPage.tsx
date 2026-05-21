@@ -18,7 +18,9 @@ interface QREntry {
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
-const PWA_URL = import.meta.env.VITE_CUSTOMER_PWA_URL || 'http://localhost:5173';
+const PWA_URL =
+  import.meta.env.VITE_CUSTOMER_PWA_URL ||
+  (import.meta.env.PROD ? 'https://order.cevop.com' : 'http://localhost:5173');
 
 export function TablesPage() {
   const api = useApi();
