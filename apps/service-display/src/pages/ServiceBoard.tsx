@@ -84,7 +84,7 @@ function TimeElapsed({ createdAt, className }: { createdAt: string; className?: 
 }
 
 export function ServiceBoard() {
-  const { user, token, logout } = useAuth();
+  const { user, token, logout, silentRefresh } = useAuth();
   const { mode, setMode } = useTheme();
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
@@ -246,13 +246,14 @@ export function ServiceBoard() {
   }, []);
 
   async function updateOrderStatus(orderId: string, status: string) {
-    if (!token) return;
     if (updatingItems.has(orderId)) return;
     setUpdatingItems((prev) => new Set(prev).add(orderId));
     try {
+      const freshToken = (await silentRefresh()) ?? token;
+      if (!freshToken) return;
       const res = await fetch(`${API_BASE}/api/orders/${orderId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
         body: JSON.stringify({ status }),
       });
       let body: any = null;
@@ -276,13 +277,14 @@ export function ServiceBoard() {
   }
 
   async function acknowledgeWaiterCall(callId: string) {
-    if (!token) return;
     if (updatingItems.has(callId)) return;
     setUpdatingItems((prev) => new Set(prev).add(callId));
     try {
+      const freshToken = (await silentRefresh()) ?? token;
+      if (!freshToken) return;
       const res = await fetch(`${API_BASE}/api/waiter-calls/${callId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
         body: JSON.stringify({ status: 'RESOLVED' }),
       });
       if (!res.ok) await loadData();
@@ -296,13 +298,14 @@ export function ServiceBoard() {
   }
 
   async function acknowledgeService(reqId: string) {
-    if (!token) return;
     if (updatingItems.has(reqId)) return;
     setUpdatingItems((prev) => new Set(prev).add(reqId));
     try {
+      const freshToken = (await silentRefresh()) ?? token;
+      if (!freshToken) return;
       const res = await fetch(`${API_BASE}/api/service-requests/${reqId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
         body: JSON.stringify({ status: 'RESOLVED' }),
       });
       if (!res.ok) await loadData();

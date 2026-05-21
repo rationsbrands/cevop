@@ -27,7 +27,7 @@ function getRefreshCookieName(req: Request): string {
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax' as const,
+  sameSite: (process.env.NODE_ENV === 'production' ? 'none' : 'lax') as 'none' | 'lax',
   path: '/api/auth',
   maxAge: REFRESH_TOKEN_MS,
 };
@@ -282,10 +282,18 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
         data: { revokedAt: new Date() },
       });
     }
-    res.clearCookie(cookieName, { path: '/api/auth' });
+    res.clearCookie(cookieName, {
+      path: '/api/auth',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      secure: process.env.NODE_ENV === 'production',
+    });
     res.json({ success: true });
   } catch {
-    res.clearCookie(getRefreshCookieName(req), { path: '/api/auth' });
+    res.clearCookie(getRefreshCookieName(req), {
+      path: '/api/auth',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      secure: process.env.NODE_ENV === 'production',
+    });
     res.json({ success: true }); // Always succeed on logout
   }
 });
