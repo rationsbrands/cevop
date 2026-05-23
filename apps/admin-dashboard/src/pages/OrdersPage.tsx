@@ -5,11 +5,11 @@ import { formatPrice } from '../../../../shared/utils/currency';
 
 const STATUS_OPTS = ['', 'RECEIVED', 'PREPARING', 'READY', 'SERVED', 'CANCELLED'];
 const SC: Record<string, string> = {
-  RECEIVED: 'text-blue-400',
-  PREPARING: 'text-yellow-400',
-  READY: 'text-green-400',
-  SERVED: 'text-gray-500',
-  CANCELLED: 'text-red-400',
+  RECEIVED: 'text-[var(--info)]',
+  PREPARING: 'text-[var(--warning)]',
+  READY: 'text-[var(--success)]',
+  SERVED: 'text-[var(--muted)]',
+  CANCELLED: 'text-[var(--danger)]',
 };
 const NEXT: Record<string, string> = { RECEIVED: 'PREPARING', PREPARING: 'READY', READY: 'SERVED' };
 
@@ -18,6 +18,8 @@ interface WaiterCall {
   status: string;
   reason?: string;
   notes?: string;
+  assignedTo?: string | null;
+  assignedUser?: { id: string; name: string } | null;
   table?: { label: string };
   createdAt: string;
 }
@@ -27,6 +29,8 @@ interface ServiceRequest {
   serviceType: string;
   notes?: string;
   adminNotes?: string;
+  assignedTo?: string | null;
+  assignedUser?: { id: string; name: string } | null;
   table?: { label: string };
   createdAt: string;
 }
@@ -35,7 +39,9 @@ export function OrdersPage() {
   const { activeBranchFilter, user } = useAuth();
   const api = useApi();
   const { socket } = useSocket();
-  const canEdit = user && ['SUPERADMIN', 'ADMIN', 'BRANCH_ADMIN', 'SERVICE'].includes(user.role);
+  const canEdit =
+    user && ['SUPERADMIN', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'WAITER'].includes(user.role);
+  const currency = user?.organization?.currency ?? 'NGN';
   const [orders, setOrders] = useState<any[]>([]);
   const [waiterCalls, setWaiterCalls] = useState<WaiterCall[]>([]);
   const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
@@ -49,7 +55,11 @@ export function OrdersPage() {
   const [editingService, setEditingService] = useState<ServiceRequest | null>(null);
   const [editNotes, setEditNotes] = useState('');
   const [editStatus, setEditStatus] = useState('');
+  const [editWaiterId, setEditWaiterId] = useState<string>('');
   const [editSaving, setEditSaving] = useState(false);
+  const [orderAssigningId, setOrderAssigningId] = useState<string | null>(null);
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [cancellationReason, setCancellationReason] = useState('');
 
   const [refreshing, setRefreshing] = useState(false);
   const [onlineWaiters, setOnlineWaiters] = useState<
@@ -58,6 +68,7 @@ export function OrdersPage() {
 
   // Fetch online waiters
   useEffect(() => {
+    if (!api.effectiveBranchId) return;
     api
       .get('/api/waiter-calls/waiters/online')
       .then((res) => {
@@ -89,6 +100,12 @@ export function OrdersPage() {
     setLoading(true);
     setRefreshing(true);
     try {
+      if (!api.effectiveBranchId) {
+        setOrders([]);
+        setWaiterCalls([]);
+        setServiceRequests([]);
+        return;
+      }
       const qs = statusFilter ? `?status=${statusFilter}&limit=100` : '?limit=100';
       const [ordersRes, callsRes, serviceRes] = await Promise.all([
         api.get(`/api/orders${qs}`),
@@ -182,14 +199,31 @@ export function OrdersPage() {
     };
   }, [socket, statusFilter]);
 
-  async function updateOrderStatus(id: string, status: string) {
-    await api.patch(`/api/orders/${id}/status`, { status });
+  async function updateOrderStatus(id: string, status: string, cancellationReason?: string) {
+    await api.patch(`/api/orders/${id}/status`, {
+      status,
+      ...(cancellationReason ? { cancellationReason } : {}),
+    });
     load();
+  }
+
+  async function assignOrderWaiter(orderId: string, waiterId: string | null) {
+    if (orderAssigningId === orderId) return;
+    setOrderAssigningId(orderId);
+    try {
+      await api.patch(`/api/orders/${orderId}/assign-waiter`, { waiterId });
+      load();
+    } finally {
+      setOrderAssigningId((v) => (v === orderId ? null : v));
+    }
   }
 
   async function saveCallEdit() {
     if (!editingCall) return;
     setEditSaving(true);
+    await api.patch(`/api/waiter-calls/${editingCall.id}/assign`, {
+      waiterId: editWaiterId || null,
+    });
     await api.patch(`/api/waiter-calls/${editingCall.id}/status`, {
       status: editStatus,
       notes: editNotes,
@@ -202,6 +236,9 @@ export function OrdersPage() {
   async function saveServiceEdit() {
     if (!editingService) return;
     setEditSaving(true);
+    await api.patch(`/api/service-requests/${editingService.id}/assign`, {
+      waiterId: editWaiterId || null,
+    });
     await api.patch(`/api/service-requests/${editingService.id}/status`, {
       status: editStatus,
       adminNotes: editNotes,
@@ -213,6 +250,16 @@ export function OrdersPage() {
 
   const pendingCalls = waiterCalls.filter((c) => c.status === 'PENDING').length;
   const pendingService = serviceRequests.filter((s) => s.status === 'PENDING').length;
+
+  if (!api.effectiveBranchId)
+    return (
+      <div className="card p-6">
+        <h1 className="font-display text-3xl mb-2">ORDERS</h1>
+        <p className="text-[var(--muted)] text-sm">
+          Select a branch to view orders, waiter calls, and service requests for that branch.
+        </p>
+      </div>
+    );
 
   return (
     <div className="space-y-6 animate-in">
@@ -226,12 +273,12 @@ export function OrdersPage() {
               key={w.id}
               className={`flex items-center gap-1.5 px-2 py-1 text-xs border shrink-0 ${
                 w.online
-                  ? 'border-green-800 text-green-400 bg-green-900/10'
+                  ? 'border-[var(--success)] text-[var(--success)] bg-[var(--surface2)]'
                   : 'border-[var(--border)] text-[var(--muted)]'
               }`}
             >
               <span
-                className={`w-1.5 h-1.5 rounded-full ${w.online ? 'bg-green-400' : 'bg-[var(--muted)]'}`}
+                className={`w-1.5 h-1.5 rounded-full ${w.online ? 'bg-[var(--success)]' : 'bg-[var(--muted)]'}`}
               />
               {w.name}
             </div>
@@ -264,11 +311,19 @@ export function OrdersPage() {
           <div className="flex items-center gap-2 w-full sm:w-auto">
             {activeTab === 'orders' && (
               <>
-                <label className="mb-0 normal-case text-sm shrink-0">Filter:</label>
+                <label
+                  htmlFor="admin_orders_status_filter"
+                  className="mb-0 normal-case text-sm shrink-0"
+                >
+                  Filter:
+                </label>
                 <select
+                  id="admin_orders_status_filter"
+                  name="status"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
                   className="w-full sm:w-auto text-sm"
+                  autoComplete="off"
                 >
                   {STATUS_OPTS.map((s) => (
                     <option key={s} value={s}>
@@ -323,11 +378,13 @@ export function OrdersPage() {
                     onClick={() => setExpanded(expanded === o.id ? null : o.id)}
                   >
                     <td className="font-mono text-xs text-[var(--muted)]">
-                      #{o.id.slice(-6).toUpperCase()}
+                      {o.id.slice(-6).toUpperCase()}
                     </td>
                     <td className="font-medium">{o.table?.label || '—'}</td>
                     <td className="text-[var(--muted)]">{o.items?.length ?? 0}</td>
-                    <td className="text-[var(--accent)] font-semibold">{formatPrice(o.total)}</td>
+                    <td className="text-[var(--accent)] font-semibold">
+                      {formatPrice(o.total, currency)}
+                    </td>
                     <td>
                       <span className={'text-xs font-bold ' + (SC[o.status] || '')}>
                         {o.status}
@@ -347,8 +404,11 @@ export function OrdersPage() {
                       )}
                       {canEdit && o.status !== 'CANCELLED' && o.status !== 'SERVED' && (
                         <button
-                          className="btn btn-danger btn-sm ml-1"
-                          onClick={() => updateOrderStatus(o.id, 'CANCELLED')}
+                          className="btn btn-sm border border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white text-xs px-3 py-1 ml-1"
+                          onClick={() => {
+                            setCancellingOrderId(o.id);
+                            setCancellationReason('');
+                          }}
                         >
                           Cancel
                         </button>
@@ -360,18 +420,30 @@ export function OrdersPage() {
                       <td colSpan={7} className="bg-[var(--surface2)] p-4">
                         <div className="space-y-1">
                           {(o.items ?? []).map((item: any) => (
-                            <div key={item.id} className="flex items-center gap-3 text-sm">
+                            <div
+                              key={item.id}
+                              className={`flex items-center gap-3 text-sm ${item.cancelledAt ? 'opacity-40' : ''}`}
+                            >
                               <span className="text-[var(--accent)] font-bold w-6">
                                 {item.quantity}×
                               </span>
-                              <span className="font-medium">
+                              <span
+                                className={`font-medium ${item.cancelledAt ? 'line-through text-[var(--muted)]' : ''}`}
+                              >
                                 {item.menuItem?.name || item.menuItemId}
+                                {item.cancelledAt && (
+                                  <span className="text-xs text-[var(--danger)] ml-2">
+                                    ({item.cancelReason ?? 'Cancelled'})
+                                  </span>
+                                )}
                               </span>
-                              {item.notes && (
+                              {item.notes && !item.cancelledAt && (
                                 <span className="text-[var(--muted)] italic">"{item.notes}"</span>
                               )}
                               <span className="ml-auto text-[var(--muted)]">
-                                {formatPrice(Number(item.unitPrice) * item.quantity)}
+                                {item.cancelledAt
+                                  ? '—'
+                                  : formatPrice(Number(item.unitPrice) * item.quantity, currency)}
                               </span>
                             </div>
                           ))}
@@ -380,6 +452,41 @@ export function OrdersPage() {
                           <p className="text-xs text-[var(--muted)] mt-2 border-t border-[var(--border)] pt-2">
                             Note: {o.notes}
                           </p>
+                        )}
+
+                        {o.status === 'READY' && (
+                          <div className="mt-3 pt-3 border-t border-[var(--border)]">
+                            <div className="text-xs font-bold tracking-widest text-[var(--muted)] uppercase">
+                              Assign to Waiter
+                            </div>
+                            {onlineWaiters.length > 0 ? (
+                              <div className="mt-2 flex items-center gap-2">
+                                <select
+                                  className="text-sm"
+                                  value={o.assignedWaiter ?? ''}
+                                  onChange={(e) =>
+                                    assignOrderWaiter(o.id, e.target.value ? e.target.value : null)
+                                  }
+                                  disabled={orderAssigningId === o.id}
+                                >
+                                  <option value="">— Unassigned —</option>
+                                  {onlineWaiters.map((w) => (
+                                    <option key={w.id} value={w.id}>
+                                      {w.name}
+                                      {w.online ? ' (online)' : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                                <span className="text-xs text-[var(--muted)]">
+                                  {orderAssigningId === o.id ? 'Assigning…' : ''}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-sm text-[var(--muted)]">
+                                No waiters found for this branch.
+                              </div>
+                            )}
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -419,7 +526,13 @@ export function OrdersPage() {
                   </td>
                   <td>
                     <span
-                      className={`text-xs font-bold ${c.status === 'PENDING' ? 'text-yellow-400' : c.status === 'RESOLVED' ? 'text-green-400' : 'text-blue-400'}`}
+                      className={`text-xs font-bold ${
+                        c.status === 'PENDING'
+                          ? 'text-[var(--warning)]'
+                          : c.status === 'RESOLVED'
+                            ? 'text-[var(--success)]'
+                            : 'text-[var(--info)]'
+                      }`}
                     >
                       {c.status}
                     </span>
@@ -435,6 +548,7 @@ export function OrdersPage() {
                           setEditingCall(c);
                           setEditNotes(c.notes || '');
                           setEditStatus(c.status);
+                          setEditWaiterId(c.assignedTo || '');
                         }}
                       >
                         Edit
@@ -471,7 +585,15 @@ export function OrdersPage() {
               {serviceRequests.map((s) => (
                 <tr key={s.id}>
                   <td className="font-medium">{s.table?.label || '—'}</td>
-                  <td className="font-semibold">{s.serviceType}</td>
+                  <td>
+                    {s.serviceType === 'BILL_REQUEST' ? (
+                      <span className="text-xs font-bold text-amber-400 border border-amber-800/50 px-1.5 py-0.5 bg-amber-900/10">
+                        Bill Request
+                      </span>
+                    ) : (
+                      <span className="text-xs text-[var(--muted)]">{s.serviceType}</span>
+                    )}
+                  </td>
                   <td className="text-[var(--muted)] text-xs max-w-xs truncate">
                     {s.notes || '—'}
                   </td>
@@ -480,7 +602,13 @@ export function OrdersPage() {
                   </td>
                   <td>
                     <span
-                      className={`text-xs font-bold ${s.status === 'PENDING' ? 'text-yellow-400' : s.status === 'RESOLVED' ? 'text-green-400' : 'text-blue-400'}`}
+                      className={`text-xs font-bold ${
+                        s.status === 'PENDING'
+                          ? 'text-[var(--warning)]'
+                          : s.status === 'RESOLVED'
+                            ? 'text-[var(--success)]'
+                            : 'text-[var(--info)]'
+                      }`}
                     >
                       {s.status}
                     </span>
@@ -496,6 +624,7 @@ export function OrdersPage() {
                           setEditingService(s);
                           setEditNotes(s.adminNotes || '');
                           setEditStatus(s.status);
+                          setEditWaiterId(s.assignedTo || '');
                         }}
                       >
                         Edit
@@ -530,16 +659,42 @@ export function OrdersPage() {
               </p>
             </div>
             <div>
-              <label>Status</label>
-              <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
+              <label htmlFor="admin_edit_call_waiter">Assign to Waiter</label>
+              <select
+                id="admin_edit_call_waiter"
+                name="waiterId"
+                value={editWaiterId}
+                onChange={(e) => setEditWaiterId(e.target.value)}
+                autoComplete="off"
+              >
+                <option value="">— Unassigned —</option>
+                {onlineWaiters.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                    {w.online ? ' (online)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="admin_edit_call_status">Status</label>
+              <select
+                id="admin_edit_call_status"
+                name="status"
+                value={editStatus}
+                onChange={(e) => setEditStatus(e.target.value)}
+                autoComplete="off"
+              >
                 <option value="PENDING">PENDING</option>
                 <option value="ACKNOWLEDGED">ACKNOWLEDGED</option>
                 <option value="RESOLVED">RESOLVED</option>
               </select>
             </div>
             <div>
-              <label>Notes (visible to staff only)</label>
+              <label htmlFor="admin_edit_call_notes">Notes (visible to staff only)</label>
               <textarea
+                id="admin_edit_call_notes"
+                name="adminNotes"
                 rows={3}
                 value={editNotes}
                 onChange={(e) => setEditNotes(e.target.value)}
@@ -594,16 +749,42 @@ export function OrdersPage() {
               )}
             </div>
             <div>
-              <label>Status</label>
-              <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
+              <label htmlFor="admin_edit_service_waiter">Assign to Waiter</label>
+              <select
+                id="admin_edit_service_waiter"
+                name="waiterId"
+                value={editWaiterId}
+                onChange={(e) => setEditWaiterId(e.target.value)}
+                autoComplete="off"
+              >
+                <option value="">— Unassigned —</option>
+                {onlineWaiters.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                    {w.online ? ' (online)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="admin_edit_service_status">Status</label>
+              <select
+                id="admin_edit_service_status"
+                name="status"
+                value={editStatus}
+                onChange={(e) => setEditStatus(e.target.value)}
+                autoComplete="off"
+              >
                 <option value="PENDING">PENDING</option>
                 <option value="ACKNOWLEDGED">ACKNOWLEDGED</option>
                 <option value="RESOLVED">RESOLVED</option>
               </select>
             </div>
             <div>
-              <label>Admin Notes (staff only)</label>
+              <label htmlFor="admin_edit_service_notes">Admin Notes (staff only)</label>
               <textarea
+                id="admin_edit_service_notes"
+                name="adminNotes"
                 rows={3}
                 value={editNotes}
                 onChange={(e) => setEditNotes(e.target.value)}
@@ -621,6 +802,46 @@ export function OrdersPage() {
                 className="btn btn-primary flex-1 disabled:opacity-50"
               >
                 {editSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Order Modal */}
+      {cancellingOrderId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-[var(--surface)] border border-[var(--border)] p-6 w-full max-w-md space-y-4">
+            <h3 className="font-bold text-[var(--text)]">Cancel Order</h3>
+            <p className="text-sm text-[var(--muted)]">
+              Provide a reason for cancellation. This will be visible to the customer.
+            </p>
+            <textarea
+              value={cancellationReason}
+              onChange={(e) => setCancellationReason(e.target.value)}
+              placeholder="e.g. Item no longer available, kitchen closing soon…"
+              rows={3}
+              className="w-full bg-[var(--surface2)] border border-[var(--border)] text-sm text-[var(--text)] px-3 py-2 focus:outline-none focus:border-[var(--accent)] resize-none"
+            />
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setCancellingOrderId(null)}
+                className="btn btn-sm border border-[var(--border)] text-[var(--muted)] px-4 py-1.5 text-sm"
+              >
+                Keep Order
+              </button>
+              <button
+                onClick={async () => {
+                  await updateOrderStatus(
+                    cancellingOrderId,
+                    'CANCELLED',
+                    cancellationReason || undefined,
+                  );
+                  setCancellingOrderId(null);
+                }}
+                className="btn btn-sm bg-[var(--danger)] text-white border-transparent px-4 py-1.5 text-sm"
+              >
+                Confirm Cancel
               </button>
             </div>
           </div>

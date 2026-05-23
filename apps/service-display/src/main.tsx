@@ -6,8 +6,20 @@ import { AuthProvider } from './services/auth.tsx';
 import { ThemeProvider } from './context/theme.tsx';
 import './index.css';
 
+if (import.meta.env.DEV) {
+  try {
+    if (window.location.hostname === '127.0.0.1') {
+      window.location.replace(
+        `${window.location.protocol}//localhost:${window.location.port}${window.location.pathname}${window.location.search}${window.location.hash}`,
+      );
+    }
+  } catch {
+    void 0;
+  }
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
+  import.meta.env.DEV ? (
     <ThemeProvider>
       <AuthProvider>
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -15,5 +27,15 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         </BrowserRouter>
       </AuthProvider>
     </ThemeProvider>
-  </React.StrictMode>
+  ) : (
+    <React.StrictMode>
+      <ThemeProvider>
+        <AuthProvider>
+          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <App />
+          </BrowserRouter>
+        </AuthProvider>
+      </ThemeProvider>
+    </React.StrictMode>
+  ),
 );

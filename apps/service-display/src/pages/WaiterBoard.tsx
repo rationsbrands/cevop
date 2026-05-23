@@ -1,15 +1,15 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../services/auth';
 import { useTheme } from '../context/theme';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
-const DEV_SOCKET_URL = 'http://127.0.0.1:4000';
 
 interface TaskItem {
   id: string;
   type: 'WAITER_CALL' | 'SERVICE_REQUEST' | 'ORDER_READY';
   tableLabel: string;
+  section?: { name: string; colour: string | null } | null;
   details: string; // reason, serviceType, or item summary
   notes?: string;
   createdAt: string;
@@ -25,7 +25,7 @@ function elapsed(dateStr: string): string {
   return `${Math.floor(diff / 3600)}h`;
 }
 
-function TimeElapsed({ createdAt }: { createdAt: string }) {
+function TimeElapsed({ createdAt, className }: { createdAt: string; className?: string }) {
   const [, setTick] = useState(0);
   useEffect(() => {
     const i = setInterval(() => setTick((t) => t + 1), 15000);
@@ -35,28 +35,50 @@ function TimeElapsed({ createdAt }: { createdAt: string }) {
   const isUrgent = text.includes('m') && parseInt(text) > 10;
   return (
     <span
-      className={`text-xs font-mono ${isUrgent ? 'text-red-400 font-bold' : 'text-[var(--muted)]'}`}
+      className={`text-[10px] sm:text-xs font-mono ${isUrgent ? 'text-red-400 font-bold' : 'text-[var(--muted)]'} ${className || ''}`}
     >
       {text} ago
     </span>
   );
 }
 
+function getServiceTypeLabel(serviceType: string): string {
+  if (serviceType === 'BILL_REQUEST') return 'BILL REQUEST';
+  return serviceType.toUpperCase();
+}
+
+function getServiceTypeColor(serviceType: string): string {
+  if (serviceType === 'BILL_REQUEST') return 'text-amber-400 border-amber-800';
+  return 'text-purple-400 border-purple-800';
+}
+
 export function WaiterBoard() {
-  const { user, token, logout, silentRefresh } = useAuth();
+  const { user, token, logout, silentRefresh, updateUser } = useAuth();
   const { mode, setMode } = useTheme();
+  const [activeTab, setActiveTab] = useState<'tasks' | 'tables'>('tasks');
+  const [tables, setTables] = useState<any[]>([]);
   const [myTasks, setMyTasks] = useState<TaskItem[]>([]);
   const [unassignedTasks, setUnassignedTasks] = useState<TaskItem[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [shiftBusy, setShiftBusy] = useState(false);
+  const [shiftError, setShiftError] = useState('');
   const socketRef = useRef<Socket | null>(null);
   const tokenRef = useRef(token);
+  const onShiftRef = useRef<boolean>(!!user?.isOnShift);
 
   useEffect(() => {
     tokenRef.current = token;
   }, [token]);
+
+  useEffect(() => {
+    onShiftRef.current = !!user?.isOnShift;
+  }, [user?.isOnShift]);
+
+  const isWaiter = user?.role === 'WAITER';
+  const isOnShift = !!user?.isOnShift;
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
@@ -78,52 +100,69 @@ export function WaiterBoard() {
     }
   }, []);
 
-  function normaliseTask(type: TaskItem['type'], data: any): TaskItem {
-    let details: string;
-    let notes: string;
-    if (type === 'WAITER_CALL') {
-      details = data.reason || 'Customer needs assistance';
-      notes = data.notes || '';
-    } else if (type === 'SERVICE_REQUEST') {
-      details = data.serviceType;
-      notes = data.notes || '';
-    } else {
-      details =
-        data.items?.map((i: any) => `${i.quantity}× ${i.menuItem?.name || '?'}`).join(', ') ||
-        'Order ready';
-      notes = '';
-    }
-    return {
-      id: data.id,
-      type,
-      tableLabel: data.table?.label || data.tableId,
-      details,
-      notes,
-      createdAt: data.createdAt,
-      assignedTo: data.assignedTo ?? data.assignedWaiter ?? null,
-      status: data.status,
-      originalData: data,
-    };
-  }
+  const normaliseTask = useCallback(
+    (type: TaskItem['type'], data: any): TaskItem => {
+      let details: string;
+      let notes: string;
+      if (type === 'WAITER_CALL') {
+        details = data.reason || 'Customer needs assistance';
+        notes = data.notes || '';
+      } else if (type === 'SERVICE_REQUEST') {
+        details = data.serviceType;
+        notes = data.notes || '';
+      } else {
+        details =
+          data.items?.map((i: any) => `${i.quantity}× ${i.menuItem?.name || '?'}`).join(', ') ||
+          'Order ready';
+        notes = '';
+      }
+      const tableId = data.table?.id ?? data.tableId;
+      const section = data.table?.section ?? tables.find((t) => t.id === tableId)?.section ?? null;
+      return {
+        id: data.id,
+        type,
+        tableLabel: data.table?.label || data.tableId,
+        section,
+        details,
+        notes,
+        createdAt: data.createdAt,
+        assignedTo: data.assignedTo ?? data.assignedWaiter ?? null,
+        status: data.status,
+        originalData: data,
+      };
+    },
+    [tables],
+  );
 
   const loadTasks = useCallback(async () => {
+    if (isWaiter && !isOnShift) {
+      setMyTasks([]);
+      setUnassignedTasks([]);
+      return;
+    }
     if (!token) return;
     const freshToken = await silentRefresh();
     if (!freshToken) return;
     const h = { Authorization: `Bearer ${freshToken}` };
     const bq = user?.branchId ? `&branchId=${user.branchId}` : '';
 
-    const [callsRes, serviceRes, ordersRes] = await Promise.all([
+    const [callsRes, serviceRes, ordersRes, tablesRes] = await Promise.all([
       fetch(`${API_BASE}/api/waiter-calls?status=PENDING${bq}`, { headers: h }),
       fetch(`${API_BASE}/api/service-requests?status=PENDING${bq}`, { headers: h }),
       fetch(`${API_BASE}/api/orders?status=READY&limit=50${bq}`, { headers: h }),
+      fetch(`${API_BASE}/api/tables?_=${Date.now()}`, { headers: h }),
     ]);
 
-    const [callsData, serviceData, ordersData] = await Promise.all([
+    const [callsData, serviceData, ordersData, tablesData] = await Promise.all([
       callsRes.json(),
       serviceRes.json(),
       ordersRes.json(),
+      tablesRes.json(),
     ]);
+
+    if (tablesData.success) {
+      setTables(tablesData.data);
+    }
 
     const allTasks: TaskItem[] = [];
     if (callsData.success) {
@@ -138,9 +177,12 @@ export function WaiterBoard() {
         .forEach((o: any) => allTasks.push(normaliseTask('ORDER_READY', o)));
     }
 
-    setMyTasks(allTasks.filter((t) => t.assignedTo === user?.id));
-    setUnassignedTasks(allTasks.filter((t) => t.assignedTo === null));
-  }, [token, user, silentRefresh]);
+    // Deduplicate allTasks by ID to prevent React key warnings
+    const uniqueTasks = Array.from(new Map(allTasks.map((t) => [t.id, t])).values());
+
+    setMyTasks(uniqueTasks.filter((t) => t.assignedTo === user?.id));
+    setUnassignedTasks(uniqueTasks.filter((t) => t.assignedTo === null));
+  }, [isOnShift, isWaiter, normaliseTask, token, user, silentRefresh]);
 
   useEffect(() => {
     if (!token) return;
@@ -153,7 +195,7 @@ export function WaiterBoard() {
   // Socket setup
   useEffect(() => {
     if (!user) return;
-    const SOCKET_URL = import.meta.env.DEV ? DEV_SOCKET_URL : API_BASE || window.location.origin;
+    const SOCKET_URL = API_BASE || window.location.origin;
     const socket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
       auth: (cb) => {
@@ -179,6 +221,7 @@ export function WaiterBoard() {
 
     // New task assigned directly to this waiter
     socket.on('TASK_ASSIGNED', ({ type, task }: { type: TaskItem['type']; task: any }) => {
+      if (isWaiter && !onShiftRef.current) return;
       playAlert();
       const normalised = normaliseTask(type, task);
       setMyTasks((prev) => [normalised, ...prev.filter((t) => t.id !== normalised.id)]);
@@ -187,6 +230,7 @@ export function WaiterBoard() {
 
     // Task available for anyone to claim
     socket.on('TASK_UNASSIGNED', ({ type, task }: { type: TaskItem['type']; task: any }) => {
+      if (isWaiter && !onShiftRef.current) return;
       playAlert();
       const normalised = normaliseTask(type, task);
       setUnassignedTasks((prev) => [normalised, ...prev.filter((t) => t.id !== normalised.id)]);
@@ -194,6 +238,7 @@ export function WaiterBoard() {
 
     // Another waiter claimed a task — remove from unassigned pool
     socket.on('TASK_CLAIMED', ({ task }: { task: any }) => {
+      if (isWaiter && !onShiftRef.current) return;
       setUnassignedTasks((prev) => prev.filter((t) => t.id !== task.id));
       // If claimed by me, move to my tasks
       if (task.assignedTo === user.id || task.assignedWaiter === user.id) {
@@ -208,28 +253,90 @@ export function WaiterBoard() {
 
     // Task resolved (by anyone) — remove from all lists
     socket.on('WAITER_CALL_UPDATED', (call: any) => {
+      if (isWaiter && !onShiftRef.current) return;
       if (call.status === 'RESOLVED') {
         setMyTasks((prev) => prev.filter((t) => t.id !== call.id));
         setUnassignedTasks((prev) => prev.filter((t) => t.id !== call.id));
       }
     });
     socket.on('SERVICE_REQUEST_UPDATED', (req: any) => {
+      if (isWaiter && !onShiftRef.current) return;
       if (req.status === 'RESOLVED') {
         setMyTasks((prev) => prev.filter((t) => t.id !== req.id));
         setUnassignedTasks((prev) => prev.filter((t) => t.id !== req.id));
       }
     });
     socket.on('ORDER_UPDATED', (order: any) => {
+      if (isWaiter && !onShiftRef.current) return;
       if (order.status === 'SERVED' || order.status === 'CANCELLED') {
         setMyTasks((prev) => prev.filter((t) => t.id !== order.id));
         setUnassignedTasks((prev) => prev.filter((t) => t.id !== order.id));
       }
     });
 
+    socket.on('TABLE_STATUS_CHANGED', ({ tableId, status }) => {
+      setTables((prev) => prev.map((t) => (t.id === tableId ? { ...t, status } : t)));
+    });
+
+    socket.on('SESSION_OPENED', ({ tableId, sessionId }) => {
+      setTables((prev) =>
+        prev.map((t) => (t.id === tableId ? { ...t, activeSessionId: sessionId } : t)),
+      );
+    });
+
+    socket.on('SESSION_CLOSED', ({ tableId }) => {
+      setTables((prev) =>
+        prev.map((t) => (t.id === tableId ? { ...t, activeSessionId: null } : t)),
+      );
+    });
+
     return () => {
       socket.disconnect();
     };
-  }, [user, playAlert]);
+  }, [isWaiter, normaliseTask, user, playAlert]);
+
+  async function startShift() {
+    if (!isWaiter) return;
+    if (shiftBusy) return;
+    setShiftError('');
+    if (!socketRef.current || !socketConnected) {
+      setShiftError('Not connected. Check your internet connection and try again.');
+      return;
+    }
+    setShiftBusy(true);
+    socketRef.current.emit('SHIFT_START', null, (res: any) => {
+      if (!res?.success) {
+        setShiftError(res?.error || 'Failed to start shift');
+        setShiftBusy(false);
+        return;
+      }
+      updateUser({ isOnShift: true });
+      setShiftBusy(false);
+      loadTasks().catch(() => void 0);
+    });
+  }
+
+  async function endShift() {
+    if (!isWaiter) return;
+    if (shiftBusy) return;
+    setShiftError('');
+    if (!socketRef.current || !socketConnected) {
+      setShiftError('Not connected. Check your internet connection and try again.');
+      return;
+    }
+    setShiftBusy(true);
+    socketRef.current.emit('SHIFT_END', null, (res: any) => {
+      if (!res?.success) {
+        setShiftError(res?.error || 'Failed to end shift');
+        setShiftBusy(false);
+        return;
+      }
+      updateUser({ isOnShift: false });
+      setMyTasks([]);
+      setUnassignedTasks([]);
+      setShiftBusy(false);
+    });
+  }
 
   // Online/offline
   useEffect(() => {
@@ -300,7 +407,10 @@ export function WaiterBoard() {
       const res = await fetch(url, { method: 'PATCH', headers: h });
       if (res.ok) {
         setUnassignedTasks((prev) => prev.filter((t) => t.id !== task.id));
-        setMyTasks((prev) => [{ ...task, assignedTo: user?.id ?? null }, ...prev]);
+        setMyTasks((prev) => [
+          { ...task, assignedTo: user?.id ?? null },
+          ...prev.filter((t) => t.id !== task.id),
+        ]);
       } else if (res.status === 404) {
         await loadTasks();
       }
@@ -313,21 +423,42 @@ export function WaiterBoard() {
     }
   }
 
+  async function clearTable(sessionId: string) {
+    if (updatingItems.has(sessionId)) return;
+    setUpdatingItems((prev) => new Set(prev).add(sessionId));
+    try {
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/close`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ nextStatus: 'CLEANING' }),
+      });
+      if (!res.ok) await loadTasks();
+    } finally {
+      setUpdatingItems((prev) => {
+        const n = new Set(prev);
+        n.delete(sessionId);
+        return n;
+      });
+    }
+  }
+
   const TYPE_CONFIG = {
     WAITER_CALL: {
       label: 'WAITER CALL',
-      color: 'border-yellow-600 bg-yellow-900/10',
-      badge: 'text-amber-600',
+      color: 'border-[var(--preparing)] bg-[var(--surface2)]',
+      badge: 'text-[var(--preparing)]',
     },
     SERVICE_REQUEST: {
       label: 'SERVICE REQUEST',
-      color: 'border-purple-600 bg-purple-900/10',
-      badge: 'text-purple-300',
+      color: 'border-[var(--accent)] bg-[var(--surface2)]',
+      badge: 'text-[var(--accent)]',
     },
     ORDER_READY: {
       label: 'ORDER READY',
-      color: 'border-green-600 bg-green-900/10',
-      badge: 'text-emerald-600',
+      color: 'border-[var(--ready)] bg-[var(--surface2)]',
+      badge: 'text-[var(--ready)]',
     },
   };
 
@@ -369,17 +500,36 @@ export function WaiterBoard() {
     return (
       <div className={`border p-3 space-y-2 ${cfg.color}`}>
         <div className="flex items-start justify-between gap-2">
-          <div>
+          <div className="min-w-0">
             <p className={`text-[10px] font-bold tracking-widest uppercase ${cfg.badge}`}>
               {cfg.label}
             </p>
             <p className="font-bold text-lg text-[var(--text)] leading-tight mt-0.5">
               {task.tableLabel}
             </p>
+            {task.section && (
+              <span
+                className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 border inline-block mt-1"
+                style={{
+                  borderColor: task.section.colour ?? 'var(--border)',
+                  color: task.section.colour ?? 'var(--muted)',
+                }}
+              >
+                {task.section.name}
+              </span>
+            )}
           </div>
-          <TimeElapsed createdAt={task.createdAt} />
+          <TimeElapsed createdAt={task.createdAt} className="shrink-0" />
         </div>
-        <p className="text-sm text-[var(--text)]">{task.details}</p>
+        {task.type === 'SERVICE_REQUEST' ? (
+          <p
+            className={`text-[10px] font-bold tracking-widest px-1.5 py-0.5 border inline-block ${getServiceTypeColor(task.details)}`}
+          >
+            {getServiceTypeLabel(task.details)}
+          </p>
+        ) : (
+          <p className="text-sm text-[var(--text)]">{task.details}</p>
+        )}
         {task.notes && <p className="text-xs text-[var(--muted)] italic">"{task.notes}"</p>}
         <button
           onClick={action}
@@ -393,96 +543,207 @@ export function WaiterBoard() {
   }
 
   return (
-    <div className="h-dvh flex flex-col bg-[var(--bg)] overflow-hidden">
+    <div className="h-dvh flex flex-col bg-[var(--bg)] overflow-hidden relative">
+      <div className="text-texture" />
       {/* Header */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-lg sm:text-2xl text-[var(--accent)] flex items-baseline gap-2 shrink-0">
+      <header className="flex items-center justify-between px-2 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-1.5 overflow-hidden relative z-20">
+        <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 shrink">
+          <h1 className="text-sm sm:text-2xl text-[var(--accent)] flex items-baseline gap-1 shrink-0">
             <span className="brand-mark">CEVOP</span>
-            <span className="font-display">WAITER</span>
+            <span className="font-display hidden xs:inline">WAITER</span>
           </h1>
           <div
-            className={`flex items-center gap-1.5 text-[10px] sm:text-xs px-2 py-1 border shrink-0 ${isOnline && socketConnected ? 'border-green-800 text-green-400 bg-green-900/20' : 'border-red-800 text-red-400 bg-red-900/20'}`}
+            className={`flex items-center gap-1 sm:gap-1.5 text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 font-mono ${
+              isOnline && socketConnected
+                ? 'border-[var(--ready)] text-[var(--ready)]'
+                : 'border-[var(--danger)] text-[var(--danger)]'
+            }`}
           >
             <span
-              className={`w-1.5 h-1.5 rounded-full ${isOnline && socketConnected ? 'bg-green-400' : 'bg-red-400'}`}
+              className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${
+                isOnline && socketConnected ? 'bg-[var(--ready)]' : 'bg-[var(--danger)]'
+              }`}
             />
             {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
           </div>
         </div>
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          <span className="text-[var(--muted)] text-xs max-w-[110px] sm:max-w-none truncate">
-            {user?.name}
-          </span>
+
+        <div className="flex items-center gap-1 sm:gap-3 shrink-0 ml-auto">
+          {user?.staffCode && (
+            <span className="font-mono text-[9px] sm:text-[10px] border border-[var(--border)] px-1.5 py-0.5 text-[var(--muted)] hidden xxs:inline-block rounded-sm">
+              {user.staffCode}
+            </span>
+          )}
+          {isWaiter && (
+            <button
+              onClick={isOnShift ? endShift : startShift}
+              disabled={shiftBusy || !socketConnected}
+              className={`text-[9px] sm:text-xs border px-2 sm:px-3 py-1 font-bold tracking-tight disabled:opacity-50 whitespace-nowrap rounded-full font-display ${
+                isOnShift
+                  ? 'border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white'
+                  : 'border-[var(--ready)] text-[var(--ready)] hover:bg-[var(--ready)] hover:text-black'
+              }`}
+            >
+              {shiftBusy ? '...' : isOnShift ? 'END' : 'START'}
+            </button>
+          )}
           <button
             onClick={() => setMode(nextThemeMode)}
-            className="w-8 h-8 rounded-full border border-[var(--border)] flex items-center justify-center text-[10px] font-bold"
+            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-[var(--border)] flex items-center justify-center text-[9px] sm:text-[10px] font-black shrink-0 font-display"
             title={`Theme: ${themeLabel}`}
           >
             {themeLabel}
           </button>
           <button
             onClick={logout}
-            className="text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 py-1"
+            className="text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 shrink-0 rounded-full font-bold font-display"
           >
-            LOGOUT
+            OUT
           </button>
         </div>
       </header>
 
-      {/* Content — two columns */}
-      <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-2 divide-x divide-[var(--border)] overflow-y-auto md:overflow-hidden">
-        {/* My Tasks */}
-        <div className="flex flex-col min-h-[400px] md:min-h-0">
-          <div className="px-3 py-2 border-b border-[var(--border)] shrink-0 sticky top-0 bg-[var(--surface)] z-10">
-            <span className="font-bold text-xs tracking-widest text-[var(--accent)] uppercase">
-              My Tasks
-            </span>
-            <span className="ml-2 text-[var(--muted)] text-xs">({myTasks.length})</span>
-          </div>
-          <div className="flex-1 overflow-y-visible md:overflow-y-auto p-3 space-y-3">
-            {myTasks.length === 0 && (
-              <div className="text-center text-[var(--muted)] text-xs pt-12">
-                <p className="text-2xl mb-2">✓</p>
-                <p>No active tasks</p>
-              </div>
-            )}
-            {myTasks.map((task) => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                action={() => resolveTask(task)}
-                actionLabel={task.type === 'ORDER_READY' ? '✓ DELIVERED' : '✓ DONE'}
-              />
-            ))}
-          </div>
+      {shiftError && (
+        <div className="px-4 py-2 bg-red-900/20 border-b border-red-800 text-red-400 text-xs">
+          {shiftError}
         </div>
+      )}
 
-        {/* Unassigned Tasks */}
-        <div className="flex flex-col min-h-[400px] md:min-h-0">
-          <div className="px-3 py-2 border-b border-[var(--border)] shrink-0 sticky top-0 bg-[var(--surface)] z-10">
-            <span className="font-bold text-xs tracking-widest text-[var(--muted)] uppercase">
-              Available
-            </span>
-            <span className="ml-2 text-[var(--muted)] text-xs">({unassignedTasks.length})</span>
+      {/* Tabs */}
+      <div className="flex border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
+        <button
+          onClick={() => setActiveTab('tasks')}
+          className={`px-4 sm:px-6 py-2.5 text-xs sm:text-sm font-bold tracking-wider transition-all ${activeTab === 'tasks' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
+        >
+          TASKS
+        </button>
+        <button
+          onClick={() => setActiveTab('tables')}
+          className={`px-4 sm:px-6 py-2.5 text-xs sm:text-sm font-bold tracking-wider transition-all ${activeTab === 'tables' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
+        >
+          TABLES
+        </button>
+      </div>
+
+      {/* Content */}
+      {activeTab === 'tasks' ? (
+        <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-[var(--border)] overflow-y-auto md:overflow-hidden">
+          {/* My Tasks */}
+          <div className="flex flex-col min-h-[400px] md:min-h-0">
+            <div className="px-3 py-2 border-b border-[var(--border)] shrink-0 sticky top-0 bg-[var(--surface)] z-10">
+              <span className="font-bold text-xs tracking-widest text-[var(--accent)] uppercase">
+                My Tasks
+              </span>
+              <span className="ml-2 text-[var(--muted)] text-xs">({myTasks.length})</span>
+            </div>
+            <div className="flex-1 overflow-y-visible md:overflow-y-auto p-3 space-y-3">
+              {isWaiter && !isOnShift && (
+                <div className="text-center text-[var(--muted)] text-xs pt-12">
+                  <p>Start shift to begin receiving tasks</p>
+                </div>
+              )}
+              {(!isWaiter || isOnShift) && myTasks.length === 0 && (
+                <div className="text-center text-[var(--muted)] text-xs pt-12">
+                  <p className="text-2xl mb-2">✓</p>
+                  <p>No active tasks</p>
+                </div>
+              )}
+              {(!isWaiter || isOnShift) &&
+                myTasks.map((task) => (
+                  <TaskCard
+                    key={`${task.type}-${task.id}`}
+                    task={task}
+                    action={() => resolveTask(task)}
+                    actionLabel={task.type === 'ORDER_READY' ? '✓ DELIVERED' : '✓ DONE'}
+                  />
+                ))}
+            </div>
           </div>
-          <div className="flex-1 overflow-y-visible md:overflow-y-auto p-3 space-y-3">
-            {unassignedTasks.length === 0 && (
-              <div className="text-center text-[var(--muted)] text-xs pt-12">
-                <p>No unassigned tasks</p>
-              </div>
-            )}
-            {unassignedTasks.map((task) => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                action={() => claimTask(task)}
-                actionLabel="CLAIM"
-              />
-            ))}
+
+          {/* Unassigned Tasks */}
+          <div className="flex flex-col min-h-[400px] md:min-h-0">
+            <div className="px-3 py-2 border-b border-[var(--border)] shrink-0 sticky top-0 bg-[var(--surface)] z-10">
+              <span className="font-bold text-xs tracking-widest text-[var(--muted)] uppercase">
+                Available
+              </span>
+              <span className="ml-2 text-[var(--muted)] text-xs">({unassignedTasks.length})</span>
+            </div>
+            <div className="flex-1 overflow-y-visible md:overflow-y-auto p-3 space-y-3">
+              {isWaiter && !isOnShift && (
+                <div className="text-center text-[var(--muted)] text-xs pt-12">
+                  <p>No tasks while off shift</p>
+                </div>
+              )}
+              {(!isWaiter || isOnShift) && unassignedTasks.length === 0 && (
+                <div className="text-center text-[var(--muted)] text-xs pt-12">
+                  <p>No unassigned tasks</p>
+                </div>
+              )}
+              {(!isWaiter || isOnShift) &&
+                unassignedTasks.map((task) => (
+                  <TaskCard
+                    key={`${task.type}-${task.id}`}
+                    task={task}
+                    action={() => claimTask(task)}
+                    actionLabel="CLAIM"
+                  />
+                ))}
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 content-start">
+          {isWaiter && !isOnShift && (
+            <div className="col-span-full text-center text-[var(--muted)] text-sm pt-8">
+              Start shift to manage tables
+            </div>
+          )}
+          {(!isWaiter || isOnShift) &&
+            tables
+              .filter((t) => t.isActive)
+              .map((t) => (
+                <div
+                  key={t.id}
+                  className={`border p-3 space-y-3 flex flex-col justify-between ${
+                    t.status === 'EMPTY'
+                      ? 'border-[var(--border)] bg-[var(--surface2)]'
+                      : t.status === 'OCCUPIED'
+                        ? 'border-[var(--preparing)] bg-[var(--surface2)]'
+                        : 'border-[var(--accent)] bg-[var(--surface2)]'
+                  }`}
+                >
+                  <div>
+                    <div className="font-bold text-lg text-[var(--text)]">{t.label}</div>
+                    <div
+                      className={`text-xs font-bold tracking-widest uppercase mt-1 ${
+                        t.status === 'EMPTY'
+                          ? 'text-[var(--muted)]'
+                          : t.status === 'OCCUPIED'
+                            ? 'text-[var(--preparing)]'
+                            : 'text-[var(--accent)]'
+                      }`}
+                    >
+                      {t.status}
+                    </div>
+                  </div>
+                  {t.activeSessionId && (
+                    <button
+                      onClick={() => clearTable(t.activeSessionId)}
+                      disabled={updatingItems.has(t.activeSessionId)}
+                      className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50"
+                    >
+                      {updatingItems.has(t.activeSessionId) ? 'CLEARING...' : 'CLEAR TABLE'}
+                    </button>
+                  )}
+                </div>
+              ))}
+          {(!isWaiter || isOnShift) && tables.filter((t) => t.isActive).length === 0 && (
+            <div className="col-span-full text-center text-[var(--muted)] text-sm pt-8">
+              No tables found
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

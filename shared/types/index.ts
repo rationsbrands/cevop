@@ -3,7 +3,18 @@
 // ─────────────────────────────────────────────
 
 export type OrderStatus = 'RECEIVED' | 'PREPARING' | 'READY' | 'SERVED' | 'CANCELLED';
-export type UserRole = 'SUPERADMIN' | 'ADMIN' | 'BRANCH_ADMIN' | 'SERVICE' | 'WAITER';
+export type UserRole =
+  | 'SUPERADMIN'
+  | 'ORG_OWNER'
+  | 'ADMIN'
+  | 'ORG_MANAGER'
+  | 'ORG_FINANCE'
+  | 'ORG_AUDITOR'
+  | 'BRANCH_ADMIN'
+  | 'BRANCH_FINANCE'
+  | 'SERVICE'
+  | 'WAITER'
+  | 'KITCHEN';
 export type WaiterCallStatus = 'PENDING' | 'ACKNOWLEDGED' | 'RESOLVED';
 export type ServiceRequestStatus = 'PENDING' | 'ACKNOWLEDGED' | 'RESOLVED';
 
@@ -158,14 +169,17 @@ export interface CartItem {
   notes?: string;
 }
 
-export interface AuthPayload {
+export type OpsRole = 'SUPER' | 'SUPPORT' | 'BILLING' | 'READONLY';
+
+export type AuthPayload = {
   userId: string;
   organizationId: string;
   branchId?: string;
   role: string;
+  opsRole?: OpsRole;
   plan?: string;
   impersonating?: boolean;
-}
+};
 
 export interface ApiResponse<T = unknown> {
   success: boolean;

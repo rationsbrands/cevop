@@ -1,10 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { fetchOrderStatus, API_BASE } from '../services/api';
 import { formatPrice } from '../../../../shared/utils/currency';
-
-const DEV_SOCKET_URL = 'http://127.0.0.1:4000';
 
 interface OrderItem {
   id: string;
@@ -12,6 +10,8 @@ interface OrderItem {
   unitPrice: number;
   notes?: string;
   menuItem?: { name: string };
+  cancelledAt?: string | null;
+  cancelReason?: string;
 }
 interface Order {
   id: string;
@@ -23,6 +23,7 @@ interface Order {
   organizationId: string;
   tableId: string;
   branchId?: string | null;
+  cancellationReason?: string;
 }
 
 const STATUS_STEPS = ['RECEIVED', 'PREPARING', 'READY', 'SERVED'];
@@ -48,6 +49,7 @@ export function OrderStatusPage() {
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [cancelledItemAlert, setCancelledItemAlert] = useState<string | null>(null);
 
   function removeOrderFromHistory(id: string) {
     try {
@@ -96,17 +98,12 @@ export function OrderStatusPage() {
 
   useEffect(() => {
     if (!orderId) return;
-    if (!order?.organizationId) return;
 
-    const SOCKET_URL = import.meta.env.DEV ? DEV_SOCKET_URL : API_BASE || window.location.origin;
+    const SOCKET_URL = API_BASE || window.location.origin;
     const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'] });
 
     socket.on('connect', () => {
-      if (order.branchId) {
-        socket.emit('JOIN_BRANCH', { orgId: order.organizationId, branchId: order.branchId });
-      } else {
-        socket.emit('JOIN_ORG', order.organizationId);
-      }
+      socket.emit('JOIN_ORDER', { orderId });
     });
 
     socket.on('ORDER_UPDATED', (updated: Order) => {
@@ -126,12 +123,60 @@ export function OrderStatusPage() {
       }
     });
 
+    socket.on(
+      'ORDER_ITEM_CANCELLED',
+      ({
+        itemName,
+        allCancelled,
+      }: {
+        itemName: string;
+        reason: string;
+        newTotal: number;
+        allCancelled: boolean;
+      }) => {
+        setCancelledItemAlert(
+          allCancelled
+            ? 'All items in your order are unavailable. Your order has been cancelled.'
+            : `${itemName} is not available at this time.`,
+        );
+        // Refresh the order to get updated total and items
+        if (orderId) {
+          fetchOrderStatus(orderId)
+            .then(setOrder)
+            .catch(() => {});
+        }
+        // Auto-dismiss after 8 seconds
+        setTimeout(() => setCancelledItemAlert(null), 8000);
+      },
+    );
+
     return () => {
       socket.disconnect();
     };
-  }, [orderId, order?.organizationId, order?.branchId]);
+  }, [orderId]);
 
   const currentStepIndex = order ? STATUS_STEPS.indexOf(order.status) : -1;
+
+  function goBack() {
+    // Use browser history if available
+    if (window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+    // Fallback: reconstruct the menu URL from localStorage
+    try {
+      const orgId = localStorage.getItem('lastOrderOrgId');
+      const tableId = localStorage.getItem('lastOrderTableId');
+      if (orgId && tableId) {
+        navigate(`/menu/${orgId}/${tableId}`, { replace: true });
+        return;
+      }
+    } catch {
+      void 0;
+    }
+    // Last resort: go to app root
+    navigate('/', { replace: true });
+  }
 
   if (loading)
     return (
@@ -145,7 +190,7 @@ export function OrderStatusPage() {
       <div className="min-h-dvh bg-[var(--bg)] flex items-center justify-center p-6 text-center">
         <div className="space-y-4">
           <p className="text-[var(--text)]">{error || 'Order not found'}</p>
-          <button onClick={() => navigate(-1)} className="btn-secondary">
+          <button onClick={goBack} className="btn-secondary">
             Go Back
           </button>
         </div>
@@ -156,18 +201,21 @@ export function OrderStatusPage() {
     <div className="min-h-dvh bg-[var(--bg)] flex flex-col">
       <header className="px-4 pt-6 pb-4 border-b border-[var(--border)] safe-top">
         <button
-          onClick={() => navigate(-1)}
+          onClick={goBack}
           className="text-[var(--muted)] text-sm mb-3 flex items-center gap-1 hover:text-[var(--text)]"
         >
           ← Back to menu
         </button>
         <h1 className="font-display text-3xl text-[var(--text)]">ORDER STATUS</h1>
-        <p className="text-[var(--muted)] text-sm">
-          #{order.id.slice(-8).toUpperCase()} · {order.table?.label}
-        </p>
+        <p className="text-[var(--muted)] text-sm">{order.table?.label || 'Table'}</p>
       </header>
 
       <main className="flex-1 p-4 space-y-6">
+        {cancelledItemAlert && (
+          <div className="p-3 border border-[var(--danger)]/40 bg-[var(--danger)]/5 animate-fade-in">
+            <p className="text-sm text-[var(--danger)]">{cancelledItemAlert}</p>
+          </div>
+        )}
         {/* Status hero */}
         <div className="card p-6 text-center space-y-2">
           <div
@@ -190,6 +238,16 @@ export function OrderStatusPage() {
           )}
           {order.status === 'SERVED' && (
             <p className="text-[var(--muted)] text-sm">Enjoy your meal!</p>
+          )}
+          {order.status === 'CANCELLED' && (
+            <div className="mt-3 p-3 border border-[var(--danger)]/30 bg-[var(--danger)]/5">
+              <p className="text-xs font-bold text-[var(--danger)] uppercase tracking-wider mb-1">
+                Order Cancelled
+              </p>
+              <p className="text-sm text-[var(--muted)]">
+                {order.cancellationReason || 'This order was cancelled by the restaurant.'}
+              </p>
+            </div>
           )}
         </div>
 
@@ -236,14 +294,28 @@ export function OrderStatusPage() {
           </div>
           <div className="divide-y divide-[var(--border)]">
             {order.items.map((item) => (
-              <div key={item.id} className="px-4 py-3 flex items-center justify-between">
-                <div>
-                  <span className="font-medium text-sm">
+              <div
+                key={item.id}
+                className={`px-4 py-3 flex items-center justify-between ${item.cancelledAt ? 'opacity-50' : ''}`}
+              >
+                <div className="min-w-0">
+                  <span
+                    className={`font-medium text-sm truncate block ${item.cancelledAt ? 'line-through' : ''}`}
+                  >
                     {item.quantity}× {item.menuItem?.name || '—'}
                   </span>
-                  {item.notes && <p className="text-[var(--muted)] text-xs mt-0.5">{item.notes}</p>}
+                  {item.notes && !item.cancelledAt && (
+                    <p className="text-[var(--muted)] text-xs mt-0.5 truncate">{item.notes}</p>
+                  )}
+                  {item.cancelledAt && (
+                    <p className="text-[var(--danger)] text-[10px] font-bold uppercase tracking-wider mt-0.5">
+                      Not available at this time
+                    </p>
+                  )}
                 </div>
-                <span className="text-[var(--accent)] text-sm font-semibold">
+                <span
+                  className={`text-[var(--accent)] text-sm font-semibold shrink-0 ${item.cancelledAt ? 'invisible' : ''}`}
+                >
                   {formatPrice(item.unitPrice * item.quantity)}
                 </span>
               </div>

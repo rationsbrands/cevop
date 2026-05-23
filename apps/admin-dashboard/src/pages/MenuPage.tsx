@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useApi } from '../context/auth';
+import { useApi, useAuth } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
 
 interface Category {
@@ -23,7 +23,9 @@ interface MenuItem {
 type ModalMode = 'add-cat' | 'edit-cat' | 'add-item' | 'edit-item' | null;
 
 export function MenuPage() {
+  const { user } = useAuth();
   const api = useApi();
+  const currency = user?.organization?.currency ?? 'NGN';
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<ModalMode>(null);
@@ -60,6 +62,11 @@ export function MenuPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    if (!api.effectiveBranchId) {
+      setCategories([]);
+      setLoading(false);
+      return;
+    }
     const res = await api.get('/api/menu');
     if (res.success) {
       setCategories(res.data);
@@ -217,12 +224,31 @@ export function MenuPage() {
     load();
   }
 
+  async function bulkToggleCategory(catId: string, isAvailable: boolean) {
+    if (
+      !confirm(`Mark all items in this category as ${isAvailable ? 'AVAILABLE' : 'UNAVAILABLE'}?`)
+    )
+      return;
+    await api.patch(`/api/menu/categories/${catId}/bulk-toggle`, { isAvailable });
+    load();
+  }
+
   const currentCat = categories.find((c) => c.id === activeCat);
 
   if (loading)
     return (
       <div className="flex items-center justify-center h-48">
         <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+
+  if (!api.effectiveBranchId)
+    return (
+      <div className="card p-6">
+        <h1 className="font-display text-3xl mb-2">MENU</h1>
+        <p className="text-[var(--muted)] text-sm">
+          Select a branch to manage menu items for that branch.
+        </p>
       </div>
     );
 
@@ -333,6 +359,18 @@ export function MenuPage() {
                     Delete
                   </button>
                   <button
+                    className="btn btn-secondary btn-sm shrink-0"
+                    onClick={() => bulkToggleCategory(currentCat.id, true)}
+                  >
+                    Enable All
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm shrink-0"
+                    onClick={() => bulkToggleCategory(currentCat.id, false)}
+                  >
+                    Disable All
+                  </button>
+                  <button
                     className="btn btn-primary btn-sm shrink-0"
                     onClick={() => openAddItem(currentCat.id)}
                   >
@@ -426,7 +464,7 @@ export function MenuPage() {
                           {item.description || '—'}
                         </td>
                         <td className="text-[var(--accent)] font-semibold">
-                          {formatPrice(item.price)}
+                          {formatPrice(item.price, currency)}
                         </td>
                         <td>
                           <button
@@ -486,23 +524,30 @@ export function MenuPage() {
             {(modal === 'add-cat' || modal === 'edit-cat') && (
               <div className="space-y-3">
                 <div>
-                  <label>Name *</label>
+                  <label htmlFor="menu_cat_name">Name *</label>
                   <input
+                    id="menu_cat_name"
+                    name="name"
                     value={catForm.name}
                     onChange={(e) => setCatForm({ ...catForm, name: e.target.value })}
+                    autoComplete="off"
                   />
                 </div>
                 <div>
-                  <label>Description</label>
+                  <label htmlFor="menu_cat_description">Description</label>
                   <input
+                    id="menu_cat_description"
+                    name="description"
                     value={catForm.description}
                     onChange={(e) => setCatForm({ ...catForm, description: e.target.value })}
+                    autoComplete="off"
                   />
                 </div>
                 <div className="flex items-center gap-2">
                   <input
                     type="checkbox"
                     id="ca"
+                    name="isActive"
                     checked={catForm.isActive}
                     onChange={(e) => setCatForm({ ...catForm, isActive: e.target.checked })}
                     className="w-auto"
@@ -516,36 +561,48 @@ export function MenuPage() {
             {(modal === 'add-item' || modal === 'edit-item') && (
               <div className="space-y-3">
                 <div>
-                  <label>Name *</label>
+                  <label htmlFor="menu_item_name">Name *</label>
                   <input
+                    id="menu_item_name"
+                    name="name"
                     value={itemForm.name}
                     onChange={(e) => setItemForm({ ...itemForm, name: e.target.value })}
+                    autoComplete="off"
                   />
                 </div>
                 <div>
-                  <label>Description</label>
+                  <label htmlFor="menu_item_description">Description</label>
                   <textarea
+                    id="menu_item_description"
+                    name="description"
                     rows={2}
                     value={itemForm.description}
                     onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })}
                     className="resize-none"
+                    autoComplete="off"
                   />
                 </div>
                 <div>
-                  <label>Price *</label>
+                  <label htmlFor="menu_item_price">Price *</label>
                   <input
+                    id="menu_item_price"
+                    name="price"
                     type="number"
                     step="0.01"
                     min="0"
                     value={itemForm.price}
                     onChange={(e) => setItemForm({ ...itemForm, price: e.target.value })}
+                    autoComplete="off"
                   />
                 </div>
                 <div>
-                  <label>Category</label>
+                  <label htmlFor="menu_item_category">Category</label>
                   <select
+                    id="menu_item_category"
+                    name="categoryId"
                     value={itemForm.categoryId}
                     onChange={(e) => setItemForm({ ...itemForm, categoryId: e.target.value })}
+                    autoComplete="off"
                   >
                     <option value="">Select</option>
                     {categories.map((c) => (
@@ -559,6 +616,7 @@ export function MenuPage() {
                   <input
                     type="checkbox"
                     id="ia"
+                    name="isAvailable"
                     checked={itemForm.isAvailable}
                     onChange={(e) => setItemForm({ ...itemForm, isAvailable: e.target.checked })}
                     className="w-auto"

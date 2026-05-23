@@ -8,6 +8,10 @@ interface Table {
   isActive: boolean;
   organizationId: string;
   branchId: string | null;
+  status: string;
+  activeSessionId: string | null;
+  sectionId: string | null;
+  section: { id: string; name: string; colour: string | null } | null;
 }
 interface QREntry {
   tableId: string;
@@ -25,10 +29,11 @@ const PWA_URL =
 export function TablesPage() {
   const api = useApi();
   const [tables, setTables] = useState<Table[]>([]);
+  const [, setSections] = useState<{ id: string; name: string }[]>([]);
   const [qrCodes, setQrCodes] = useState<QREntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState({ label: '', number: '' });
+  const [form, setForm] = useState({ label: '', number: '', sectionId: '' });
   const [editingTableId, setEditingTableId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [qrLoading, setQrLoading] = useState(false);
@@ -36,8 +41,14 @@ export function TablesPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await api.get('/api/tables');
+    if (!api.effectiveBranchId) {
+      setTables([]);
+      setLoading(false);
+      return;
+    }
+    const [res, secRes] = await Promise.all([api.get('/api/tables'), api.get('/api/sections')]);
     if (res.success) setTables(res.data);
+    if (secRes.success) setSections(secRes.data);
     setLoading(false);
   }, [api]);
 
@@ -58,17 +69,19 @@ export function TablesPage() {
     setError('');
     try {
       let res;
+      const payload = {
+        label: form.label,
+        number: parseInt(form.number),
+        sectionId: form.sectionId || null,
+      };
       if (editingTableId) {
-        res = await api.put(`/api/tables/${editingTableId}`, {
-          label: form.label,
-          number: parseInt(form.number),
-        });
+        res = await api.put(`/api/tables/${editingTableId}`, payload);
       } else {
-        res = await api.post('/api/tables', { label: form.label, number: parseInt(form.number) });
+        res = await api.post('/api/tables', payload);
       }
       if (!res.success) throw new Error(res.error);
       setModal(false);
-      setForm({ label: '', number: '' });
+      setForm({ label: '', number: '', sectionId: '' });
       setEditingTableId(null);
       load();
     } catch (e: any) {
@@ -107,10 +120,26 @@ export function TablesPage() {
     a.click();
   }
 
+  async function clearTable(sessionId: string) {
+    if (!confirm('Clear this table?')) return;
+    await api.patch(`/api/sessions/${sessionId}/close`, { nextStatus: 'CLEANING' });
+    load();
+  }
+
   if (loading)
     return (
       <div className="flex items-center justify-center h-48">
         <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+
+  if (!api.effectiveBranchId)
+    return (
+      <div className="card p-6">
+        <h1 className="font-display text-3xl mb-2">TABLES & QR</h1>
+        <p className="text-[var(--muted)] text-sm">
+          Select a branch to manage tables and QR codes for that branch.
+        </p>
       </div>
     );
 
@@ -125,13 +154,12 @@ export function TablesPage() {
           <button
             className="btn btn-primary btn-sm"
             onClick={() => {
-              setForm({ label: '', number: '' });
               setEditingTableId(null);
+              setForm({ label: '', number: String(tables.length + 1), sectionId: '' });
               setModal(true);
-              setError('');
             }}
           >
-            + Add Table
+            Add Table
           </button>
         </div>
       </div>
@@ -143,6 +171,8 @@ export function TablesPage() {
             <tr>
               <th>#</th>
               <th>Label</th>
+              <th>Section</th>
+              <th>State</th>
               <th>Status</th>
               <th>QR Code</th>
               <th>Actions</th>
@@ -151,7 +181,7 @@ export function TablesPage() {
           <tbody>
             {tables.length === 0 && (
               <tr>
-                <td colSpan={5} className="text-center text-[var(--muted)] py-8">
+                <td colSpan={7} className="text-center text-[var(--muted)] py-8">
                   No tables yet. Add your first table.
                 </td>
               </tr>
@@ -160,9 +190,38 @@ export function TablesPage() {
               <tr key={t.id}>
                 <td className="font-bold text-[var(--accent)]">{t.number}</td>
                 <td className="font-medium">{t.label}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {t.section ? (
+                    <span
+                      className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border"
+                      style={{
+                        backgroundColor: `${t.section.colour || '#4f46e5'}20`,
+                        color: t.section.colour || '#4f46e5',
+                        borderColor: `${t.section.colour || '#4f46e5'}40`,
+                      }}
+                    >
+                      {t.section.name}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400 italic">Unassigned</span>
+                  )}
+                </td>
                 <td>
                   <span className={`badge ${t.isActive ? 'badge-active' : 'badge-inactive'}`}>
                     {t.isActive ? 'Active' : 'Inactive'}
+                  </span>
+                </td>
+                <td>
+                  <span
+                    className={`badge ${
+                      t.status === 'EMPTY'
+                        ? 'border-[var(--border)] text-[var(--muted)]'
+                        : t.status === 'OCCUPIED'
+                          ? 'border-[var(--preparing)] text-[var(--preparing)] bg-[var(--surface2)]'
+                          : 'border-[var(--accent)] text-[var(--accent)] bg-[var(--surface2)]'
+                    }`}
+                  >
+                    {t.status}
                   </span>
                 </td>
                 <td>
@@ -183,7 +242,11 @@ export function TablesPage() {
                     <button
                       className="btn btn-secondary btn-sm"
                       onClick={() => {
-                        setForm({ label: t.label, number: t.number.toString() });
+                        setForm({
+                          label: t.label,
+                          number: t.number.toString(),
+                          sectionId: t.sectionId || '',
+                        });
                         setEditingTableId(t.id);
                         setModal(true);
                         setError('');
@@ -204,6 +267,14 @@ export function TablesPage() {
                         onClick={() => activate(t.id)}
                       >
                         Activate
+                      </button>
+                    )}
+                    {t.activeSessionId && (
+                      <button
+                        className="btn btn-secondary btn-sm text-yellow-500"
+                        onClick={() => clearTable(t.activeSessionId!)}
+                      >
+                        Clear Table
                       </button>
                     )}
                     <button className="btn btn-danger btn-sm" onClick={() => deleteTable(t.id)}>
@@ -256,8 +327,10 @@ export function TablesPage() {
           >
             <h2 className="font-display text-2xl">{editingTableId ? 'EDIT TABLE' : 'ADD TABLE'}</h2>
             <div>
-              <label>Table Number *</label>
+              <label htmlFor="table_form_number">Table Number *</label>
               <input
+                id="table_form_number"
+                name="number"
                 type="number"
                 min="1"
                 value={form.number}
@@ -266,8 +339,10 @@ export function TablesPage() {
               />
             </div>
             <div>
-              <label>Label *</label>
+              <label htmlFor="table_form_label">Label *</label>
               <input
+                id="table_form_label"
+                name="label"
                 value={form.label}
                 onChange={(e) => setForm({ ...form, label: e.target.value })}
                 placeholder="e.g. Table 1 / Bar Seat A"

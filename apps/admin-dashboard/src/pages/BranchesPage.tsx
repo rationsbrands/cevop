@@ -153,10 +153,15 @@ export function BranchesPage() {
           <form onSubmit={handleCreate} className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-[var(--muted)] uppercase tracking-wider">
+                <label
+                  htmlFor="branch_create_name"
+                  className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                >
                   Branch Name *
                 </label>
                 <input
+                  id="branch_create_name"
+                  name="name"
                   type="text"
                   value={createForm.name}
                   onChange={(e) =>
@@ -168,40 +173,59 @@ export function BranchesPage() {
                   }
                   placeholder="e.g. Cevop Lekki"
                   required
+                  autoComplete="off"
                 />
               </div>
               <div>
-                <label className="text-xs text-[var(--muted)] uppercase tracking-wider">
+                <label
+                  htmlFor="branch_create_slug"
+                  className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                >
                   Slug *
                 </label>
                 <input
+                  id="branch_create_slug"
+                  name="slug"
                   type="text"
                   value={createForm.slug}
                   onChange={(e) => setCreateForm((f) => ({ ...f, slug: e.target.value }))}
                   placeholder="e.g. cevop-lekki"
                   required
+                  autoComplete="off"
                 />
               </div>
               <div>
-                <label className="text-xs text-[var(--muted)] uppercase tracking-wider">
+                <label
+                  htmlFor="branch_create_address"
+                  className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                >
                   Address
                 </label>
                 <input
+                  id="branch_create_address"
+                  name="address"
                   type="text"
                   value={createForm.address}
                   onChange={(e) => setCreateForm((f) => ({ ...f, address: e.target.value }))}
                   placeholder="e.g. 5 Admiralty Way, Lekki"
+                  autoComplete="street-address"
                 />
               </div>
               <div>
-                <label className="text-xs text-[var(--muted)] uppercase tracking-wider">
+                <label
+                  htmlFor="branch_create_phone"
+                  className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                >
                   Phone
                 </label>
                 <input
+                  id="branch_create_phone"
+                  name="phone"
                   type="text"
                   value={createForm.phone}
                   onChange={(e) => setCreateForm((f) => ({ ...f, phone: e.target.value }))}
                   placeholder="e.g. +234 800 000 0000"
+                  autoComplete="tel"
                 />
               </div>
             </div>
@@ -243,30 +267,48 @@ export function BranchesPage() {
                 <div className="space-y-3">
                   <div className="grid grid-cols-3 gap-3">
                     <div>
-                      <label className="text-xs text-[var(--muted)] uppercase tracking-wider">
+                      <label
+                        htmlFor={`branch_edit_name_${branch.id}`}
+                        className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                      >
                         Name
                       </label>
                       <input
+                        id={`branch_edit_name_${branch.id}`}
+                        name="name"
                         value={editForm.name}
                         onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                        autoComplete="off"
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-[var(--muted)] uppercase tracking-wider">
+                      <label
+                        htmlFor={`branch_edit_address_${branch.id}`}
+                        className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                      >
                         Address
                       </label>
                       <input
+                        id={`branch_edit_address_${branch.id}`}
+                        name="address"
                         value={editForm.address}
                         onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))}
+                        autoComplete="street-address"
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-[var(--muted)] uppercase tracking-wider">
+                      <label
+                        htmlFor={`branch_edit_phone_${branch.id}`}
+                        className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                      >
                         Phone
                       </label>
                       <input
+                        id={`branch_edit_phone_${branch.id}`}
+                        name="phone"
                         value={editForm.phone}
                         onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
+                        autoComplete="tel"
                       />
                     </div>
                   </div>
@@ -361,35 +403,52 @@ export function BranchesPage() {
                     className="grid grid-cols-1 sm:grid-cols-3 gap-3"
                   >
                     <div>
-                      <label className="text-xs text-[var(--muted)] uppercase tracking-wider">
+                      <label
+                        htmlFor={`branch_admin_name_${branch.id}`}
+                        className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                      >
                         Name *
                       </label>
                       <input
+                        id={`branch_admin_name_${branch.id}`}
+                        name="name"
                         type="text"
                         value={adminForm.name}
                         onChange={(e) => setAdminForm((f) => ({ ...f, name: e.target.value }))}
                         placeholder="e.g. Jane Doe"
                         required
+                        autoComplete="name"
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-[var(--muted)] uppercase tracking-wider">
+                      <label
+                        htmlFor={`branch_admin_email_${branch.id}`}
+                        className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                      >
                         Email *
                       </label>
                       <input
+                        id={`branch_admin_email_${branch.id}`}
+                        name="email"
                         type="email"
                         value={adminForm.email}
                         onChange={(e) => setAdminForm((f) => ({ ...f, email: e.target.value }))}
                         placeholder="e.g. manager@branch.com"
                         required
+                        autoComplete="email"
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-[var(--muted)] uppercase tracking-wider">
+                      <label
+                        htmlFor={`branch_admin_password_${branch.id}`}
+                        className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                      >
                         Password *
                       </label>
                       <div className="relative">
                         <input
+                          id={`branch_admin_password_${branch.id}`}
+                          name="password"
                           type={showAdminPassword ? 'text' : 'password'}
                           value={adminForm.password}
                           onChange={(e) =>
@@ -399,6 +458,7 @@ export function BranchesPage() {
                           required
                           minLength={8}
                           className="pr-10"
+                          autoComplete="new-password"
                         />
                         <button
                           type="button"

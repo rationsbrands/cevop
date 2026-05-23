@@ -32,6 +32,7 @@ yarn-debug.log*
 pnpm-debug.log*
 
 .DS_Store
+**/.DS_Store
 Thumbs.db
 
 *.pem
@@ -55,3 +56,21 @@ Thumbs.db
 *.credentials.md
 
 cevop_for_claude.zip
+cevop-for-claude-*.zip
+cevop_for_claude-*.zip
+
+reproduce.js
+migrate.js
+run_migration.*
+*.exp
+
+.pnpm-store/
+**/.pnpm-store/
+.yarn/
+**/.yarn/
+.swc/
+**/.swc/
+tmp/
+**/tmp/
+.tmp/
+**/.tmp/

@@ -14,15 +14,45 @@ interface User {
   createdAt: string;
   branchId?: string | null;
   branch?: { id: string; name: string } | null;
+  staffCode?: string;
 }
 
-const ROLE_LABELS: Record<string, string> = {
+const ROLE_NAMES: Record<string, string> = {
+  ORG_OWNER: 'Owner',
   ADMIN: 'Admin',
-  BRANCH_ADMIN: 'Branch Admin',
+  ORG_MANAGER: 'Manager',
+  ORG_FINANCE: 'Finance',
+  ORG_AUDITOR: 'Auditor',
+  BRANCH_ADMIN: 'Admin',
+  BRANCH_FINANCE: 'Finance',
   SERVICE: 'Service',
   WAITER: 'Waiter',
+  KITCHEN: 'Kitchen',
   SUPERADMIN: 'Superadmin',
 };
+
+const ROLE_SELECT_LABELS: Record<string, string> = {
+  ORG_OWNER: 'Org Owner',
+  ADMIN: 'Org Admin',
+  ORG_MANAGER: 'Org Manager',
+  ORG_FINANCE: 'Org Finance',
+  ORG_AUDITOR: 'Org Auditor',
+  BRANCH_ADMIN: 'Branch Admin',
+  BRANCH_FINANCE: 'Branch Finance',
+  SERVICE: 'Service',
+  WAITER: 'Waiter',
+  KITCHEN: 'Kitchen',
+  SUPERADMIN: 'Superadmin',
+};
+
+const ORG_SCOPED_ROLES = new Set([
+  'ORG_OWNER',
+  'ADMIN',
+  'ORG_MANAGER',
+  'ORG_FINANCE',
+  'ORG_AUDITOR',
+  'SUPERADMIN',
+]);
 
 export function UsersPage() {
   const { user: me } = useAuth();
@@ -61,20 +91,49 @@ export function UsersPage() {
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
 
-  const isOrgAdmin = me?.role === 'ADMIN' || me?.role === 'SUPERADMIN';
+  const isOrgAdmin =
+    !!me?.role && ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'].includes(me.role);
+  const isOrgWideRole =
+    !!me?.role &&
+    ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'ORG_FINANCE', 'ORG_AUDITOR', 'SUPERADMIN'].includes(
+      me.role,
+    );
   const isBranchAdmin = me?.role === 'BRANCH_ADMIN';
 
+  const canCreateOrgOwner = me?.role === 'ORG_OWNER' || me?.role === 'SUPERADMIN';
   const availableRoles = isBranchAdmin
-    ? ['SERVICE', 'WAITER']
-    : ['ADMIN', 'BRANCH_ADMIN', 'SERVICE', 'WAITER'];
-  const inviteRoles = isBranchAdmin ? ['SERVICE', 'WAITER'] : ['BRANCH_ADMIN', 'SERVICE', 'WAITER'];
+    ? ['SERVICE', 'WAITER', 'KITCHEN']
+    : [
+        ...(canCreateOrgOwner ? ['ORG_OWNER'] : []),
+        'ADMIN',
+        'ORG_MANAGER',
+        'ORG_FINANCE',
+        'ORG_AUDITOR',
+        'BRANCH_ADMIN',
+        'BRANCH_FINANCE',
+        'SERVICE',
+        'WAITER',
+        'KITCHEN',
+      ];
+  const inviteRoles = isBranchAdmin
+    ? ['SERVICE', 'WAITER', 'KITCHEN']
+    : [
+        'ORG_MANAGER',
+        'ORG_FINANCE',
+        'ORG_AUDITOR',
+        'BRANCH_ADMIN',
+        'BRANCH_FINANCE',
+        'SERVICE',
+        'WAITER',
+        'KITCHEN',
+      ];
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const [usersRes, branchesRes, invitesRes] = await Promise.all([
         api.get('/api/users'),
-        isOrgAdmin ? api.get('/api/branches') : Promise.resolve({ data: [] }),
+        isOrgWideRole ? api.get('/api/branches') : Promise.resolve({ data: [] }),
         api.get('/api/invites'),
       ]);
       setUsers(usersRes.data ?? []);
@@ -85,7 +144,7 @@ export function UsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [api, isOrgAdmin]);
+  }, [api, isOrgWideRole]);
 
   useEffect(() => {
     const t = window.setTimeout(() => void load(), 0);
@@ -205,15 +264,23 @@ export function UsersPage() {
     setEditError('');
     try {
       const role = editForm.role;
-      const orgHasMultipleBranches = isOrgAdmin && branches.length > 1;
+      const isOrgWideTargetRole =
+        role === 'ORG_OWNER' ||
+        role === 'ADMIN' ||
+        role === 'ORG_MANAGER' ||
+        role === 'ORG_FINANCE' ||
+        role === 'ORG_AUDITOR';
       const roleRequiresBranch =
         role === 'BRANCH_ADMIN' ||
-        ((role === 'WAITER' || role === 'SERVICE') && orgHasMultipleBranches);
+        role === 'BRANCH_FINANCE' ||
+        role === 'WAITER' ||
+        role === 'SERVICE' ||
+        role === 'KITCHEN';
 
       let branchId: string | null = editForm.branchId ? editForm.branchId : null;
 
       if (isOrgAdmin) {
-        if (role === 'ADMIN') branchId = null;
+        if (isOrgWideTargetRole) branchId = null;
         if (roleRequiresBranch && !branchId && branches.length === 1) {
           branchId = branches[0].id;
         }
@@ -340,26 +407,34 @@ export function UsersPage() {
           <form onSubmit={handleCreate} className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label>Name *</label>
+                <label htmlFor="staff_create_name">Name *</label>
                 <input
+                  id="staff_create_name"
+                  name="name"
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   required
+                  autoComplete="name"
                 />
               </div>
               <div>
-                <label>Email *</label>
+                <label htmlFor="staff_create_email">Email *</label>
                 <input
+                  id="staff_create_email"
+                  name="email"
                   type="email"
                   value={form.email}
                   onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
                   required
+                  autoComplete="email"
                 />
               </div>
               <div>
-                <label>Password *</label>
+                <label htmlFor="staff_create_password">Password *</label>
                 <div className="relative">
                   <input
+                    id="staff_create_password"
+                    name="password"
                     type={showPassword ? 'text' : 'password'}
                     value={form.password}
                     onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
@@ -367,6 +442,7 @@ export function UsersPage() {
                     minLength={8}
                     placeholder="••••••••"
                     className="pr-10"
+                    autoComplete="new-password"
                   />
                   <button
                     type="button"
@@ -407,37 +483,58 @@ export function UsersPage() {
                 </div>
               </div>
               <div>
-                <label>Role *</label>
+                <label htmlFor="staff_create_role">Role *</label>
                 <select
+                  id="staff_create_role"
+                  name="role"
                   value={form.role}
-                  onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
+                  onChange={(e) => {
+                    const nextRole = e.target.value;
+                    setForm((f) => ({
+                      ...f,
+                      role: nextRole,
+                      branchId: [
+                        'BRANCH_ADMIN',
+                        'BRANCH_FINANCE',
+                        'WAITER',
+                        'SERVICE',
+                        'KITCHEN',
+                      ].includes(nextRole)
+                        ? f.branchId
+                        : '',
+                    }));
+                  }}
                 >
                   {availableRoles.map((r) => (
                     <option key={r} value={r}>
-                      {ROLE_LABELS[r]}
+                      {ROLE_SELECT_LABELS[r] ?? r}
                     </option>
                   ))}
                 </select>
               </div>
-              {isOrgAdmin && branches.length > 0 && (
-                <div className="sm:col-span-2">
-                  <label>
-                    Assign to Branch {form.role === 'BRANCH_ADMIN' ? '*' : '(optional)'}
-                  </label>
-                  <select
-                    value={form.branchId}
-                    onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}
-                    required={form.role === 'BRANCH_ADMIN'}
-                  >
-                    <option value="">— Org-wide —</option>
-                    {branches.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+              {isOrgAdmin &&
+                branches.length > 0 &&
+                ['BRANCH_ADMIN', 'BRANCH_FINANCE', 'WAITER', 'SERVICE', 'KITCHEN'].includes(
+                  form.role,
+                ) && (
+                  <div className="sm:col-span-2">
+                    <label htmlFor="staff_create_branch">Assign to Branch *</label>
+                    <select
+                      id="staff_create_branch"
+                      name="branchId"
+                      value={form.branchId}
+                      onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value }))}
+                      required
+                    >
+                      <option value="">— Select branch —</option>
+                      {branches.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
             </div>
             {createError && <p className="text-red-400 text-sm">{createError}</p>}
             <div className="flex gap-2">
@@ -470,45 +567,71 @@ export function UsersPage() {
           <form onSubmit={handleInvite} className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="sm:col-span-2">
-                <label>Email *</label>
+                <label htmlFor="staff_invite_email">Email *</label>
                 <input
+                  id="staff_invite_email"
+                  name="email"
                   type="email"
                   value={inviteForm.email}
                   onChange={(e) => setInviteForm((f) => ({ ...f, email: e.target.value }))}
                   required
                   placeholder="e.g. name@restaurant.com"
+                  autoComplete="email"
                 />
               </div>
               <div>
-                <label>Role *</label>
+                <label htmlFor="staff_invite_role">Role *</label>
                 <select
+                  id="staff_invite_role"
+                  name="role"
                   value={inviteForm.role}
-                  onChange={(e) => setInviteForm((f) => ({ ...f, role: e.target.value }))}
+                  onChange={(e) => {
+                    const nextRole = e.target.value;
+                    setInviteForm((f) => ({
+                      ...f,
+                      role: nextRole,
+                      branchId: [
+                        'BRANCH_ADMIN',
+                        'BRANCH_FINANCE',
+                        'WAITER',
+                        'SERVICE',
+                        'KITCHEN',
+                      ].includes(nextRole)
+                        ? f.branchId
+                        : '',
+                    }));
+                  }}
                 >
                   {inviteRoles.map((r) => (
                     <option key={r} value={r}>
-                      {ROLE_LABELS[r]}
+                      {ROLE_SELECT_LABELS[r] ?? r}
                     </option>
                   ))}
                 </select>
               </div>
-              {isOrgAdmin && branches.length > 0 && (
-                <div>
-                  <label>Branch {inviteForm.role === 'BRANCH_ADMIN' ? '*' : '(optional)'}</label>
-                  <select
-                    value={inviteForm.branchId}
-                    onChange={(e) => setInviteForm((f) => ({ ...f, branchId: e.target.value }))}
-                    required={inviteForm.role === 'BRANCH_ADMIN'}
-                  >
-                    <option value="">— Org-wide —</option>
-                    {branches.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+              {isOrgAdmin &&
+                branches.length > 0 &&
+                ['BRANCH_ADMIN', 'BRANCH_FINANCE', 'WAITER', 'SERVICE', 'KITCHEN'].includes(
+                  inviteForm.role,
+                ) && (
+                  <div>
+                    <label htmlFor="staff_invite_branch">Branch *</label>
+                    <select
+                      id="staff_invite_branch"
+                      name="branchId"
+                      value={inviteForm.branchId}
+                      onChange={(e) => setInviteForm((f) => ({ ...f, branchId: e.target.value }))}
+                      required
+                    >
+                      <option value="">— Select branch —</option>
+                      {branches.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
             </div>
             {inviteError && <p className="text-red-400 text-sm">{inviteError}</p>}
             <div className="flex gap-2">
@@ -558,6 +681,9 @@ export function UsersPage() {
                 <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
                   Name
                 </th>
+                <th className="text-left text-xs font-bold uppercase tracking-wider text-[var(--muted)] pb-2 pr-4">
+                  Code
+                </th>
                 <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
                   Email
                 </th>
@@ -582,17 +708,56 @@ export function UsersPage() {
                   className={`hover:bg-[var(--surface2)] transition-colors ${!u.isActive ? 'opacity-40' : ''}`}
                 >
                   <td className="px-4 py-3 font-medium text-[var(--text)]">{u.name}</td>
+                  <td className="py-3 pr-4">
+                    {u.staffCode ? (
+                      <span className="font-mono text-xs border border-[var(--border)] px-1.5 py-0.5 text-[var(--muted)]">
+                        {u.staffCode}
+                      </span>
+                    ) : (
+                      <span className="text-[var(--border)] text-xs">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-[var(--muted)] text-sm">{u.email}</td>
                   <td className="px-4 py-3">
-                    <span
-                      className={`text-xs px-2 py-0.5 border ${u.role === 'ADMIN' || u.role === 'SUPERADMIN' ? 'border-[var(--accent)] text-[var(--accent)]' : u.role === 'BRANCH_ADMIN' ? 'border-blue-600 text-blue-400' : 'border-[var(--border)] text-[var(--muted)]'}`}
-                    >
-                      {u.role === 'ADMIN' || u.role === 'SUPERADMIN'
-                        ? `Org. ${ROLE_LABELS[u.role] ?? u.role}`
-                        : u.role === 'BRANCH_ADMIN' && u.branch?.name
-                          ? `${u.branch.name} Admin`
-                          : (ROLE_LABELS[u.role] ?? u.role)}
-                    </span>
+                    {(() => {
+                      const branchName = u.branch?.name ?? '';
+                      const roleName = ROLE_NAMES[u.role] ?? u.role;
+
+                      const isOrgScoped = ORG_SCOPED_ROLES.has(u.role);
+                      const label = isOrgScoped
+                        ? `Org ${roleName}`
+                        : branchName
+                          ? `${branchName} ${roleName}`
+                          : roleName;
+
+                      const badgeClass = isOrgScoped
+                        ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-dim)]'
+                        : u.role === 'BRANCH_ADMIN'
+                          ? 'border-[var(--role-branch-admin)] text-[var(--role-branch-admin)] bg-[var(--role-branch-admin-dim)]'
+                          : u.role === 'BRANCH_FINANCE'
+                            ? 'border-[var(--role-branch-finance)] text-[var(--role-branch-finance)] bg-[var(--role-branch-finance-dim)]'
+                            : u.role === 'SERVICE'
+                              ? 'border-[var(--role-service)] text-[var(--role-service)] bg-[var(--role-service-dim)]'
+                              : u.role === 'WAITER'
+                                ? 'border-[var(--role-waiter)] text-[var(--role-waiter)] bg-[var(--role-waiter-dim)]'
+                                : 'border-[var(--border)] text-[var(--muted)] bg-[var(--surface2)]';
+
+                      return (
+                        <span
+                          title={label}
+                          className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-1 border rounded-md max-w-full whitespace-nowrap ${badgeClass}`}
+                        >
+                          {!isOrgScoped && branchName ? (
+                            <>
+                              <span className="min-w-0 max-w-36 truncate">{branchName}</span>
+                              <span className="opacity-90">{roleName}</span>
+                            </>
+                          ) : (
+                            label
+                          )}
+                        </span>
+                      );
+                    })()}
                   </td>
                   {isOrgAdmin && (
                     <td className="px-4 py-3 text-[var(--muted)] text-xs">
@@ -681,13 +846,44 @@ export function UsersPage() {
                 <tr key={i.id} className="hover:bg-[var(--surface2)]">
                   <td className="px-4 py-3 text-[var(--text)]">{i.email}</td>
                   <td className="px-4 py-3">
-                    <span className="text-xs text-[var(--muted)] border border-[var(--border)] px-2 py-0.5">
-                      {i.role === 'ADMIN' || i.role === 'SUPERADMIN'
-                        ? `Org. ${ROLE_LABELS[i.role] ?? i.role}`
-                        : i.role === 'BRANCH_ADMIN' && i.branchName
-                          ? `${i.branchName} Admin`
-                          : (ROLE_LABELS[i.role] ?? i.role)}
-                    </span>
+                    {(() => {
+                      const branchName = i.branchName ?? '';
+                      const roleName = ROLE_NAMES[i.role] ?? i.role;
+                      const isOrgScoped = ORG_SCOPED_ROLES.has(i.role);
+                      const label = isOrgScoped
+                        ? `Org ${roleName}`
+                        : branchName
+                          ? `${branchName} ${roleName}`
+                          : roleName;
+
+                      const badgeClass = isOrgScoped
+                        ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent-dim)]'
+                        : i.role === 'BRANCH_ADMIN'
+                          ? 'border-[var(--role-branch-admin)] text-[var(--role-branch-admin)] bg-[var(--role-branch-admin-dim)]'
+                          : i.role === 'BRANCH_FINANCE'
+                            ? 'border-[var(--role-branch-finance)] text-[var(--role-branch-finance)] bg-[var(--role-branch-finance-dim)]'
+                            : i.role === 'SERVICE'
+                              ? 'border-[var(--role-service)] text-[var(--role-service)] bg-[var(--role-service-dim)]'
+                              : i.role === 'WAITER'
+                                ? 'border-[var(--role-waiter)] text-[var(--role-waiter)] bg-[var(--role-waiter-dim)]'
+                                : 'border-[var(--border)] text-[var(--muted)] bg-[var(--surface2)]';
+
+                      return (
+                        <span
+                          title={label}
+                          className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2 py-1 border rounded-md max-w-full whitespace-nowrap ${badgeClass}`}
+                        >
+                          {!isOrgScoped && branchName ? (
+                            <>
+                              <span className="min-w-0 max-w-36 truncate">{branchName}</span>
+                              <span className="opacity-90">{roleName}</span>
+                            </>
+                          ) : (
+                            label
+                          )}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3 text-[var(--muted)] text-xs">{i.branchName ?? '—'}</td>
                   <td className="px-4 py-3 text-[var(--muted)] text-xs">
@@ -733,47 +929,61 @@ export function UsersPage() {
 
             <form onSubmit={saveUserEdit} className="space-y-3">
               <div>
-                <label>Role *</label>
+                <label htmlFor="admin_user_edit_role">Role *</label>
                 <select
+                  id="admin_user_edit_role"
+                  name="role"
                   value={editForm.role}
-                  onChange={(e) => setEditForm((f) => ({ ...f, role: e.target.value }))}
+                  onChange={(e) => {
+                    const nextRole = e.target.value;
+                    setEditForm((f) => ({
+                      ...f,
+                      role: nextRole,
+                      branchId: [
+                        'BRANCH_ADMIN',
+                        'BRANCH_FINANCE',
+                        'WAITER',
+                        'SERVICE',
+                        'KITCHEN',
+                      ].includes(nextRole)
+                        ? f.branchId
+                        : '',
+                    }));
+                  }}
+                  autoComplete="off"
                 >
                   {availableRoles.map((r) => (
                     <option key={r} value={r}>
-                      {ROLE_LABELS[r]}
+                      {ROLE_SELECT_LABELS[r] ?? r}
                     </option>
                   ))}
                 </select>
               </div>
 
-              {isOrgAdmin && branches.length > 0 && editForm.role !== 'ADMIN' && (
-                <div>
-                  <label>
-                    Branch{' '}
-                    {editForm.role === 'BRANCH_ADMIN' ||
-                    ((editForm.role === 'WAITER' || editForm.role === 'SERVICE') &&
-                      branches.length > 1)
-                      ? '*'
-                      : '(optional)'}
-                  </label>
-                  <select
-                    value={editForm.branchId}
-                    onChange={(e) => setEditForm((f) => ({ ...f, branchId: e.target.value }))}
-                    required={
-                      editForm.role === 'BRANCH_ADMIN' ||
-                      ((editForm.role === 'WAITER' || editForm.role === 'SERVICE') &&
-                        branches.length > 1)
-                    }
-                  >
-                    <option value="">— Org-wide —</option>
-                    {branches.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+              {isOrgAdmin &&
+                branches.length > 0 &&
+                ['BRANCH_ADMIN', 'BRANCH_FINANCE', 'WAITER', 'SERVICE', 'KITCHEN'].includes(
+                  editForm.role,
+                ) && (
+                  <div>
+                    <label htmlFor="admin_user_edit_branch">Branch *</label>
+                    <select
+                      id="admin_user_edit_branch"
+                      name="branchId"
+                      value={editForm.branchId}
+                      onChange={(e) => setEditForm((f) => ({ ...f, branchId: e.target.value }))}
+                      required
+                      autoComplete="off"
+                    >
+                      <option value="">— Select branch —</option>
+                      {branches.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
               {editError && <div className="text-red-400 text-sm">{editError}</div>}
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { useAuth } from '../context/auth';
 import { useTheme } from '../context/theme';
+import { PasswordStrength } from '../components/PasswordStrength';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -26,7 +26,7 @@ const PageShell = ({ children }: { children: React.ReactNode }) => {
   const nextThemeLabel = nextThemeMode === 'system' ? 'OS' : nextThemeMode === 'dark' ? 'D' : 'L';
 
   return (
-    <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
+    <div className="auth-shell min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
       <button
         onClick={() => setMode(nextThemeMode)}
         className={`absolute top-6 right-6 z-10 w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
@@ -68,7 +68,6 @@ const PageShell = ({ children }: { children: React.ReactNode }) => {
 
 export function AcceptInvitePage() {
   const { token } = useParams<{ token: string }>();
-  const { login } = useAuth();
 
   const [inviteInfo, setInviteInfo] = useState<InviteInfo | null>(null);
   const [validating, setValidating] = useState(() => !!token);
@@ -179,20 +178,25 @@ export function AcceptInvitePage() {
 
       <form onSubmit={handleSubmit} className="card p-6 space-y-5">
         <div>
-          <label>Your Name *</label>
+          <label htmlFor="admin_invite_name">Your Name *</label>
           <input
+            id="admin_invite_name"
+            name="name"
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. John Doe"
             required
+            autoComplete="name"
           />
         </div>
 
         <div>
-          <label>Password *</label>
+          <label htmlFor="admin_invite_password">Password *</label>
           <div className="relative">
             <input
+              id="admin_invite_password"
+              name="password"
               type={showPassword ? 'text' : 'password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -200,6 +204,7 @@ export function AcceptInvitePage() {
               required
               minLength={8}
               className="pr-10"
+              autoComplete="new-password"
             />
             <button
               type="button"
@@ -207,49 +212,25 @@ export function AcceptInvitePage() {
               tabIndex={-1}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] text-xs"
             >
-              {showPassword ? (
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                  <line x1="1" y1="1" x2="23" y2="23" />
-                </svg>
-              ) : (
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              )}
+              {showPassword ? 'hide' : 'show'}
             </button>
           </div>
+          <PasswordStrength password={password} />
         </div>
 
         <div>
-          <label>Confirm Password *</label>
+          <label htmlFor="admin_invite_confirm_password">Confirm Password *</label>
           <div className="relative">
             <input
+              id="admin_invite_confirm_password"
+              name="confirmPassword"
               type={showConfirm ? 'text' : 'password'}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="••••••••"
               required
               className="pr-10"
+              autoComplete="new-password"
             />
             <button
               type="button"
@@ -257,35 +238,7 @@ export function AcceptInvitePage() {
               tabIndex={-1}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] text-xs"
             >
-              {showConfirm ? (
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                  <line x1="1" y1="1" x2="23" y2="23" />
-                </svg>
-              ) : (
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              )}
+              {showConfirm ? 'hide' : 'show'}
             </button>
           </div>
         </div>

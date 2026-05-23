@@ -2,11 +2,41 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { Prisma, UserRole } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import { authenticate, requireRole, requireBranchAccess, AuthRequest } from '../middleware/auth';
 import { checkStaffLimit } from '../middleware/checkLimits';
 import { logger } from '../services/logger';
+
+async function generateStaffCode(branchId: string, role: string): Promise<string> {
+  // Prefix based on role
+  const prefix =
+    role === 'WAITER'
+      ? 'W'
+      : role === 'SERVICE'
+        ? 'S'
+        : role === 'KITCHEN'
+          ? 'K'
+          : role === 'BRANCH_ADMIN'
+            ? 'M'
+            : 'T'; // T for team/other
+
+  // Find the highest existing code number for this branch + prefix
+  const existing = await (prisma.user as any).findMany({
+    where: {
+      branchId,
+      staffCode: { startsWith: `${prefix}-` },
+    },
+    select: { staffCode: true },
+  });
+
+  const nums = existing
+    .map((u: any) => parseInt(u.staffCode?.split('-')[1] ?? '0', 10))
+    .filter((n: number) => !isNaN(n));
+
+  const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
+  return `${prefix}-${String(next).padStart(2, '0')}`;
+}
 
 export const usersRouter = Router();
 
@@ -18,7 +48,7 @@ function generateSecureToken(): string {
 
 usersRouter.get(
   '/',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const where: Prisma.UserWhereInput = { organizationId: req.user!.organizationId };
@@ -32,7 +62,16 @@ usersRouter.get(
             .json({ success: false, error: 'Branch admins must be assigned to a branch' });
           return;
         }
-        where.role = { notIn: ['ADMIN', 'SUPERADMIN'] };
+        where.role = {
+          notIn: [
+            'ORG_OWNER',
+            'ADMIN',
+            'ORG_MANAGER',
+            'ORG_FINANCE',
+            'ORG_AUDITOR',
+            'SUPERADMIN',
+          ] as any,
+        };
       }
 
       const users = await prisma.user.findMany({
@@ -45,8 +84,9 @@ usersRouter.get(
           isActive: true,
           createdAt: true,
           branchId: true,
+          staffCode: true,
           branch: { select: { id: true, name: true } },
-        },
+        } as any,
         orderBy: { createdAt: 'desc' },
       });
       res.json({ success: true, data: users });
@@ -60,13 +100,25 @@ const createUserSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   password: z.string().min(8),
-  role: z.enum(['ADMIN', 'BRANCH_ADMIN', 'SERVICE', 'WAITER']),
+  role: z.enum([
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'ORG_FINANCE',
+    'ORG_AUDITOR',
+    'BRANCH_ADMIN',
+    'BRANCH_FINANCE',
+    'SERVICE',
+    'WAITER',
+    'KITCHEN',
+    'SUPERADMIN',
+  ]),
   branchId: z.string().optional(),
 });
 
 usersRouter.post(
   '/',
-  requireRole('ADMIN', 'SUPERADMIN'),
+  requireRole('ADMIN', 'ORG_OWNER', 'ORG_MANAGER', 'SUPERADMIN'),
   checkStaffLimit,
   async (req: AuthRequest, res: Response) => {
     try {
@@ -85,14 +137,50 @@ usersRouter.post(
         return;
       }
 
+      if (
+        role === 'ORG_OWNER' &&
+        req.user!.role !== 'SUPERADMIN' &&
+        req.user!.role !== 'ORG_OWNER'
+      ) {
+        res
+          .status(403)
+          .json({ success: false, error: 'Only org owners can create other org owners' });
+        return;
+      }
+
       // BRANCH_ADMIN must have a branchId
       if (role === 'BRANCH_ADMIN' && !branchId) {
         res.status(400).json({ success: false, error: 'BRANCH_ADMIN role requires a branchId' });
         return;
       }
+      if (role === 'BRANCH_FINANCE' && !branchId) {
+        res.status(400).json({ success: false, error: 'BRANCH_FINANCE role requires a branchId' });
+        return;
+      }
 
       let finalBranchId: string | null = branchId ?? null;
-      if ((role === 'WAITER' || role === 'SERVICE') && !finalBranchId) {
+      if (
+        role === 'ORG_OWNER' ||
+        role === 'ADMIN' ||
+        role === 'ORG_MANAGER' ||
+        role === 'ORG_FINANCE' ||
+        role === 'ORG_AUDITOR'
+      ) {
+        finalBranchId = null;
+      }
+      if (role === 'BRANCH_ADMIN' && !finalBranchId) {
+        const branches = await prisma.branch.findMany({
+          where: { organizationId: req.user!.organizationId, isActive: true },
+          select: { id: true },
+        });
+        if (branches.length === 1) {
+          finalBranchId = branches[0].id;
+        } else {
+          res.status(400).json({ success: false, error: 'BRANCH_ADMIN role requires a branch' });
+          return;
+        }
+      }
+      if ((role === 'WAITER' || role === 'SERVICE' || role === 'KITCHEN') && !finalBranchId) {
         const branches = await prisma.branch.findMany({
           where: { organizationId: req.user!.organizationId, isActive: true },
           select: { id: true },
@@ -103,6 +191,22 @@ usersRouter.post(
           res.status(400).json({
             success: false,
             error: `${role} role requires a branch when your organisation has multiple branches`,
+          });
+          return;
+        }
+      }
+      if (role === 'BRANCH_FINANCE' && !finalBranchId) {
+        const branches = await prisma.branch.findMany({
+          where: { organizationId: req.user!.organizationId, isActive: true },
+          select: { id: true },
+        });
+        if (branches.length === 1) {
+          finalBranchId = branches[0].id;
+        } else {
+          res.status(400).json({
+            success: false,
+            error:
+              'BRANCH_FINANCE role requires a branch when your organisation has multiple branches',
           });
           return;
         }
@@ -119,6 +223,12 @@ usersRouter.post(
         }
       }
 
+      // Auto-generate staffCode for branch-scoped staff roles
+      let staffCode: string | undefined;
+      if (finalBranchId && ['SERVICE', 'WAITER', 'KITCHEN', 'BRANCH_ADMIN'].includes(role)) {
+        staffCode = await generateStaffCode(finalBranchId, role).catch(() => undefined);
+      }
+
       const user = await prisma.user.create({
         data: {
           organizationId: req.user!.organizationId,
@@ -126,8 +236,9 @@ usersRouter.post(
           name,
           email,
           passwordHash,
-          role: role as UserRole,
-        },
+          role: role as any,
+          staffCode,
+        } as any,
         select: {
           id: true,
           name: true,
@@ -136,8 +247,9 @@ usersRouter.post(
           isActive: true,
           createdAt: true,
           branchId: true,
+          staffCode: true,
           branch: { select: { id: true, name: true } },
-        },
+        } as any,
       });
 
       res.status(201).json({ success: true, data: user });
@@ -158,7 +270,20 @@ usersRouter.patch(
     try {
       const schema = z.object({
         name: z.string().optional(),
-        role: z.enum(['ADMIN', 'BRANCH_ADMIN', 'SERVICE', 'WAITER']).optional(),
+        role: z
+          .enum([
+            'ORG_OWNER',
+            'ADMIN',
+            'ORG_MANAGER',
+            'ORG_FINANCE',
+            'ORG_AUDITOR',
+            'BRANCH_ADMIN',
+            'BRANCH_FINANCE',
+            'SERVICE',
+            'WAITER',
+            'KITCHEN',
+          ])
+          .optional(),
         isActive: z.boolean().optional(),
         password: z.string().min(8).optional(),
         branchId: z.string().nullable().optional(),
@@ -168,11 +293,20 @@ usersRouter.patch(
 
       // BRANCH_ADMIN cannot promote anyone to ADMIN or change branchId
       if (req.user!.role === 'BRANCH_ADMIN') {
-        if ((data.role as string) === 'ADMIN' || (data.role as string) === 'SUPERADMIN') {
-          res.status(403).json({
-            success: false,
-            error: 'Branch admins cannot assign ADMIN or SUPERADMIN roles',
-          });
+        if (
+          data.role &&
+          [
+            'ORG_OWNER',
+            'ADMIN',
+            'ORG_MANAGER',
+            'ORG_FINANCE',
+            'ORG_AUDITOR',
+            'SUPERADMIN',
+          ].includes(data.role)
+        ) {
+          res
+            .status(403)
+            .json({ success: false, error: 'Branch admins cannot assign org-wide roles' });
           return;
         }
         if ('branchId' in data) {
@@ -200,16 +334,39 @@ usersRouter.patch(
         return;
       }
 
+      if (
+        (data.role as string) === 'ORG_OWNER' &&
+        req.user!.role !== 'SUPERADMIN' &&
+        req.user!.role !== 'ORG_OWNER'
+      ) {
+        res
+          .status(403)
+          .json({ success: false, error: 'Only org owners can assign ORG_OWNER role' });
+        return;
+      }
+
       const { password, ...rest } = data;
-      const updateData: Prisma.UserUncheckedUpdateInput = { ...rest };
+      const updateData: any = { ...rest };
       if (password) {
         updateData.passwordHash = await bcrypt.hash(password, 12);
       }
 
-      const nextRole = (data.role as UserRole | undefined) ?? targetUser.role;
+      const nextRole = (data.role as string | undefined) ?? targetUser.role;
       const nextBranchId =
         'branchId' in data ? (data.branchId as string | null | undefined) : targetUser.branchId;
-      if ((nextRole === 'WAITER' || nextRole === 'SERVICE') && !nextBranchId) {
+      if (
+        nextRole === 'ORG_OWNER' ||
+        nextRole === 'ADMIN' ||
+        nextRole === 'ORG_MANAGER' ||
+        nextRole === 'ORG_FINANCE' ||
+        nextRole === 'ORG_AUDITOR'
+      ) {
+        updateData.branchId = null;
+      }
+      if (
+        (nextRole === 'WAITER' || nextRole === 'SERVICE' || nextRole === 'KITCHEN') &&
+        !nextBranchId
+      ) {
         const branches = await prisma.branch.findMany({
           where: { organizationId: req.user!.organizationId, isActive: true },
           select: { id: true },
@@ -220,6 +377,22 @@ usersRouter.patch(
           res.status(400).json({
             success: false,
             error: `${nextRole} role requires a branch when your organisation has multiple branches`,
+          });
+          return;
+        }
+      }
+      if (nextRole === 'BRANCH_FINANCE' && !nextBranchId) {
+        const branches = await prisma.branch.findMany({
+          where: { organizationId: req.user!.organizationId, isActive: true },
+          select: { id: true },
+        });
+        if (branches.length === 1) {
+          updateData.branchId = branches[0].id;
+        } else {
+          res.status(400).json({
+            success: false,
+            error:
+              'BRANCH_FINANCE role requires a branch when your organisation has multiple branches',
           });
           return;
         }
@@ -235,8 +408,9 @@ usersRouter.patch(
           role: true,
           isActive: true,
           branchId: true,
+          staffCode: true,
           branch: { select: { id: true, name: true } },
-        },
+        } as any,
       });
 
       res.json({ success: true, data: user });

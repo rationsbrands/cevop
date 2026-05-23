@@ -16,15 +16,19 @@ import { prisma } from './services/prisma';
 import { authRouter } from './routes/auth';
 import { menuRouter } from './routes/menu';
 import { ordersRouter } from './routes/orders';
+import { sessionsRouter } from './routes/sessions';
 import { tablesRouter } from './routes/tables';
 import { orgsRouter } from './routes/orgs';
 import { waiterCallsRouter } from './routes/waiterCalls';
 import { serviceRequestsRouter } from './routes/serviceRequests';
 import { usersRouter } from './routes/users';
 import { branchesRouter } from './routes/branches';
+import { sectionsRouter } from './routes/sections';
 import { invitesRouter } from './routes/invites';
 import { opsRouter } from './routes/ops';
 import { helpOptionsRouter } from './routes/helpOptions';
+import { waiterTasksRouter } from './routes/waiterTasks';
+import { plansRouter } from './routes/plans';
 import { initSocketHandlers } from './sockets/handlers';
 import { errorHandler } from './middleware/errorHandler';
 import { planGuard } from './middleware/planGuard';
@@ -95,10 +99,26 @@ app.use(morgan(morganFormat, { stream: { write: (msg) => logger.info(msg.trim())
 // Rate limiting — Upstash Redis when available, in-memory fallback otherwise
 // ---------------------------------------------------------------------------
 
+function getRateLimitKey(req: Request): string {
+  const cf = req.headers['cf-connecting-ip'];
+  if (typeof cf === 'string' && cf.trim()) return cf.trim();
+
+  const realIp = req.headers['x-real-ip'];
+  if (typeof realIp === 'string' && realIp.trim()) return realIp.trim();
+
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) return xff.split(',')[0].trim();
+  if (Array.isArray(xff) && xff.length > 0) return String(xff[0]).split(',')[0].trim();
+
+  return req.ip ?? req.socket.remoteAddress ?? 'unknown';
+}
+
 // Fallback in-memory limiters (used in dev or if Redis not configured)
 const authFallback = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 20,
+  skip: (req) => req.method === 'OPTIONS',
+  keyGenerator: getRateLimitKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests, please slow down.' },
@@ -106,7 +126,9 @@ const authFallback = rateLimit({
 
 const apiFallback = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 3000,
+  max: 500,
+  skip: (req) => req.method === 'OPTIONS',
+  keyGenerator: getRateLimitKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests.' },
@@ -114,7 +136,9 @@ const apiFallback = rateLimit({
 
 const publicFallback = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 120,
+  max: 60,
+  skip: (req) => req.method === 'OPTIONS',
+  keyGenerator: getRateLimitKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests from this table.' },
@@ -127,13 +151,13 @@ function makeUpstashLimiter(requests: number, window: Duration, prefix: string):
   return new Ratelimit({
     redis,
     limiter: Ratelimit.slidingWindow(requests, window),
-    prefix: `cevop:rl2:${prefix}`,
+    prefix: `cevop:rl:${prefix}`,
   });
 }
 
-const upstashAuth = makeUpstashLimiter(100, '15 m', 'auth');
-const upstashApi = makeUpstashLimiter(3000, '15 m', 'api');
-const upstashPublic = makeUpstashLimiter(120, '1 m', 'public');
+const upstashAuth = makeUpstashLimiter(20, '15 m', 'auth');
+const upstashApi = makeUpstashLimiter(500, '15 m', 'api');
+const upstashPublic = makeUpstashLimiter(60, '1 m', 'public');
 // Wraps an Upstash limiter into Express middleware, falls back to in-memory
 function makeLimiter(
   upstash: Ratelimit | null,
@@ -142,9 +166,13 @@ function makeLimiter(
 ): express.RequestHandler {
   if (!upstash) return fallback;
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    if (req.method === 'OPTIONS') {
+      next();
+      return;
+    }
     try {
-      const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
-      const { success } = await upstash.limit(ip);
+      const key = getRateLimitKey(req);
+      const { success } = await upstash.limit(key);
       if (!success) {
         res.status(429).json({ success: false, error: errorMsg });
         return;
@@ -176,6 +204,8 @@ app.use('/api/waiter-calls/public', publicLimiter);
 app.use('/api/service-requests/public', publicLimiter);
 app.use('/api/', apiLimiter);
 
+app.use('/api/plans', plansRouter);
+
 // Enforce organization plan status
 app.use('/api/', planGuard as express.RequestHandler);
 
@@ -188,15 +218,18 @@ app.get('/health', (_req, res) => {
 app.use('/api/auth', authRouter);
 app.use('/api/menu', menuRouter);
 app.use('/api/orders', ordersRouter);
+app.use('/api/sessions', sessionsRouter);
 app.use('/api/tables', tablesRouter);
 app.use('/api/orgs', orgsRouter);
 app.use('/api/branches', branchesRouter);
+app.use('/api/sections', sectionsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/invites', invitesRouter);
 app.use('/api/waiter-calls', waiterCallsRouter);
 app.use('/api/service-requests', serviceRequestsRouter);
 app.use('/api/help-options', helpOptionsRouter);
 app.use('/api/ops', opsRouter);
+app.use('/api/waiter-tasks', waiterTasksRouter);
 
 // WebSocket
 initSocketHandlers(io);

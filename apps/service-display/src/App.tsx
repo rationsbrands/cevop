@@ -9,6 +9,9 @@ const ServiceBoard = React.lazy(() =>
 const WaiterBoard = React.lazy(() =>
   import('./pages/WaiterBoard').then((m) => ({ default: m.WaiterBoard })),
 );
+const KitchenBoard = React.lazy(() =>
+  import('./pages/KitchenBoard').then((m) => ({ default: m.KitchenBoard })),
+);
 const LoginPage = React.lazy(() =>
   import('./pages/LoginPage').then((m) => ({ default: m.LoginPage })),
 );
@@ -28,8 +31,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function RoleRouter() {
   const { user } = useAuth();
-  // WAITER role gets the waiter dashboard; everyone else gets the service board
+  // WAITER role gets the waiter dashboard
+  // KITCHEN role gets the kitchen display
+  // everyone else gets the service board
   if (user?.role === 'WAITER') return <WaiterBoard />;
+  if (user?.role === 'KITCHEN') return <KitchenBoard />;
   return <ServiceBoard />;
 }
 

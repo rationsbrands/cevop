@@ -1,5 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Sora:wght@100..800&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
-
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -37,6 +36,43 @@
   color-scheme: light;
 }
 
+[data-theme='light'] .text-red-400 {
+  color: var(--danger) !important;
+}
+[data-theme='light'] .bg-red-900\/20 {
+  background-color: color-mix(in srgb, var(--danger) 12%, transparent) !important;
+}
+[data-theme='light'] .border-red-800 {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border)) !important;
+}
+
+[data-theme='light'] .text-green-400 {
+  color: var(--success) !important;
+}
+[data-theme='light'] .bg-green-900\/20 {
+  background-color: color-mix(in srgb, var(--success) 12%, transparent) !important;
+}
+[data-theme='light'] .border-green-800 {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border)) !important;
+}
+
+[data-theme='light'] .text-yellow-400,
+[data-theme='light'] .text-amber-300,
+[data-theme='light'] .text-amber-400 {
+  color: var(--warning) !important;
+}
+[data-theme='light'] .bg-yellow-900\/20,
+[data-theme='light'] .bg-amber-900\/20 {
+  background-color: color-mix(in srgb, var(--warning) 12%, transparent) !important;
+}
+[data-theme='light'] .bg-amber-900\/30 {
+  background-color: color-mix(in srgb, var(--warning) 16%, transparent) !important;
+}
+[data-theme='light'] .border-yellow-800,
+[data-theme='light'] .border-amber-800 {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border)) !important;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -46,24 +82,49 @@ body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: 'Inter', sans-serif;
+  font-family:
+    'Plus Jakarta Sans',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
   height: 100%;
   transition:
     background 0.3s,
     color 0.3s;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family:
+    'Plus Jakarta Sans',
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
 }
 #root {
   min-height: 100dvh;
   display: flex;
 }
 .font-display {
-  font-family: 'Sora', sans-serif;
+  font-family: inherit;
   letter-spacing: -0.02em;
   font-weight: 700;
 }
 .brand-mark {
-  font-family: 'Inter', sans-serif;
+  font-family: inherit;
   font-weight: 800;
   letter-spacing: -0.04em;
   display: inline-flex;
@@ -118,6 +179,68 @@ label {
   letter-spacing: 0.08em;
   color: var(--muted);
   margin-bottom: 0.375rem;
+}
+
+.auth-shell label {
+  margin-bottom: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.auth-shell label.auth-plain-label {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+}
+
+.auth-shell input,
+.auth-shell select,
+.auth-shell textarea {
+  background: transparent;
+  border-radius: 16px;
+  border-color: var(--border);
+  padding: 0.7rem 0.9rem;
+  font-size: 0.95rem;
+  transition:
+    border-color 0.15s ease,
+    background 0.2s ease;
+}
+
+.auth-shell input:focus,
+.auth-shell select:focus,
+.auth-shell textarea:focus {
+  border-color: color-mix(in srgb, var(--text) 45%, var(--border));
+}
+
+.auth-shell input::placeholder,
+.auth-shell textarea::placeholder {
+  opacity: 0.8;
+}
+
+.auth-shell input:-webkit-autofill,
+.auth-shell input:-webkit-autofill:hover,
+.auth-shell input:-webkit-autofill:focus,
+.auth-shell select:-webkit-autofill,
+.auth-shell select:-webkit-autofill:hover,
+.auth-shell select:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text);
+  box-shadow: 0 0 0px 1000px transparent inset;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+.auth-shell .btn {
+  border-radius: 9999px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  font-weight: 700;
+}
+
+.auth-shell .card {
+  border-radius: 24px;
 }
 
 .btn {

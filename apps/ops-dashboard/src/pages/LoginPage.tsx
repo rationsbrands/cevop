@@ -10,6 +10,7 @@ export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [accounts, setAccounts] = useState<any[] | null>(null);
@@ -25,9 +26,9 @@ export function LoginPage() {
     setError('');
     try {
       if (accounts) {
-        await login(email, password, selectedOrgId);
+        await login(email, password, selectedOrgId, rememberMe);
       } else {
-        await login(email, password);
+        await login(email, password, undefined, rememberMe);
       }
       navigate('/');
     } catch (err: any) {
@@ -48,7 +49,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
+    <div className="auth-shell min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
       <button
         onClick={() => setMode(nextThemeMode)}
         className={`absolute top-6 right-6 z-10 w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
@@ -90,8 +91,10 @@ export function LoginPage() {
           </div>
           <form onSubmit={handleSubmit} className="card p-6 space-y-5">
             <div>
-              <label>Email</label>
+              <label htmlFor="ops_login_email">Email</label>
               <input
+                id="ops_login_email"
+                name="email"
                 type="email"
                 value={email}
                 onChange={(e) => {
@@ -105,9 +108,11 @@ export function LoginPage() {
               />
             </div>
             <div>
-              <label>Password</label>
+              <label htmlFor="ops_login_password">Password</label>
               <div className="relative">
                 <input
+                  id="ops_login_password"
+                  name="password"
                   type={showPw ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => {
@@ -116,56 +121,49 @@ export function LoginPage() {
                     setSelectedOrgId('');
                   }}
                   required
+                  autoComplete="current-password"
                   className="pr-10"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPw((v) => !v)}
                   tabIndex={-1}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] text-xs"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] text-xs select-none"
                 >
-                  {showPw ? (
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                      <line x1="1" y1="1" x2="23" y2="23" />
-                    </svg>
-                  ) : (
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                  )}
+                  {showPw ? 'hide' : 'show'}
                 </button>
               </div>
             </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="ops_login_remember"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="w-4 h-4 rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)]/30"
+              />
+              <label
+                htmlFor="ops_login_remember"
+                className="auth-plain-label text-sm cursor-pointer select-none normal-case tracking-normal"
+              >
+                Remember me for 30 days
+              </label>
+            </div>
+
             {accounts && (
               <div>
-                <label>Select organisation</label>
+                <label htmlFor="ops_login_organization">Select organisation</label>
                 <select
+                  id="ops_login_organization"
+                  name="organizationId"
                   value={selectedOrgId}
                   onChange={(e) => {
                     setSelectedOrgId(e.target.value);
                     localStorage.setItem(`cevop_last_org:${email.toLowerCase()}`, e.target.value);
                   }}
                   required
+                  autoComplete="off"
                 >
                   {accounts.map((a: any) => (
                     <option key={a.organizationId} value={a.organizationId}>

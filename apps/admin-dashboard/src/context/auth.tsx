@@ -12,6 +12,7 @@ import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSessi
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 const AUTH_HEADERS = { 'Content-Type': 'application/json', 'x-cevop-app': 'admin' };
+const SESSION_MARKER_KEY = `cevop_admin_has_session:${window.location.hostname}`;
 
 export interface OrgInfo {
   id: string;
@@ -43,9 +44,15 @@ export interface AuthUser {
 interface AuthContextType {
   user: AuthUser | null;
   token: string | null;
+  setToken: (token: string) => void;
   activeBranchFilter: BranchInfo | null;
   setActiveBranchFilter: (branch: BranchInfo | null) => void;
-  login: (email: string, password: string, organizationId?: string) => Promise<void>;
+  login: (
+    email: string,
+    password: string,
+    organizationId?: string,
+    rememberMe?: boolean,
+  ) => Promise<void>;
   logout: () => Promise<void>;
   loading: boolean;
 }
@@ -69,10 +76,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshTimerRef.current = setTimeout(() => silentRefreshRef.current(), msUntilRefresh);
   }, []);
 
+  const setTokenInMemory = useCallback(
+    (accessToken: string) => {
+      setToken(accessToken);
+      scheduleRefresh(accessToken);
+      try {
+        localStorage.setItem(SESSION_MARKER_KEY, '1');
+      } catch {
+        /* ignore */
+      }
+    },
+    [scheduleRefresh],
+  );
+
   const silentRefresh = useCallback(async (): Promise<string | null> => {
     // Debounce
     if (Date.now() - lastRefreshedAt.current < 30_000) {
       return token; // Return current in-memory token
+    }
+
+    if (!sessionStorage.getItem('impersonate_token') && !localStorage.getItem(SESSION_MARKER_KEY)) {
+      return null;
     }
 
     try {
@@ -84,20 +108,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       if (!res.ok) {
         if (res.status === 401) {
-          logout();
+          try {
+            localStorage.removeItem(SESSION_MARKER_KEY);
+          } catch {
+            /* ignore */
+          }
+          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+          sessionStorage.removeItem('impersonate_token');
+          setToken(null);
+          setUser(null);
+          setActiveBranchFilter(null);
           return null;
         }
         return token;
       }
       const { data } = await res.json();
-      setToken(data.accessToken);
+      setTokenInMemory(data.accessToken);
+      try {
+        localStorage.setItem(SESSION_MARKER_KEY, '1');
+      } catch {
+        /* ignore */
+      }
       lastRefreshedAt.current = Date.now();
-      scheduleRefresh(data.accessToken);
       return data.accessToken;
     } catch {
       return token;
     }
-  }, [scheduleRefresh, token]);
+  }, [setTokenInMemory, token]);
 
   useEffect(() => {
     silentRefreshRef.current = () => {
@@ -137,17 +174,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         let activeToken = tokenFromUrl;
 
         if (!tokenFromUrl) {
+          if (!localStorage.getItem(SESSION_MARKER_KEY)) {
+            setLoading(false);
+            return;
+          }
           const res = await fetch(`${API_BASE}/api/auth/refresh`, {
             method: 'POST',
             credentials: 'include', // Required — sends the cookie
             headers: AUTH_HEADERS,
           });
           if (!res.ok) {
+            try {
+              localStorage.removeItem(SESSION_MARKER_KEY);
+            } catch {
+              /* ignore */
+            }
             setLoading(false);
             return;
           }
           const { data } = await res.json();
           activeToken = data.accessToken;
+          try {
+            localStorage.setItem(SESSION_MARKER_KEY, '1');
+          } catch {
+            /* ignore */
+          }
         }
 
         if (!activeToken) {
@@ -164,6 +215,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         const { data: userData } = await meRes.json();
         if (userData) {
+          const allowedRoles = [
+            'ORG_OWNER',
+            'ADMIN',
+            'ORG_MANAGER',
+            'ORG_FINANCE',
+            'ORG_AUDITOR',
+            'BRANCH_ADMIN',
+            'BRANCH_FINANCE',
+          ];
+          if (!allowedRoles.includes(userData.role)) {
+            setUser(null);
+            setToken(null);
+            setLoading(false);
+            return;
+          }
           setUser(userData);
           if (userData.branch) setActiveBranchFilter(userData.branch);
         } else {
@@ -180,12 +246,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [scheduleRefresh]);
 
-  async function login(email: string, password: string, organizationId?: string) {
+  async function login(
+    email: string,
+    password: string,
+    organizationId?: string,
+    rememberMe?: boolean,
+  ) {
     const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: 'POST',
       credentials: 'include', // Required — server sets the cookie on this response
       headers: AUTH_HEADERS,
-      body: JSON.stringify({ email, password, ...(organizationId ? { organizationId } : {}) }),
+      body: JSON.stringify({
+        email,
+        password,
+        ...(organizationId ? { organizationId } : {}),
+        ...(rememberMe ? { rememberMe } : {}),
+      }),
     });
     const body = await res.json();
     if (!res.ok) {
@@ -198,14 +274,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(body.error || 'Login failed');
     }
 
-    if (body.data.user.role === 'SUPERADMIN') {
+    const role = body.data.user.role;
+    if (role === 'SUPERADMIN') {
       throw new Error('This account belongs to the Ops team. Please use the Ops Portal.');
     }
+    if (role === 'SERVICE' || role === 'WAITER') {
+      throw new Error('This is a branch staff account. Please use the Service Portal.');
+    }
+    const allowedRoles = [
+      'ORG_OWNER',
+      'ADMIN',
+      'ORG_MANAGER',
+      'ORG_FINANCE',
+      'ORG_AUDITOR',
+      'BRANCH_ADMIN',
+      'BRANCH_FINANCE',
+    ];
+    if (!allowedRoles.includes(role)) {
+      throw new Error('Access denied for this role');
+    }
 
-    setToken(body.data.accessToken);
+    setTokenInMemory(body.data.accessToken);
     setUser(body.data.user);
     if (body.data.user.branch) setActiveBranchFilter(body.data.user.branch);
-    scheduleRefresh(body.data.accessToken);
+    try {
+      localStorage.setItem(SESSION_MARKER_KEY, '1');
+    } catch {
+      /* ignore */
+    }
   }
 
   async function logout() {
@@ -220,6 +316,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     sessionStorage.removeItem('impersonate_token');
+    try {
+      localStorage.removeItem(SESSION_MARKER_KEY);
+    } catch {
+      /* ignore */
+    }
     setToken(null);
     setUser(null);
     setActiveBranchFilter(null);
@@ -227,7 +328,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, token, activeBranchFilter, setActiveBranchFilter, login, logout, loading }}
+      value={{
+        user,
+        token,
+        setToken: setTokenInMemory,
+        activeBranchFilter,
+        setActiveBranchFilter,
+        login,
+        logout,
+        loading,
+      }}
     >
       {children}
     </AuthContext.Provider>
@@ -250,18 +360,32 @@ export function useApi() {
     [token],
   );
 
+  const shouldAppendBranchId = useCallback((pathname: string): boolean => {
+    return (
+      pathname.startsWith('/api/menu') ||
+      pathname.startsWith('/api/tables') ||
+      pathname.startsWith('/api/orders') ||
+      pathname.startsWith('/api/waiter-calls') ||
+      pathname.startsWith('/api/service-requests') ||
+      pathname.startsWith('/api/help-options') ||
+      pathname.startsWith('/api/waiter-tasks')
+    );
+  }, []);
+
   const buildUrl = useCallback(
     (path: string, params?: Record<string, string>): string => {
       const base = API_BASE || '';
       // Parse path — may already have query string
       const [pathname, existingQs] = path.split('?');
       const url = new URLSearchParams(existingQs || '');
-      if (effectiveBranchId && !url.has('branchId')) url.set('branchId', effectiveBranchId);
+      if (shouldAppendBranchId(pathname) && effectiveBranchId && !url.has('branchId')) {
+        url.set('branchId', effectiveBranchId);
+      }
       if (params) Object.entries(params).forEach(([k, v]) => url.set(k, v));
       const qs = url.toString();
       return `${base}${pathname}${qs ? '?' + qs : ''}`;
     },
-    [effectiveBranchId],
+    [effectiveBranchId, shouldAppendBranchId],
   );
 
   const handleResponse = useCallback(async (res: Response) => {
@@ -274,34 +398,45 @@ export function useApi() {
 
   const get = useCallback(
     (path: string, params?: Record<string, string>) =>
-      fetch(buildUrl(path, params), { headers }).then(handleResponse),
+      fetch(buildUrl(path, params), { headers, credentials: 'include' }).then(handleResponse),
     [buildUrl, handleResponse, headers],
   );
   const post = useCallback(
     (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) }).then(
-        handleResponse,
-      ),
-    [handleResponse, headers],
+      fetch(buildUrl(path), {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }).then(handleResponse),
+    [buildUrl, handleResponse, headers],
   );
   const put = useCallback(
     (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'PUT', headers, body: JSON.stringify(body) }).then(
-        handleResponse,
-      ),
-    [handleResponse, headers],
+      fetch(buildUrl(path), {
+        method: 'PUT',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }).then(handleResponse),
+    [buildUrl, handleResponse, headers],
   );
   const patch = useCallback(
     (path: string, body: unknown) =>
-      fetch(`${API_BASE}${path}`, { method: 'PATCH', headers, body: JSON.stringify(body) }).then(
-        handleResponse,
-      ),
-    [handleResponse, headers],
+      fetch(buildUrl(path), {
+        method: 'PATCH',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }).then(handleResponse),
+    [buildUrl, handleResponse, headers],
   );
   const del = useCallback(
     (path: string) =>
-      fetch(`${API_BASE}${path}`, { method: 'DELETE', headers }).then(handleResponse),
-    [handleResponse, headers],
+      fetch(buildUrl(path), { method: 'DELETE', headers, credentials: 'include' }).then(
+        handleResponse,
+      ),
+    [buildUrl, handleResponse, headers],
   );
 
   return useMemo(

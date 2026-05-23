@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { useApi } from '../context/auth';
+import { useApi, usePermission } from '../context/auth';
 
 const PLAN_STATUS_COLOR: Record<string, string> = {
   trialing: 'text-yellow-400 border-yellow-800',
@@ -17,6 +17,7 @@ const PLAN_COLOR: Record<string, string> = {
 
 export function OrgsPage() {
   const api = useApi();
+  const can = usePermission();
   const [orgs, setOrgs] = useState<any[]>([]);
   const [meta, setMeta] = useState({ total: 0, pages: 1, page: 1 });
   const [loading, setLoading] = useState(true);
@@ -42,6 +43,8 @@ export function OrgsPage() {
     return () => window.clearTimeout(t);
   }, [load]);
 
+  if (!can('view_orgs')) return <div className="text-red-400 p-8">Permission denied</div>;
+
   return (
     <div className="space-y-6 animate-in">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -49,14 +52,21 @@ export function OrgsPage() {
           <h1 className="font-display text-4xl">ORGANISATIONS</h1>
           <p className="text-[var(--muted)] text-sm mt-0.5">{meta.total} total</p>
         </div>
-        <Link to="/onboard" className="btn btn-primary btn-sm">
-          + Onboard New Org
-        </Link>
+        {can('onboard_org') && (
+          <Link to="/onboard" className="btn btn-primary btn-sm">
+            + Onboard New Org
+          </Link>
+        )}
       </div>
 
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
+        <label htmlFor="ops_orgs_search" className="sr-only">
+          Search organisations
+        </label>
         <input
+          id="ops_orgs_search"
+          name="search"
           type="text"
           placeholder="Search name, slug, email…"
           value={search}
@@ -65,14 +75,21 @@ export function OrgsPage() {
             setPage(1);
           }}
           className="w-full sm:w-64 text-sm"
+          autoComplete="off"
         />
+        <label htmlFor="ops_orgs_plan_status" className="sr-only">
+          Plan status
+        </label>
         <select
+          id="ops_orgs_plan_status"
+          name="planStatus"
           value={planStatus}
           onChange={(e) => {
             setPlanStatus(e.target.value);
             setPage(1);
           }}
           className="w-full sm:w-auto text-sm"
+          autoComplete="off"
         >
           <option value="">All Statuses</option>
           <option value="trialing">Trialing</option>
@@ -152,9 +169,11 @@ export function OrgsPage() {
                     {new Date(org.createdAt).toLocaleDateString()}
                   </td>
                   <td>
-                    <Link to={`/orgs/${org.id}`} className="btn btn-secondary btn-sm">
-                      View
-                    </Link>
+                    {can('view_org_detail') && (
+                      <Link to={`/orgs/${org.id}`} className="btn btn-secondary btn-sm">
+                        View
+                      </Link>
+                    )}
                   </td>
                 </tr>
               ))}

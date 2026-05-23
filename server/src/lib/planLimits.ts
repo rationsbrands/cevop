@@ -15,8 +15,8 @@ export const PLAN_LIMITS = {
   },
   starter: {
     branches: 1,
-    tables: 20,
-    staff: 5,
+    tables: 25,
+    staff: 10,
     whatsapp: true,
     slack: false,
   },
@@ -45,8 +45,9 @@ export function getLimits(plan: string) {
 export function getUpgradeMessage(resource: 'tables' | 'branches' | 'staff', plan: string): string {
   const messages = {
     tables: {
-      free: 'You have reached the 5 table limit on the free plan. Upgrade to Starter for up to 20 tables.',
-      starter: 'You have reached the 20 table limit on Starter. Upgrade to Growth for up to 100 tables.',
+      free: 'You have reached the 5 table limit on the free plan. Upgrade to Starter for up to 25 tables.',
+      starter:
+        'You have reached the 25 table limit on Starter. Upgrade to Growth for up to 100 tables.',
       trial: 'You have reached the table limit. Upgrade to Growth to continue.',
       growth: 'You have reached the 100 table limit. Contact us about Enterprise.',
       enterprise: 'Table limit reached. Contact support.',
@@ -59,8 +60,8 @@ export function getUpgradeMessage(resource: 'tables' | 'branches' | 'staff', pla
       enterprise: 'Branch limit reached. Contact support.',
     },
     staff: {
-      free: 'The free plan supports up to 3 staff accounts. Upgrade to Starter for up to 5.',
-      starter: 'Starter supports up to 5 staff accounts. Upgrade to Growth for unlimited staff.',
+      free: 'The free plan supports up to 3 staff accounts. Upgrade to Starter for up to 10.',
+      starter: 'Starter supports up to 10 staff accounts. Upgrade to Growth for unlimited staff.',
       trial: 'You have reached the staff limit. Upgrade to Growth to continue.',
       growth: 'Staff limit reached.',
       enterprise: 'Staff limit reached. Contact support.',

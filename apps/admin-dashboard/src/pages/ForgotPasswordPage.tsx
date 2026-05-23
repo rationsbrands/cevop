@@ -35,7 +35,7 @@ export function ForgotPasswordPage() {
 
   if (sent)
     return (
-      <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
+      <div className="auth-shell min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
         <button
           onClick={() => setMode(nextThemeMode)}
           className={`absolute top-6 right-6 z-10 w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
@@ -88,7 +88,7 @@ export function ForgotPasswordPage() {
     );
 
   return (
-    <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
+    <div className="auth-shell min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
       <button
         onClick={() => setMode(nextThemeMode)}
         className={`absolute top-6 right-6 z-10 w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
@@ -125,13 +125,16 @@ export function ForgotPasswordPage() {
           </div>
           <form onSubmit={handleSubmit} className="card p-6 space-y-5">
             <div>
-              <label>Email</label>
+              <label htmlFor="admin_forgot_email">Email</label>
               <input
+                id="admin_forgot_email"
+                name="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 placeholder="e.g. name@restaurant.com"
+                autoComplete="email"
               />
             </div>
             {error && (

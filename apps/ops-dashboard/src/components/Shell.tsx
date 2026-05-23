@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { useAuth, useApi } from '../context/auth';
+import { useAuth, useApi, usePermission } from '../context/auth';
 import { useTheme } from '../context/theme';
 
 interface IconProps {
@@ -67,17 +67,9 @@ const IconAudit = ({ size }: IconProps) => (
 );
 const IconChevronLeft = ({ size }: IconProps) => <Ico size={size} d={['M15 18l-6-6 6-6']} />;
 
-const NAV = [
-  { to: '/', label: 'Overview', Icon: IconOverview, exact: true },
-  { to: '/orgs', label: 'Organisations', Icon: IconOrgs },
-  { to: '/onboard', label: 'Onboard', Icon: IconOnboard },
-  { to: '/team', label: 'Team', Icon: IconTeam },
-  { to: '/audit', label: 'Audit Logs', Icon: IconAudit },
-  { to: '/security', label: 'Security', Icon: IconSecurity },
-];
-
 export function Shell() {
   const { user, logout } = useAuth();
+  const can = usePermission();
   const api = useApi();
   const { mode, setMode } = useTheme();
   const navigate = useNavigate();
@@ -93,6 +85,20 @@ export function Shell() {
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
   const nextThemeLabel = nextThemeMode === 'system' ? 'OS' : nextThemeMode === 'dark' ? 'D' : 'L';
+
+  const NAV = [
+    can('view_metrics') && { to: '/', label: 'Overview', Icon: IconOverview, exact: true },
+    can('view_orgs') && { to: '/orgs', label: 'Organisations', Icon: IconOrgs },
+    can('onboard_org') && { to: '/onboard', label: 'Onboard', Icon: IconOnboard },
+    can('view_team') && { to: '/team', label: 'Team', Icon: IconTeam },
+    can('view_audit') && { to: '/audit', label: 'Audit Logs', Icon: IconAudit },
+    { to: '/security', label: 'Security', Icon: IconSecurity }, // always visible
+  ].filter(Boolean) as Array<{
+    to: string;
+    label: string;
+    Icon: React.ComponentType<{ size?: number }>;
+    exact?: boolean;
+  }>;
 
   async function handleLogout() {
     await logout();
@@ -191,9 +197,9 @@ export function Shell() {
         <div className="p-3 border-t border-[var(--border)] shrink-0 space-y-4">
           {sidebarOpen || mobileMenuOpen ? (
             <div className="flex flex-col gap-1.5 px-1">
-              <label className="text-[9px] text-[var(--muted)] uppercase font-bold tracking-widest px-1">
+              <span className="text-[9px] text-[var(--muted)] uppercase font-bold tracking-widest px-1">
                 Theme
-              </label>
+              </span>
               <div className="flex items-center gap-2 px-1">
                 <button
                   onClick={() => setMode(nextThemeMode)}
@@ -233,8 +239,15 @@ export function Shell() {
 
           {sidebarOpen || mobileMenuOpen ? (
             <div className="px-3 pt-2 border-t border-[var(--border)] mt-2">
-              <p className="text-xs text-[var(--text)] font-bold truncate">{user?.name}</p>
-              <p className="text-[10px] text-[var(--danger)] mb-2 font-bold tracking-widest uppercase">
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-[var(--text)] font-bold truncate">{user?.name}</p>
+                {user?.opsRole && user.opsRole !== 'SUPER' && (
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 border border-[var(--border)] text-[var(--muted)]">
+                    {user.opsRole}
+                  </span>
+                )}
+              </div>
+              <p className="text-[10px] text-[var(--danger)] mb-2 mt-1 font-bold tracking-widest uppercase">
                 SUPERADMIN
               </p>
               <button

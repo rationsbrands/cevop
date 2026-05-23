@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useTheme } from '../context/theme';
+import { PasswordStrength } from '../components/PasswordStrength';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -32,7 +33,6 @@ function slugify(s: string) {
 type Step = 'org' | 'account' | 'done';
 
 export function SignupPage() {
-  const navigate = useNavigate();
   const { mode, setMode } = useTheme();
   const [step, setStep] = useState<Step>('org');
 
@@ -43,8 +43,20 @@ export function SignupPage() {
   // Org step
   const [orgName, setOrgName] = useState('');
   const [orgSlug, setOrgSlug] = useState('');
-  const [timezone, setTimezone] = useState('Africa/Lagos');
-  const [currency, setCurrency] = useState('NGN');
+  const [currency, setCurrency] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlCurrency = params.get('currency');
+    const valid = ['NGN', 'GBP', 'GHS', 'KES', 'ZAR', 'USD', 'EUR'];
+    return valid.includes(urlCurrency ?? '') ? urlCurrency! : 'NGN';
+  });
+
+  const [timezone, setTimezone] = useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlTimezone = params.get('timezone');
+    if (urlTimezone) return decodeURIComponent(urlTimezone);
+    const currencyParam = params.get('currency');
+    return currencyParam === 'GBP' ? 'Europe/London' : 'Africa/Lagos';
+  });
   const [contactPhone, setContactPhone] = useState('');
 
   // Slug check
@@ -156,7 +168,7 @@ export function SignupPage() {
 
   if (step === 'done')
     return (
-      <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
+      <div className="auth-shell min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
         <button
           onClick={() => setMode(nextThemeMode)}
           className={`absolute top-6 right-6 z-10 w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
@@ -229,7 +241,7 @@ export function SignupPage() {
     );
 
   return (
-    <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
+    <div className="auth-shell min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
       <button
         onClick={() => setMode(nextThemeMode)}
         className={`absolute top-6 right-6 z-10 w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
@@ -310,8 +322,10 @@ export function SignupPage() {
           {step === 'org' && (
             <form onSubmit={handleOrgContinue} className="card p-6 space-y-4">
               <div>
-                <label>Restaurant Name *</label>
+                <label htmlFor="signup_org_name">Restaurant Name *</label>
                 <input
+                  id="signup_org_name"
+                  name="orgName"
                   value={orgName}
                   onChange={(e) => {
                     setOrgName(e.target.value);
@@ -323,7 +337,7 @@ export function SignupPage() {
               </div>
 
               <div>
-                <label>
+                <label htmlFor="signup_org_slug">
                   URL Slug *
                   <span className="ml-2 text-[var(--muted)] normal-case font-normal text-xs">
                     {slugStatus === 'checking' && (
@@ -338,6 +352,8 @@ export function SignupPage() {
                   </span>
                 </label>
                 <input
+                  id="signup_org_slug"
+                  name="orgSlug"
                   value={orgSlug}
                   onChange={(e) => setOrgSlug(e.target.value)}
                   placeholder="e.g. cevop-restaurant"
@@ -352,8 +368,13 @@ export function SignupPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label>Timezone *</label>
-                  <select value={timezone} onChange={(e) => setTimezone(e.target.value)}>
+                  <label htmlFor="signup_timezone">Timezone *</label>
+                  <select
+                    id="signup_timezone"
+                    name="timezone"
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                  >
                     {TIMEZONES.map((t) => (
                       <option key={t.value} value={t.value}>
                         {t.label}
@@ -362,8 +383,13 @@ export function SignupPage() {
                   </select>
                 </div>
                 <div>
-                  <label>Currency *</label>
-                  <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                  <label htmlFor="signup_currency">Currency *</label>
+                  <select
+                    id="signup_currency"
+                    name="currency"
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value)}
+                  >
                     {CURRENCIES.map((c) => (
                       <option key={c.value} value={c.value}>
                         {c.label}
@@ -374,15 +400,18 @@ export function SignupPage() {
               </div>
 
               <div>
-                <label>
+                <label htmlFor="signup_contact_phone">
                   Phone Number{' '}
                   <span className="text-[var(--muted)] normal-case font-normal">(optional)</span>
                 </label>
                 <input
+                  id="signup_contact_phone"
+                  name="contactPhone"
                   type="tel"
                   value={contactPhone}
                   onChange={(e) => setContactPhone(e.target.value)}
                   placeholder="e.g. +234 800 000 0000"
+                  autoComplete="tel"
                 />
               </div>
 
@@ -402,17 +431,22 @@ export function SignupPage() {
           {step === 'account' && (
             <form onSubmit={handleSubmit} className="card p-6 space-y-4">
               <div>
-                <label>Your Full Name *</label>
+                <label htmlFor="signup_admin_name">Your Full Name *</label>
                 <input
+                  id="signup_admin_name"
+                  name="name"
                   value={adminName}
                   onChange={(e) => setAdminName(e.target.value)}
                   required
                   placeholder="e.g. Jane Doe"
+                  autoComplete="name"
                 />
               </div>
               <div>
-                <label>Email Address *</label>
+                <label htmlFor="signup_admin_email">Email Address *</label>
                 <input
+                  id="signup_admin_email"
+                  name="email"
                   type="email"
                   value={adminEmail}
                   onChange={(e) => setAdminEmail(e.target.value)}
@@ -423,9 +457,11 @@ export function SignupPage() {
                 <p className="text-xs text-[var(--muted)] mt-1">This will be your login email.</p>
               </div>
               <div>
-                <label>Password *</label>
+                <label htmlFor="signup_admin_password">Password *</label>
                 <div className="relative">
                   <input
+                    id="signup_admin_password"
+                    name="password"
                     type={showPw ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -441,48 +477,24 @@ export function SignupPage() {
                     tabIndex={-1}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] transition-colors text-xs select-none"
                   >
-                    {showPw ? (
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                        <line x1="1" y1="1" x2="23" y2="23" />
-                      </svg>
-                    ) : (
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    )}
+                    {showPw ? 'hide' : 'show'}
                   </button>
                 </div>
+                <PasswordStrength password={password} />
               </div>
               <div>
-                <label>Confirm Password *</label>
+                <label htmlFor="signup_admin_confirm_password">Confirm Password *</label>
                 <div className="relative">
                   <input
+                    id="signup_admin_confirm_password"
+                    name="confirmPassword"
                     type={showConfirm ? 'text' : 'password'}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     required
                     placeholder="••••••••"
                     className="pr-10"
+                    autoComplete="new-password"
                   />
                   <button
                     type="button"
@@ -490,35 +502,7 @@ export function SignupPage() {
                     tabIndex={-1}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--text)] transition-colors text-xs select-none"
                   >
-                    {showConfirm ? (
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                        <line x1="1" y1="1" x2="23" y2="23" />
-                      </svg>
-                    ) : (
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    )}
+                    {showConfirm ? 'hide' : 'show'}
                   </button>
                 </div>
               </div>

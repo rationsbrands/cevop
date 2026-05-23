@@ -5,12 +5,14 @@ import App from './App.tsx';
 import { ThemeProvider } from './context/theme.tsx';
 import './index.css';
 
+const RootWrapper = import.meta.env.DEV ? React.Fragment : React.StrictMode;
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
+  <RootWrapper>
     <ThemeProvider>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <App />
       </BrowserRouter>
     </ThemeProvider>
-  </React.StrictMode>
+  </RootWrapper>,
 );

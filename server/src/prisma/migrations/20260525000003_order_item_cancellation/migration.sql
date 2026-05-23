@@ -1,0 +1,2 @@
+ALTER TABLE "order_items" ADD COLUMN IF NOT EXISTS "cancelledAt" TIMESTAMPTZ;
+ALTER TABLE "order_items" ADD COLUMN IF NOT EXISTS "cancelReason" TEXT;

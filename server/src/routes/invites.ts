@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import crypto from 'crypto';
-import { UserRole, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { logger } from '../services/logger';
@@ -16,48 +16,82 @@ const INVITE_TTL_HOURS = 72;
 // POST /invites — send an invite to join a branch
 invitesRouter.post(
   '/',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const schema = z.object({
         email: z.string().email().toLowerCase(),
-        role: z.enum(['BRANCH_ADMIN', 'SERVICE', 'WAITER']),
+        role: z.enum([
+          'ORG_MANAGER',
+          'ORG_FINANCE',
+          'ORG_AUDITOR',
+          'BRANCH_ADMIN',
+          'BRANCH_FINANCE',
+          'SERVICE',
+          'WAITER',
+          'KITCHEN',
+        ]),
         branchId: z.string().optional(),
       });
       const { email, role, branchId } = schema.parse(req.body);
 
-      // Determine effective branchId
+      const isOrgWideRole =
+        role === 'ORG_MANAGER' || role === 'ORG_FINANCE' || role === 'ORG_AUDITOR';
+      const isBranchRole =
+        role === 'BRANCH_ADMIN' ||
+        role === 'BRANCH_FINANCE' ||
+        role === 'SERVICE' ||
+        role === 'WAITER' ||
+        role === 'KITCHEN';
+
+      // Determine effective branchId for the invite
       let effectiveBranchId: string | null = null;
 
       if (req.user!.branchId) {
-        // Branch admin can only invite to their own branch
-        effectiveBranchId = req.user!.branchId;
-      } else if (branchId) {
-        // Org admin specifying a branch
-        const branch = await prisma.branch.findFirst({
-          where: { id: branchId, organizationId: req.user!.organizationId },
-        });
-        if (!branch) {
-          res.status(404).json({ success: false, error: 'Branch not found' });
+        // Branch-scoped inviter (BRANCH_ADMIN): can only invite branch-scoped roles into their own branch
+        if (isOrgWideRole) {
+          res
+            .status(403)
+            .json({ success: false, error: 'Branch admins cannot invite org-wide roles' });
           return;
         }
-        effectiveBranchId = branchId;
-      }
-
-      // BRANCH_ADMIN role must have a branchId
-      if (role === 'BRANCH_ADMIN' && !effectiveBranchId) {
-        res
-          .status(400)
-          .json({ success: false, error: 'Branch Admin invites must specify a branch' });
-        return;
-      }
-
-      // Branch admin cannot invite another BRANCH_ADMIN
-      if (req.user!.role === 'BRANCH_ADMIN' && role === 'BRANCH_ADMIN') {
-        res
-          .status(403)
-          .json({ success: false, error: 'Branch admins cannot invite other branch admins' });
-        return;
+        effectiveBranchId = req.user!.branchId;
+      } else {
+        // Org-wide inviter
+        if (isOrgWideRole) {
+          if (branchId) {
+            res
+              .status(400)
+              .json({ success: false, error: 'Org-wide roles cannot be assigned to a branch' });
+            return;
+          }
+          effectiveBranchId = null;
+        } else if (isBranchRole) {
+          if (branchId) {
+            const branch = await prisma.branch.findFirst({
+              where: { id: branchId, organizationId: req.user!.organizationId },
+              select: { id: true },
+            });
+            if (!branch) {
+              res.status(404).json({ success: false, error: 'Branch not found' });
+              return;
+            }
+            effectiveBranchId = branch.id;
+          } else {
+            const branches = await prisma.branch.findMany({
+              where: { organizationId: req.user!.organizationId, isActive: true },
+              select: { id: true },
+            });
+            if (branches.length === 1) {
+              effectiveBranchId = branches[0].id;
+            } else {
+              res
+                .status(400)
+                .json({ success: false, error: 'This role requires a branch assignment' });
+              return;
+            }
+          }
+        }
       }
 
       // Check: user already exists in this org
@@ -65,12 +99,10 @@ invitesRouter.post(
         where: { email_organizationId: { email, organizationId: req.user!.organizationId } },
       });
       if (existing) {
-        res
-          .status(409)
-          .json({
-            success: false,
-            error: 'A user with this email already exists in this organisation',
-          });
+        res.status(409).json({
+          success: false,
+          error: 'A user with this email already exists in this organisation',
+        });
         return;
       }
 
@@ -98,7 +130,7 @@ invitesRouter.post(
           organizationId: req.user!.organizationId,
           branchId: effectiveBranchId,
           email,
-          role: role as UserRole,
+          role: role as any,
           token,
           expiresAt: new Date(Date.now() + INVITE_TTL_HOURS * 60 * 60 * 1000),
           createdBy: req.user!.userId,
@@ -156,7 +188,7 @@ invitesRouter.post(
 // GET /invites — list pending invites for this org
 invitesRouter.get(
   '/',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const where: Prisma.InviteTokenWhereInput = {
@@ -201,7 +233,7 @@ invitesRouter.get(
 // DELETE /invites/:id — revoke an invite
 invitesRouter.delete(
   '/:id',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       await prisma.inviteToken.updateMany({

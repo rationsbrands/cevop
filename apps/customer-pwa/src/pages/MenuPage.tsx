@@ -1,6 +1,7 @@
 import { useTheme } from '../context/theme';
-import React, { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { io, Socket } from 'socket.io-client';
 import {
   fetchTableInfo,
   fetchMenu,
@@ -19,6 +20,7 @@ interface MenuItem {
   description?: string;
   price: number;
   image?: string;
+  isAvailable?: boolean;
 }
 interface Category {
   id: string;
@@ -27,7 +29,7 @@ interface Category {
 }
 interface HelpOption {
   id: string;
-  type: 'WAITER' | 'SERVICE';
+  type: 'WAITER' | 'SERVICE' | 'BILL';
   label: string;
   icon?: string;
 }
@@ -50,6 +52,7 @@ interface OrderPreviewItem {
   id: string;
   quantity: number;
   menuItem?: { name: string };
+  cancelledAt?: string | null;
 }
 interface OrderPreview {
   id: string;
@@ -58,6 +61,7 @@ interface OrderPreview {
 }
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
+const ACTIVE_ORDER_STATUSES = new Set(['RECEIVED', 'PREPARING', 'READY']);
 
 function generateIdempotencyKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -85,6 +89,7 @@ export function MenuPage() {
     }
   });
   const [activeCategory, setActiveCategory] = useState<string>('');
+  const [unavailableItems, setUnavailableItems] = useState<Set<string>>(new Set());
   const [cartOpen, setCartOpen] = useState(false);
   const [serviceModal, setServiceModal] = useState(false);
   const [waiterModal, setWaiterModal] = useState(false);
@@ -114,6 +119,14 @@ export function MenuPage() {
   const categoryRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const customWaiterInputRef = useRef<HTMLInputElement | null>(null);
   const customServiceInputRef = useRef<HTMLInputElement | null>(null);
+  const pruneRunRef = useRef(0);
+  const socketRef = useRef<Socket | null>(null);
+  const joinedOrdersRef = useRef<Set<string>>(new Set());
+  const activeOrderIdsRef = useRef<string[]>(activeOrderIds);
+
+  useEffect(() => {
+    activeOrderIdsRef.current = activeOrderIds;
+  }, [activeOrderIds]);
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
@@ -153,6 +166,180 @@ export function MenuPage() {
     setServiceType(label);
     if (label.trim().toLowerCase() !== 'special request') setCustomServiceType('');
   };
+
+  async function submitBillRequest() {
+    if (submitting) return;
+    setSubmitting(true);
+
+    try {
+      let effectiveTableInfo = tableInfo;
+      if (!effectiveTableInfo) {
+        if (!orgId || !tableId) return;
+        try {
+          effectiveTableInfo = await fetchTableInfo(orgId, tableId);
+          setTableInfo(effectiveTableInfo);
+        } catch {
+          showToast('Could not request bill. Please try again.', 'error');
+          return;
+        }
+      }
+
+      if (!effectiveTableInfo) return;
+      const organizationId = effectiveTableInfo.organizationId;
+      const body = {
+        organizationId,
+        tableId: effectiveTableInfo.id,
+        branchId: effectiveTableInfo.branchId,
+        serviceType: 'BILL_REQUEST',
+        notes: '',
+      };
+
+      const res = await fetch(`${API_BASE}/api/service-requests/public`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        showToast('Bill requested. Your waiter is on the way.', 'success');
+      } else {
+        showToast('Could not request bill. Please try again.', 'error');
+      }
+    } catch {
+      showToast('Could not request bill. Please try again.', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function handleHelpOptionClick(option: HelpOption) {
+    if (option.type === 'WAITER') {
+      selectWaiterReason(option.label);
+      setWaiterModal(true);
+    } else if (option.type === 'BILL') {
+      // Bill request goes through the service request flow
+      // Pre-fill the service type as BILL_REQUEST
+      setServiceType('BILL_REQUEST');
+      // Submit immediately without showing a modal — bill request needs no extra input
+      void submitBillRequest();
+    } else {
+      // SERVICE type
+      selectServiceType(option.label);
+      setServiceModal(true);
+    }
+  }
+
+  const removeOrderFromHistory = useCallback((id: string) => {
+    try {
+      const raw = localStorage.getItem('orderHistoryByTable');
+      const parsed = raw ? JSON.parse(raw) : {};
+      let changed = false;
+      for (const k of Object.keys(parsed)) {
+        if (!Array.isArray(parsed[k])) continue;
+        const next = (parsed[k] as unknown[]).filter((v) => typeof v === 'string' && v !== id);
+        if (next.length !== (parsed[k] as unknown[]).length) {
+          parsed[k] = next;
+          changed = true;
+        }
+      }
+      if (changed) localStorage.setItem('orderHistoryByTable', JSON.stringify(parsed));
+    } catch {
+      void 0;
+    }
+  }, []);
+
+  const removeActiveOrder = useCallback(
+    (id: string) => {
+      setActiveOrderIds((prev) => prev.filter((x) => x !== id));
+      setOrderPreviews((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setOrdersExpanded(false);
+      removeOrderFromHistory(id);
+      try {
+        localStorage.removeItem('lastOrderId');
+        localStorage.removeItem('lastOrderOrgId');
+        localStorage.removeItem('lastOrderTableId');
+      } catch {
+        void 0;
+      }
+    },
+    [removeOrderFromHistory],
+  );
+
+  const pruneActiveOrders = useCallback(
+    async (canonicalKey: string, ids: string[]) => {
+      if (ids.length === 0) return;
+      if (!navigator.onLine) return;
+
+      const runId = ++pruneRunRef.current;
+
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const data = await fetchOrderStatus(id);
+            const preview: OrderPreview = { id: data.id, status: data.status, items: data.items };
+            return { id, status: data.status as string, preview, ok: true as const };
+          } catch {
+            return {
+              id,
+              status: null as string | null,
+              preview: null as OrderPreview | null,
+              ok: false as const,
+            };
+          }
+        }),
+      );
+
+      if (runId !== pruneRunRef.current) return;
+
+      const nextIds: string[] = [];
+      const nextPreviews: Record<string, OrderPreview | null> = {};
+      const removed = new Set<string>();
+
+      for (const r of results) {
+        if (!r.ok) {
+          nextIds.push(r.id);
+          nextPreviews[r.id] = null;
+          continue;
+        }
+        nextPreviews[r.id] = r.preview;
+        if (ACTIVE_ORDER_STATUSES.has(r.status)) {
+          nextIds.push(r.id);
+        } else {
+          removed.add(r.id);
+        }
+      }
+
+      if (removed.size > 0) {
+        setOrderPreviews((prev) => {
+          const next = { ...prev, ...nextPreviews };
+          for (const id of removed) delete next[id];
+          return next;
+        });
+      } else if (Object.keys(nextPreviews).length > 0) {
+        setOrderPreviews((prev) => ({ ...prev, ...nextPreviews }));
+      }
+
+      try {
+        const raw = localStorage.getItem('orderHistoryByTable');
+        const parsed = raw ? JSON.parse(raw) : {};
+        parsed[canonicalKey] = nextIds.slice(0, 20);
+        if (canonicalKey !== paramOrderHistoryKey) delete parsed[paramOrderHistoryKey];
+        localStorage.setItem('orderHistoryByTable', JSON.stringify(parsed));
+      } catch {
+        void 0;
+      }
+
+      setActiveOrderIds(nextIds.slice(0, 20));
+      if (nextIds.length === 0) setOrdersExpanded(false);
+    },
+    [paramOrderHistoryKey],
+  );
 
   useEffect(() => {
     if (waiterModal && waiterIsOther) {
@@ -196,6 +383,11 @@ export function MenuPage() {
 
         setActiveOrderIds(merged);
         setOrdersExpanded(false);
+        if (merged.length > 0) {
+          window.setTimeout(() => {
+            void pruneActiveOrders(canonicalKey, merged);
+          }, 0);
+        }
       } catch {
         setActiveOrderIds([]);
         setOrdersExpanded(false);
@@ -212,7 +404,7 @@ export function MenuPage() {
       window.removeEventListener('focus', refreshOrders);
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, [paramOrderHistoryKey, tableInfo?.organizationId, tableInfo?.id]);
+  }, [paramOrderHistoryKey, pruneActiveOrders, tableInfo?.organizationId, tableInfo?.id]);
 
   useEffect(() => {
     if (!ordersExpanded) return;
@@ -277,6 +469,15 @@ export function MenuPage() {
         setHelpOptions(options.filter((o: any) => o.isActive));
         if (menu.length > 0) setActiveCategory(menu[0].id);
 
+        // Pre-populate unavailableItems from API data
+        const unavailable = new Set<string>();
+        menu.forEach((cat: any) => {
+          (cat.menuItems ?? []).forEach((item: any) => {
+            if (!item.isAvailable) unavailable.add(item.id);
+          });
+        });
+        setUnavailableItems(unavailable);
+
         await db.cachedMenus.put({ organizationId: orgId, data: menu, cachedAt: new Date() });
       } catch {
         const cached = await db.cachedMenus.get(orgId!);
@@ -284,6 +485,16 @@ export function MenuPage() {
           setCategories(cached.data as Category[]);
           const cats = cached.data as Category[];
           if (cats.length > 0) setActiveCategory(cats[0].id);
+
+          // Pre-populate unavailableItems from cached data
+          const unavailable = new Set<string>();
+          cats.forEach((cat: any) => {
+            (cat.menuItems ?? []).forEach((item: any) => {
+              if (!item.isAvailable) unavailable.add(item.id);
+            });
+          });
+          setUnavailableItems(unavailable);
+
           setError('');
         } else {
           setError('Unable to load menu. Please check your connection.');
@@ -294,6 +505,144 @@ export function MenuPage() {
     }
     load();
   }, [orgId, tableId]);
+
+  useEffect(() => {
+    if (!tableInfo?.organizationId) return;
+
+    const SOCKET_URL = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
+
+    const socket = io(SOCKET_URL || window.location.origin, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 2000,
+    });
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      // Join org room — no auth token needed, customer is unauthenticated
+      // The org room receives availability events
+      socket.emit('JOIN_ORG_PUBLIC', tableInfo.organizationId);
+
+      const ids = activeOrderIdsRef.current ?? [];
+      for (const id of ids) {
+        if (!id || joinedOrdersRef.current.has(id)) continue;
+        socket.emit('JOIN_ORDER', { orderId: id });
+        joinedOrdersRef.current.add(id);
+      }
+    });
+
+    socket.on('MENU_ITEM_UNAVAILABLE', ({ menuItemId }: { menuItemId: string }) => {
+      setUnavailableItems((prev) => new Set(prev).add(menuItemId));
+
+      // Also remove from cart if present
+      setCart((prev) => {
+        const updated = prev.filter((item) => item.menuItem.id !== menuItemId);
+        if (updated.length !== prev.length) {
+          showToast('An item in your cart is not available at this time.', 'error');
+        }
+        return updated;
+      });
+    });
+
+    socket.on('MENU_ITEM_AVAILABLE', ({ menuItemId }: { menuItemId: string }) => {
+      setUnavailableItems((prev) => {
+        const next = new Set(prev);
+        next.delete(menuItemId);
+        return next;
+      });
+    });
+
+    socket.on('ORDER_UPDATED', (updated: any) => {
+      if (!updated?.id) return;
+      const orderId = String(updated.id);
+      const status = String(updated.status ?? '');
+
+      if (!ACTIVE_ORDER_STATUSES.has(status)) {
+        if ((activeOrderIdsRef.current ?? []).includes(orderId)) removeActiveOrder(orderId);
+        return;
+      }
+
+      setOrderPreviews((prev) => {
+        const rawItems = Array.isArray(updated.items) ? updated.items : [];
+        const items = rawItems
+          .filter((it: any) => !it?.cancelledAt)
+          .map((it: any) => ({
+            id: it.id,
+            quantity: it.quantity,
+            menuItem: it.menuItem ? { name: it.menuItem.name } : undefined,
+            cancelledAt: it.cancelledAt ?? null,
+          }));
+        return { ...prev, [orderId]: { id: orderId, status, items } };
+      });
+    });
+
+    socket.on(
+      'ORDER_ITEM_CANCELLED',
+      ({
+        orderId,
+        itemId,
+        itemName,
+        allCancelled,
+      }: {
+        orderId: string;
+        itemId: string;
+        itemName: string;
+        allCancelled: boolean;
+      }) => {
+        if (!orderId) return;
+        if (allCancelled) {
+          removeActiveOrder(orderId);
+          showToast(
+            'All items in your order are unavailable. Your order has been cancelled.',
+            'error',
+          );
+          return;
+        }
+
+        setOrderPreviews((prev) => {
+          const current = prev[orderId];
+          if (!current || !Array.isArray(current.items)) return prev;
+          return {
+            ...prev,
+            [orderId]: {
+              ...current,
+              items: current.items.filter((it) => it.id !== itemId),
+            },
+          };
+        });
+        showToast(`${itemName || 'An item'} is not available at this time.`, 'error');
+      },
+    );
+
+    return () => {
+      try {
+        for (const id of joinedOrdersRef.current) socket.emit('LEAVE_ORDER', { orderId: id });
+      } catch {
+        void 0;
+      }
+      joinedOrdersRef.current = new Set();
+      socketRef.current = null;
+      socket.disconnect();
+    };
+  }, [removeActiveOrder, tableInfo?.organizationId]);
+
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket || !socket.connected) return;
+
+    const desired = new Set(activeOrderIds);
+    for (const id of desired) {
+      if (!id || joinedOrdersRef.current.has(id)) continue;
+      socket.emit('JOIN_ORDER', { orderId: id });
+      joinedOrdersRef.current.add(id);
+    }
+    for (const id of Array.from(joinedOrdersRef.current)) {
+      if (desired.has(id)) continue;
+      socket.emit('LEAVE_ORDER', { orderId: id });
+      joinedOrdersRef.current.delete(id);
+    }
+  }, [activeOrderIds]);
 
   const addToCart = (menuItem: MenuItem) => {
     setCart((prev) => {
@@ -463,6 +812,7 @@ export function MenuPage() {
     if (!o) return '';
     const items = Array.isArray(o.items) ? o.items : [];
     const parts = items
+      .filter((it) => !(it as any)?.cancelledAt)
       .filter((it) => it?.menuItem?.name)
       .map((it) => `${it.quantity}× ${it.menuItem!.name}`);
     if (parts.length === 0) return '';
@@ -472,6 +822,8 @@ export function MenuPage() {
   };
 
   const displayName = tableInfo?.branchName ?? tableInfo?.organizationName ?? 'Cevop';
+  const hasWaiterOptions = helpOptions.some((o) => o.type === 'WAITER');
+  const hasServiceOptions = helpOptions.some((o) => o.type === 'SERVICE');
 
   if (loading)
     return (
@@ -497,122 +849,172 @@ export function MenuPage() {
     );
 
   return (
-    <div className="min-h-dvh bg-[var(--bg)] flex flex-col">
+    <div className="min-h-dvh bg-[var(--bg)] flex flex-col overflow-x-hidden relative">
+      <div className="text-texture" />
       {/* Header */}
-      <header className="sticky top-0 z-30 bg-[var(--bg)] border-b border-[var(--border)] safe-top">
-        <div className="px-4 py-3 flex items-center justify-between">
-          <div>
-            <h1 className="font-display text-2xl text-[var(--accent)] leading-none">
+      <header className="sticky top-0 z-30 glass-morphism border-b border-[var(--border)] safe-top">
+        <div className="px-4 py-3 flex items-center justify-between gap-2 overflow-hidden relative z-20">
+          <div className="min-w-0 shrink">
+            <h1 className="font-display text-xl sm:text-2xl text-[var(--accent)] leading-none truncate">
               {displayName}
             </h1>
-            <p className="text-[var(--muted)] text-xs mt-0.5">{tableInfo?.label || 'Your Table'}</p>
+            <p className="text-[var(--text-secondary)] text-[10px] sm:text-xs mt-0.5 truncate mono uppercase tracking-tight">
+              {tableInfo?.label || 'Your Table'}
+            </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
+            {activeOrderIds.length > 0 && (
+              <button
+                onClick={() => {
+                  if (activeOrderIds.length === 1) {
+                    navigate(`/order/${activeOrderIds[0]}`);
+                    return;
+                  }
+                  setOrdersExpanded((v) => !v);
+                }}
+                className="card px-2.5 py-1.5 text-[10px] font-bold text-[var(--text)] hover:border-[var(--accent)] transition-colors flex items-center gap-1.5 rounded-full font-display"
+                aria-label={
+                  activeOrderIds.length === 1
+                    ? 'View active order'
+                    : ordersExpanded
+                      ? 'Hide active orders'
+                      : 'Show active orders'
+                }
+              >
+                <span className="uppercase tracking-tight">Orders</span>
+                <span className="mono text-[9px] text-[var(--text-secondary)]">
+                  ({activeOrderIds.length})
+                </span>
+              </button>
+            )}
+
             <button
               onClick={() => setMode(nextThemeMode)}
-              className={`w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
+              className={`card px-2.5 py-1.5 border flex items-center justify-center transition-colors text-[10px] font-black tracking-tight shrink-0 font-display rounded-full ${
                 mode === 'system'
-                  ? 'bg-[var(--surface2)] border-[var(--border)] text-[var(--text)] shadow-sm'
+                  ? 'bg-[var(--surface2)] border-[var(--border)] text-[var(--text)]'
                   : mode === 'dark'
-                    ? 'bg-black border-[var(--border)] text-[var(--text)] shadow-sm'
-                    : 'bg-white border-[var(--border)] text-black shadow-sm'
+                    ? 'bg-black border-[var(--border)] text-[var(--text)]'
+                    : 'bg-white border-[var(--border)] text-black'
               }`}
               title={`Theme: ${themeLabel} (click → ${nextThemeLabel})`}
               aria-label={`Theme ${themeLabel}. Click to switch to ${nextThemeLabel}.`}
             >
               {themeLabel}
             </button>
-            <span
-              className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-400' : 'bg-red-400'}`}
-              title={isOnline ? 'Online' : 'Offline'}
-            />
+          </div>
+        </div>
+
+        <div className="px-4 pb-3 relative z-20">
+          <div className="grid grid-cols-3 gap-2">
             <button
-              onClick={() => setWaiterModal(true)}
-              className="card px-3 py-1.5 text-xs font-medium text-[var(--text)] hover:border-[var(--accent)] transition-colors"
+              onClick={() => {
+                if (!hasWaiterOptions) {
+                  showToast('Not available at this time.', 'error');
+                  return;
+                }
+                setWaiterModal(true);
+              }}
+              className="min-h-11 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
+              aria-label="Call waiter"
             >
-              Call Waiter
+              Waiter
+            </button>
+
+            <button
+              onClick={() => {
+                if (!hasServiceOptions) {
+                  showToast('Not available at this time.', 'error');
+                  return;
+                }
+                setServiceModal(true);
+              }}
+              className="min-h-11 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
+              aria-label="Request service"
+            >
+              Service
+            </button>
+
+            <button
+              onClick={() => {
+                if (!isOnline) {
+                  showToast('You appear to be offline. Please reconnect and try again.', 'error');
+                  return;
+                }
+                const billOpt = helpOptions.find((o) => o.type === 'BILL');
+                if (billOpt) handleHelpOptionClick(billOpt);
+                else void submitBillRequest();
+              }}
+              className="min-h-11 px-3 py-2 rounded-full border border-[var(--accent)]/40 bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
+              aria-label="Request bill"
+            >
+              Bill
             </button>
           </div>
         </div>
 
-        {activeOrderIds.length > 0 && (
-          <div className="mx-4 mt-3 p-3 border border-[var(--accent)]/40 bg-[var(--surface)] rounded-sm">
+        {activeOrderIds.length > 0 && ordersExpanded && (
+          <div className="mx-4 mt-3 p-3 border border-[var(--border)] bg-[var(--surface)] rounded-sm">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-xs font-bold text-[var(--accent)] uppercase tracking-wider">
+                <p className="text-xs font-bold text-[var(--text)] uppercase tracking-wider">
                   Active Orders
                 </p>
                 <p className="text-xs text-[var(--muted)] mt-0.5">
-                  {activeOrderIds.length === 1
-                    ? 'You have 1 order in progress'
-                    : `You have ${activeOrderIds.length} orders in progress`}
+                  Tap an order to view its status
                 </p>
               </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <button
-                  onClick={() => navigate(`/order/${activeOrderIds[0]}`)}
-                  className="text-xs font-bold text-[var(--accent)] hover:underline whitespace-nowrap"
-                >
-                  View Latest →
-                </button>
-                <button
-                  onClick={() => setOrdersExpanded((v) => !v)}
-                  className="text-xs font-bold text-[var(--muted)] hover:text-[var(--text)] whitespace-nowrap"
-                >
-                  {ordersExpanded ? 'Hide' : 'View All'}
-                </button>
-              </div>
+              <button
+                onClick={() => setOrdersExpanded(false)}
+                className="text-xs font-bold text-[var(--muted)] hover:text-[var(--text)] whitespace-nowrap"
+              >
+                Close
+              </button>
             </div>
 
-            {ordersExpanded && (
-              <div className="mt-3 pt-3 border-t border-[var(--border)] grid gap-2">
-                {activeOrderIds.map((id) => (
-                  <button
-                    key={id}
-                    onClick={() => navigate(`/order/${id}`)}
-                    className="card px-3 py-2 text-left hover:border-[var(--accent)] transition-colors"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-[var(--muted)] font-mono">
-                            #{id.slice(-8).toUpperCase()}
+            <div className="mt-3 pt-3 border-t border-[var(--border)] grid gap-2">
+              {activeOrderIds.map((id) => (
+                <button
+                  key={id}
+                  onClick={() => navigate(`/order/${id}`)}
+                  className="card px-3 py-2 text-left hover:border-[var(--accent)] transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-[var(--muted)] font-semibold">Order</span>
+                        {orderPreviews[id]?.status && (
+                          <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">
+                            {orderPreviews[id]!.status}
                           </span>
-                          {orderPreviews[id]?.status && (
-                            <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">
-                              {orderPreviews[id]!.status}
-                            </span>
-                          )}
-                        </div>
-                        {ordersPreviewLoading && orderPreviews[id] === undefined ? (
-                          <div className="text-xs text-[var(--muted)] mt-1">Loading items…</div>
-                        ) : (
-                          <div className="text-xs text-[var(--text)] mt-1 truncate">
-                            {formatOrderItems(orderPreviews[id]) || 'View order status'}
-                          </div>
                         )}
                       </div>
-                      <span className="text-xs font-bold text-[var(--accent)] shrink-0">
-                        View →
-                      </span>
+                      {ordersPreviewLoading && orderPreviews[id] === undefined ? (
+                        <div className="text-xs text-[var(--muted)] mt-1">Loading items…</div>
+                      ) : (
+                        <div className="text-xs text-[var(--text)] mt-1 truncate">
+                          {formatOrderItems(orderPreviews[id]) || 'View order status'}
+                        </div>
+                      )}
                     </div>
-                  </button>
-                ))}
-              </div>
-            )}
+                    <span className="text-xs font-bold text-[var(--accent)] shrink-0">View →</span>
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
         {/* Category tabs */}
-        <div className="flex overflow-x-auto scrollbar-none px-4 pt-2 pb-3 gap-2">
+        <div className="flex overflow-x-auto scrollbar-none px-4 pt-2 pb-3 gap-2 relative z-20">
           {categories.map((cat) => (
             <button
               key={cat.id}
               onClick={() => scrollToCategory(cat.id)}
-              className={`shrink-0 px-4 py-1.5 text-sm font-medium transition-all duration-150 border ${
+              className={`shrink-0 px-4 py-1.5 text-sm font-bold transition-all duration-150 border rounded-full font-display ${
                 activeCategory === cat.id
-                  ? 'bg-[var(--accent)] text-black border-[var(--accent)]'
-                  : 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent)]'
+                  ? 'bg-[var(--text)] text-[var(--bg)] border-[var(--text)]'
+                  : 'border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:border-[var(--text)]'
               }`}
             >
               {cat.name}
@@ -622,7 +1024,7 @@ export function MenuPage() {
       </header>
 
       {/* Menu Content */}
-      <main className="flex-1 overflow-y-auto pb-32">
+      <main className="flex-1 overflow-y-auto pb-32 relative z-10">
         {categories.map((cat) => (
           <div
             key={cat.id}
@@ -631,24 +1033,36 @@ export function MenuPage() {
             }}
             className="px-4 pt-6"
           >
-            <h2 className="font-display text-3xl text-[var(--text)] mb-3">
+            <h2 className="font-display text-4xl text-[var(--text)] mb-4 tracking-tighter">
               {cat.name.toUpperCase()}
             </h2>
             <div className="space-y-3">
               {cat.menuItems.map((item) => {
                 const cartItem = cart.find((c) => c.menuItem.id === item.id);
+                // Check if item is unavailable — either from API data or live socket update
+                const isUnavailable = !item.isAvailable || unavailableItems.has(item.id);
                 return (
-                  <div key={item.id} className="card p-4 flex items-start gap-4 animate-fade-in">
+                  <div
+                    key={item.id}
+                    className={`card p-5 flex items-start gap-4 animate-fade-in ${isUnavailable ? 'opacity-50' : ''}`}
+                  >
                     <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-[var(--text)] leading-tight">
-                        {item.name}
-                      </h3>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-bold text-lg text-[var(--text)] leading-tight font-display">
+                          {item.name}
+                        </h3>
+                        {isUnavailable && (
+                          <span className="text-[10px] font-black uppercase tracking-widest text-[var(--danger)] border border-[var(--danger)]/50 px-2 py-0.5 rounded-full mono">
+                            Sold Out
+                          </span>
+                        )}
+                      </div>
                       {item.description && (
-                        <p className="text-[var(--muted)] text-sm mt-0.5 line-clamp-2">
+                        <p className="text-[var(--text-secondary)] text-sm mt-1 line-clamp-2 leading-relaxed">
                           {item.description}
                         </p>
                       )}
-                      <p className="text-[var(--accent)] font-semibold mt-2">
+                      <p className="text-[var(--accent)] font-bold mt-3 mono text-base">
                         {formatPrice(item.price)}
                       </p>
                     </div>
@@ -665,16 +1079,18 @@ export function MenuPage() {
                             {cartItem.quantity}
                           </span>
                           <button
-                            onClick={() => addToCart(item)}
-                            className="w-8 h-8 bg-[var(--accent)] text-black flex items-center justify-center font-bold text-lg transition-transform active:scale-90"
+                            onClick={() => (isUnavailable ? null : addToCart(item))}
+                            disabled={isUnavailable}
+                            className={`w-8 h-8 bg-[var(--accent)] text-black flex items-center justify-center font-bold text-lg transition-transform active:scale-90 ${isUnavailable ? 'opacity-30 cursor-not-allowed' : ''}`}
                           >
                             +
                           </button>
                         </div>
                       ) : (
                         <button
-                          onClick={() => addToCart(item)}
-                          className="w-8 h-8 bg-[var(--accent)] text-black flex items-center justify-center font-bold text-xl transition-transform active:scale-90"
+                          onClick={() => (isUnavailable ? null : addToCart(item))}
+                          disabled={isUnavailable}
+                          className={`w-8 h-8 bg-[var(--accent)] text-black flex items-center justify-center font-bold text-xl transition-transform active:scale-90 ${isUnavailable ? 'opacity-30 cursor-not-allowed' : ''}`}
                         >
                           +
                         </button>
@@ -691,7 +1107,7 @@ export function MenuPage() {
         <div className="px-4 pt-6 pb-4">
           <div className="border-t border-[var(--border)] pt-6">
             <h2 className="font-display text-xl text-[var(--muted)] mb-3">NEED HELP?</h2>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <button
                 onClick={() => setWaiterModal(true)}
                 className="card p-4 text-left hover:border-[var(--accent)] transition-colors"
@@ -731,6 +1147,23 @@ export function MenuPage() {
                 <div className="font-semibold text-sm">Request Service</div>
                 <div className="text-[var(--muted)] text-xs mt-0.5">Refills, extras & more</div>
               </button>
+
+              {/* Dynamic BILL type options */}
+              {helpOptions
+                .filter((o) => o.type === 'BILL')
+                .map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => handleHelpOptionClick(opt)}
+                    className="card p-4 text-left hover:border-[var(--accent)] transition-colors border-[var(--accent)]/30"
+                  >
+                    <div className="w-8 h-8 border border-amber-500/50 rounded-sm mx-auto mb-2 flex items-center justify-center text-xl">
+                      {opt.icon || '💳'}
+                    </div>
+                    <div className="font-semibold text-sm">{opt.label}</div>
+                    <div className="text-[var(--muted)] text-xs mt-0.5">Instant request</div>
+                  </button>
+                ))}
             </div>
           </div>
         </div>
@@ -840,44 +1273,41 @@ export function MenuPage() {
           >
             <h2 className="font-display text-2xl">CALL WAITER</h2>
             <div className="grid grid-cols-2 gap-2">
-              {helpOptions.filter((o) => o.type === 'WAITER').length > 0
-                ? helpOptions
-                    .filter((o) => o.type === 'WAITER')
-                    .map((opt) => (
-                      <button
-                        key={opt.id}
-                        onClick={() => selectWaiterReason(opt.label)}
-                        className={`py-2 px-3 text-sm border transition-all ${waiterReason === opt.label ? 'border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'}`}
-                      >
-                        {opt.icon && <span className="mr-2">{opt.icon}</span>}
-                        {opt.label}
-                      </button>
-                    ))
-                : [
-                    'Need help',
-                    'Extra napkins',
-                    'Bill please',
-                    'Refill drinks',
-                    'Another round',
-                    'Other',
-                  ].map((r) => (
-                    <button
-                      key={r}
-                      onClick={() => selectWaiterReason(r)}
-                      className={`py-2 px-3 text-sm border transition-all ${waiterReason === r ? 'border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'}`}
-                    >
-                      {r}
-                    </button>
-                  ))}
+              {helpOptions
+                .filter((o) => o.type === 'WAITER')
+                .map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => selectWaiterReason(opt.label)}
+                    className={`py-2 px-3 text-sm border transition-all ${waiterReason === opt.label ? 'border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'}`}
+                  >
+                    {opt.icon && <span className="mr-2">{opt.icon}</span>}
+                    {opt.label}
+                  </button>
+                ))}
             </div>
+            {helpOptions.filter((o) => o.type === 'WAITER').length === 0 && (
+              <div className="text-[var(--muted)] text-sm border border-[var(--border)] bg-[var(--surface2)] px-3 py-2">
+                No call-waiter options configured for this branch. Please ask staff to configure
+                Help Options in the admin dashboard.
+              </div>
+            )}
             {waiterIsOther && (
               <div className="space-y-2">
-                <label className="text-xs text-[var(--muted)] font-semibold">Your request</label>
+                <label
+                  htmlFor="customer_waiter_custom_reason"
+                  className="text-xs text-[var(--muted)] font-semibold"
+                >
+                  Your request
+                </label>
                 <input
+                  id="customer_waiter_custom_reason"
+                  name="waiterCustomReason"
                   ref={customWaiterInputRef}
                   value={customWaiterReason}
                   onChange={(e) => setCustomWaiterReason(e.target.value)}
                   placeholder="Type what you need…"
+                  autoComplete="off"
                   className="w-full bg-[var(--surface2)] border border-[var(--border)] text-[var(--text)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
                 />
               </div>
@@ -888,7 +1318,9 @@ export function MenuPage() {
               </button>
               <button
                 onClick={handleCallWaiter}
-                disabled={!canSendWaiter}
+                disabled={
+                  !canSendWaiter || helpOptions.filter((o) => o.type === 'WAITER').length === 0
+                }
                 className="btn-primary flex-1 disabled:opacity-50"
               >
                 Call Waiter
@@ -908,44 +1340,41 @@ export function MenuPage() {
           >
             <h2 className="font-display text-2xl">REQUEST SERVICE</h2>
             <div className="grid grid-cols-2 gap-2">
-              {helpOptions.filter((o) => o.type === 'SERVICE').length > 0
-                ? helpOptions
-                    .filter((o) => o.type === 'SERVICE')
-                    .map((opt) => (
-                      <button
-                        key={opt.id}
-                        onClick={() => selectServiceType(opt.label)}
-                        className={`py-2 px-3 text-sm border transition-all ${serviceType === opt.label ? 'border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'}`}
-                      >
-                        {opt.icon && <span className="mr-2">{opt.icon}</span>}
-                        {opt.label}
-                      </button>
-                    ))
-                : [
-                    'Refill water',
-                    'More cutlery',
-                    'Takeaway box',
-                    'Baby chair',
-                    'Complaint',
-                    'Special request',
-                  ].map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => selectServiceType(s)}
-                      className={`py-2 px-3 text-sm border transition-all ${serviceType === s ? 'border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'}`}
-                    >
-                      {s}
-                    </button>
-                  ))}
+              {helpOptions
+                .filter((o) => o.type === 'SERVICE')
+                .map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => selectServiceType(opt.label)}
+                    className={`py-2 px-3 text-sm border transition-all ${serviceType === opt.label ? 'border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'}`}
+                  >
+                    {opt.icon && <span className="mr-2">{opt.icon}</span>}
+                    {opt.label}
+                  </button>
+                ))}
             </div>
+            {helpOptions.filter((o) => o.type === 'SERVICE').length === 0 && (
+              <div className="text-[var(--muted)] text-sm border border-[var(--border)] bg-[var(--surface2)] px-3 py-2">
+                No service-request options configured for this branch. Please ask staff to configure
+                Help Options in the admin dashboard.
+              </div>
+            )}
             {serviceIsSpecial && (
               <div className="space-y-2">
-                <label className="text-xs text-[var(--muted)] font-semibold">Your request</label>
+                <label
+                  htmlFor="customer_service_custom_request"
+                  className="text-xs text-[var(--muted)] font-semibold"
+                >
+                  Your request
+                </label>
                 <input
+                  id="customer_service_custom_request"
+                  name="serviceCustomRequest"
                   ref={customServiceInputRef}
                   value={customServiceType}
                   onChange={(e) => setCustomServiceType(e.target.value)}
                   placeholder="Type what you need…"
+                  autoComplete="off"
                   className="w-full bg-[var(--surface2)] border border-[var(--border)] text-[var(--text)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
                 />
               </div>
@@ -956,7 +1385,9 @@ export function MenuPage() {
               </button>
               <button
                 onClick={handleServiceRequest}
-                disabled={!canSendService}
+                disabled={
+                  !canSendService || helpOptions.filter((o) => o.type === 'SERVICE').length === 0
+                }
                 className="btn-primary flex-1 disabled:opacity-50"
               >
                 Send Request

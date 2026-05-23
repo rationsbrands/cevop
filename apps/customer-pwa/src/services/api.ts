@@ -39,7 +39,7 @@ export async function submitOrder(payload: {
 
 export async function fetchHelpOptions(orgId: string, branchId?: string | null) {
   const baseUrl = API_BASE || window.location.origin;
-  const url = new URL(`${baseUrl}/api/help-options`);
+  const url = new URL(`${baseUrl}/api/help-options/public`);
   url.searchParams.set('organizationId', orgId);
   if (branchId) url.searchParams.set('branchId', branchId);
   const res = await fetch(url.toString());

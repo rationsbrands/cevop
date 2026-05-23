@@ -2,11 +2,18 @@ import { Router, Response, Request } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
-import { authenticate, requireRole, requireBranchAccess, AuthRequest } from '../middleware/auth';
+import {
+  authenticate,
+  requireRole,
+  requireBranchAccess,
+  requireBranchSelected,
+  AuthRequest,
+} from '../middleware/auth';
 import { notifyServiceRequest } from '../services/notifications';
 import { io } from '../index';
 import { logger } from '../services/logger';
 import { findLeastLoadedWaiter } from '../services/waiterAssignment';
+import { getOrCreateSession } from '../services/tableSession';
 
 export const serviceRequestsRouter = Router();
 
@@ -38,13 +45,21 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
       return;
     }
 
-    const actualBranchId = data.branchId ?? table.branchId ?? null;
+    const actualBranchId = table.branchId;
+    if (data.branchId && data.branchId !== actualBranchId) {
+      res.status(400).json({ success: false, error: 'branchId does not match table branch' });
+      return;
+    }
+
+    // Ensure table session is open
+    const sessionId = await getOrCreateSession(table.id, table.organizationId, actualBranchId);
 
     const request = await prisma.serviceRequest.create({
       data: {
         organizationId: table.organizationId,
         branchId: actualBranchId,
         tableId: table.id,
+        sessionId,
         serviceType: data.serviceType,
         notes: data.notes,
       },
@@ -55,6 +70,7 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
     const assignedWaiterId = await findLeastLoadedWaiter(
       table.organizationId,
       actualBranchId,
+      table.id,
     ).catch(() => null);
 
     let finalRequest = request;
@@ -72,24 +88,16 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
       });
     } else {
       // No waiter online — emit as unassigned so all waiters can claim
-      if (actualBranchId) {
-        io.to(`${table.organizationId}:${actualBranchId}`).emit('TASK_UNASSIGNED', {
-          type: 'SERVICE_REQUEST',
-          task: finalRequest,
-        });
-      }
-      io.to(table.organizationId).emit('TASK_UNASSIGNED', {
+      io.to(`${table.organizationId}:${actualBranchId}`).emit('TASK_UNASSIGNED', {
         type: 'SERVICE_REQUEST',
         task: finalRequest,
       });
     }
 
-    if (actualBranchId)
-      io.to(`${table.organizationId}:${actualBranchId}`).emit('SERVICE_REQUESTED', finalRequest);
-    io.to(table.organizationId).emit('SERVICE_REQUESTED', finalRequest);
+    io.to(`${table.organizationId}:${actualBranchId}`).emit('SERVICE_REQUESTED', finalRequest);
 
     const org = await prisma.organization.findUnique({ where: { id: table.organizationId } });
-    if (org)
+    if (org && (org as any).notifyServiceRequests)
       notifyServiceRequest(
         request,
         org.whatsappNumber || undefined,
@@ -110,7 +118,7 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
 
 // ─── PROTECTED ────────────────────────────────────────────────────────────────
 
-serviceRequestsRouter.use(authenticate, requireBranchAccess);
+serviceRequestsRouter.use(authenticate, requireBranchAccess, requireBranchSelected);
 
 serviceRequestsRouter.get('/', async (req: AuthRequest, res: Response) => {
   try {
@@ -124,7 +132,7 @@ serviceRequestsRouter.get('/', async (req: AuthRequest, res: Response) => {
     });
     const { status } = querySchema.parse(req.query);
     const where: Prisma.ServiceRequestWhereInput = { organizationId: req.user!.organizationId };
-    if (req.branchScope) where.branchId = req.branchScope;
+    where.branchId = req.branchScope!;
     if (status) where.status = Array.isArray(status) ? { in: status } : status;
 
     const requests = await prisma.serviceRequest.findMany({
@@ -146,9 +154,29 @@ serviceRequestsRouter.get('/', async (req: AuthRequest, res: Response) => {
 // Admin/staff updates a service request — including adding admin notes
 serviceRequestsRouter.patch(
   '/:id/status',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN', 'WAITER', 'SERVICE'),
+  requireRole(
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'ORG_AUDITOR',
+    'SUPERADMIN',
+    'BRANCH_ADMIN',
+    'WAITER',
+    'SERVICE',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
+      if (req.user?.role === 'WAITER') {
+        const waiter = await prisma.user.findUnique({
+          where: { id: req.user.userId },
+          select: { isOnShift: true } as any,
+        });
+        if (!(waiter as any)?.isOnShift) {
+          res.status(403).json({ success: false, error: 'Start shift to work on tasks' });
+          return;
+        }
+      }
+
       const schema = z.object({
         status: z.enum(['PENDING', 'ACKNOWLEDGED', 'RESOLVED']),
         adminNotes: z.string().max(1000).optional(),
@@ -156,12 +184,15 @@ serviceRequestsRouter.patch(
       const { status, adminNotes } = schema.parse(req.body);
 
       // Enforce org + branch isolation
-      const existingReq = await prisma.serviceRequest.findUnique({ where: { id: req.params.id } });
-      if (!existingReq || existingReq.organizationId !== req.user!.organizationId) {
-        res.status(403).json({ success: false, error: 'Access denied' });
-        return;
-      }
-      if (req.branchScope && existingReq.branchId !== req.branchScope) {
+      const existingReq = await prisma.serviceRequest.findFirst({
+        where: {
+          id: req.params.id,
+          organizationId: req.user!.organizationId,
+          branchId: req.branchScope!,
+        },
+        select: { id: true },
+      });
+      if (!existingReq) {
         res.status(403).json({ success: false, error: 'Access denied' });
         return;
       }
@@ -178,12 +209,10 @@ serviceRequestsRouter.patch(
         include: { table: true, assignedUser: { select: { id: true, name: true } } },
       });
 
-      if (request.branchId)
-        io.to(`${req.user!.organizationId}:${request.branchId}`).emit(
-          'SERVICE_REQUEST_UPDATED',
-          request,
-        );
-      io.to(req.user!.organizationId).emit('SERVICE_REQUEST_UPDATED', request);
+      io.to(`${req.user!.organizationId}:${req.branchScope!}`).emit(
+        'SERVICE_REQUEST_UPDATED',
+        request,
+      );
 
       res.json({ success: true, data: request });
     } catch (err: unknown) {
@@ -198,36 +227,52 @@ serviceRequestsRouter.patch(
 
 serviceRequestsRouter.patch(
   '/:id/claim',
-  requireRole('WAITER', 'ADMIN', 'BRANCH_ADMIN'),
+  requireRole('WAITER', 'ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
-      const request = await prisma.serviceRequest.findFirst({
-        where: {
-          id: req.params.id,
-          organizationId: req.user!.organizationId,
-          assignedTo: null, // Only claim unassigned tasks
-          status: 'PENDING',
-        },
+      if (req.user?.role === 'WAITER') {
+        const waiter = await prisma.user.findUnique({
+          where: { id: req.user.userId },
+          select: { isOnShift: true } as any,
+        });
+        if (!(waiter as any)?.isOnShift) {
+          res.status(403).json({ success: false, error: 'Start shift to claim tasks' });
+          return;
+        }
+      }
+
+      const where: Prisma.ServiceRequestWhereInput = {
+        id: req.params.id,
+        organizationId: req.user!.organizationId,
+        branchId: req.branchScope!,
+        assignedTo: null,
+        status: 'PENDING',
+      };
+
+      const result = await prisma.serviceRequest.updateMany({
+        where,
+        data: { assignedTo: req.user!.userId, assignedAt: new Date() },
       });
-      if (!request) {
+      if (result.count === 0) {
         res.status(404).json({ success: false, error: 'Task not found or already assigned' });
         return;
       }
 
-      const updated = await prisma.serviceRequest.update({
-        where: { id: req.params.id },
-        data: { assignedTo: req.user!.userId, assignedAt: new Date() },
+      const updated = await prisma.serviceRequest.findFirst({
+        where: {
+          id: req.params.id,
+          organizationId: req.user!.organizationId,
+          branchId: req.branchScope!,
+        },
         include: { table: true, assignedUser: { select: { id: true, name: true } } },
       });
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Task not found' });
+        return;
+      }
 
       // Notify everyone this is now claimed
-      if (updated.branchId) {
-        io.to(`${req.user!.organizationId}:${updated.branchId}`).emit('TASK_CLAIMED', {
-          type: 'SERVICE_REQUEST',
-          task: updated,
-        });
-      }
-      io.to(req.user!.organizationId).emit('TASK_CLAIMED', {
+      io.to(`${req.user!.organizationId}:${req.branchScope!}`).emit('TASK_CLAIMED', {
         type: 'SERVICE_REQUEST',
         task: updated,
       });
@@ -241,13 +286,49 @@ serviceRequestsRouter.patch(
 
 serviceRequestsRouter.patch(
   '/:id/assign',
-  requireRole('ADMIN', 'BRANCH_ADMIN', 'SUPERADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'SUPERADMIN', 'SERVICE'),
   async (req: AuthRequest, res: Response) => {
     try {
       const { waiterId } = z.object({ waiterId: z.string().nullable() }).parse(req.body);
 
+      const existing = await prisma.serviceRequest.findFirst({
+        where: {
+          id: req.params.id,
+          organizationId: req.user!.organizationId,
+          branchId: req.branchScope!,
+        },
+        select: { id: true, branchId: true },
+      });
+      if (!existing) {
+        res.status(404).json({ success: false, error: 'Task not found' });
+        return;
+      }
+      if (waiterId) {
+        const waiter = await prisma.user.findFirst({
+          where: {
+            id: waiterId,
+            organizationId: req.user!.organizationId,
+            role: 'WAITER',
+            isActive: true,
+          },
+          select: { id: true, branchId: true },
+        });
+        if (!waiter) {
+          res.status(404).json({ success: false, error: 'Waiter not found' });
+          return;
+        }
+        if (waiter.branchId !== existing.branchId) {
+          res.status(400).json({ success: false, error: 'Waiter must belong to the same branch' });
+          return;
+        }
+        if (waiter.branchId !== req.branchScope!) {
+          res.status(403).json({ success: false, error: 'Access denied' });
+          return;
+        }
+      }
+
       const updated = await prisma.serviceRequest.update({
-        where: { id: req.params.id, organizationId: req.user!.organizationId },
+        where: { id: req.params.id },
         data: {
           assignedTo: waiterId,
           assignedAt: waiterId ? new Date() : null,
@@ -255,13 +336,10 @@ serviceRequestsRouter.patch(
         include: { table: true, assignedUser: { select: { id: true, name: true } } },
       });
 
-      if (updated.branchId) {
-        io.to(`${req.user!.organizationId}:${updated.branchId}`).emit(
-          'SERVICE_REQUEST_UPDATED',
-          updated,
-        );
-      }
-      io.to(req.user!.organizationId).emit('SERVICE_REQUEST_UPDATED', updated);
+      io.to(`${req.user!.organizationId}:${req.branchScope!}`).emit(
+        'SERVICE_REQUEST_UPDATED',
+        updated,
+      );
 
       // If assigning to a specific waiter, send them a direct notification
       if (waiterId) {

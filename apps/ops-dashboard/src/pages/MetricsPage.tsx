@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { useApi } from '../context/auth';
+import { Navigate } from 'react-router-dom';
+import { useApi, usePermission } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
 
 interface Metrics {
@@ -15,7 +16,7 @@ interface Metrics {
   users: { total: number };
   orders: { total: number; today: number };
   branches: { total: number };
-  revenue: { total: number };
+  revenue: { byCurrency: Record<string, number> };
 }
 
 function StatCard({
@@ -55,24 +56,31 @@ function StatCard({
 
 export function MetricsPage() {
   const api = useApi();
+  const can = usePermission();
+  const canViewMetrics = can('view_metrics');
+  const canViewTrialsExpiring = can('assign_trial');
+  const canViewOrgDetail = can('view_org_detail');
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [expiring, setExpiring] = useState<any[]>([]);
   const [activity, setActivity] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([
-      api.get('/api/ops/metrics'),
-      api.get('/api/ops/trials/expiring'),
-      api.get('/api/ops/activity'),
-    ])
+    if (!canViewMetrics) return;
+    const expiringPromise = canViewTrialsExpiring
+      ? api.get('/api/ops/trials/expiring')
+      : Promise.resolve({ success: true, data: [] });
+
+    Promise.all([api.get('/api/ops/metrics'), expiringPromise, api.get('/api/ops/activity')])
       .then(([m, e, a]) => {
         if (m.success) setMetrics(m.data);
         if (e.success) setExpiring(e.data);
         if (a.success) setActivity(a.data);
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [api, canViewMetrics, canViewTrialsExpiring]);
+
+  if (!canViewMetrics) return <Navigate to="/orgs" replace />;
 
   if (loading)
     return (
@@ -87,6 +95,21 @@ export function MetricsPage() {
     suspended: 'text-red-400 border-red-800 bg-red-900/20',
     cancelled: 'text-gray-400 border-gray-700 bg-gray-900/20',
   };
+
+  const revenueByCurrency = metrics?.revenue.byCurrency ?? {};
+  const revenueCurrencyCodes = Object.keys(revenueByCurrency)
+    .filter((c) => Number.isFinite(revenueByCurrency[c]))
+    .sort((a, b) => a.localeCompare(b));
+  const revenueDisplay =
+    revenueCurrencyCodes.length === 1
+      ? formatPrice(revenueByCurrency[revenueCurrencyCodes[0]] ?? 0, revenueCurrencyCodes[0])
+      : revenueCurrencyCodes.length > 1
+        ? 'Multiple'
+        : '—';
+  const revenueSub =
+    revenueCurrencyCodes.length > 1
+      ? revenueCurrencyCodes.map((c) => formatPrice(revenueByCurrency[c] ?? 0, c)).join(' · ')
+      : 'All time, all orgs';
 
   return (
     <div className="space-y-8 animate-in">
@@ -106,12 +129,7 @@ export function MetricsPage() {
         <StatCard label="Active" value={metrics?.orgs.active ?? 0} sub="Paying customers" />
         <StatCard label="On Trial" value={metrics?.orgs.trialing ?? 0} sub="7-day trial" />
         <StatCard label="Free Tier" value={metrics?.orgs.free ?? 0} sub="Forever free" />
-        <StatCard
-          label="Total Revenue"
-          value={formatPrice(metrics?.revenue.total ?? 0)}
-          sub="All time, all orgs"
-          accent
-        />
+        <StatCard label="Total Revenue" value={revenueDisplay} sub={revenueSub} accent />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -132,38 +150,42 @@ export function MetricsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Trials expiring */}
-        <div className="card">
-          <div className="card-header">
-            <h2 className="font-semibold text-sm">Trials Expiring Soon</h2>
-            <span className="text-xs text-[var(--muted)]">{expiring.length} orgs</span>
-          </div>
-          <div className="divide-y divide-[var(--border)]">
-            {expiring.length === 0 && (
-              <p className="card-body text-[var(--muted)] text-sm">None expiring soon — good.</p>
-            )}
-            {expiring.map((org: any) => (
-              <div key={org.id} className="px-5 py-3 flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-sm text-[var(--text)]">{org.name}</p>
-                  <p className="text-xs text-[var(--muted)]">
-                    {org._count?.orders} orders · {org._count?.users} users
-                  </p>
+        {canViewTrialsExpiring && (
+          <div className="card">
+            <div className="card-header">
+              <h2 className="font-semibold text-sm">Trials Expiring Soon</h2>
+              <span className="text-xs text-[var(--muted)]">{expiring.length} orgs</span>
+            </div>
+            <div className="divide-y divide-[var(--border)]">
+              {expiring.length === 0 && (
+                <p className="card-body text-[var(--muted)] text-sm">None expiring soon — good.</p>
+              )}
+              {expiring.map((org: any) => (
+                <div key={org.id} className="px-5 py-3 flex items-center justify-between">
+                  <div>
+                    <p className="font-medium text-sm text-[var(--text)]">{org.name}</p>
+                    <p className="text-xs text-[var(--muted)]">
+                      {org._count?.orders} orders · {org._count?.users} users
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-yellow-400 font-semibold">
+                      {org.trialEndsAt ? new Date(org.trialEndsAt).toLocaleDateString() : '—'}
+                    </p>
+                    {canViewOrgDetail && (
+                      <a
+                        href={`/orgs/${org.id}`}
+                        className="text-xs text-[var(--accent)] hover:underline"
+                      >
+                        View →
+                      </a>
+                    )}
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-xs text-yellow-400 font-semibold">
-                    {org.trialEndsAt ? new Date(org.trialEndsAt).toLocaleDateString() : '—'}
-                  </p>
-                  <a
-                    href={`/orgs/${org.id}`}
-                    className="text-xs text-[var(--accent)] hover:underline"
-                  >
-                    View →
-                  </a>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Recent signups */}
         <div className="card">

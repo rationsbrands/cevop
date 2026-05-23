@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: cevop
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     ports:
-      - '5434:5432'
+      - '5435:5432'
     volumes:
       - cevop_postgres_data:/var/lib/postgresql/data
     healthcheck:

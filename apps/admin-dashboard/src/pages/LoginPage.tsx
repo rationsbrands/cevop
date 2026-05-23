@@ -10,6 +10,7 @@ export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [accounts, setAccounts] = useState<any[] | null>(null);
@@ -25,9 +26,9 @@ export function LoginPage() {
     setError('');
     try {
       if (accounts) {
-        await login(email, password, selectedOrgId);
+        await login(email, password, selectedOrgId, rememberMe);
       } else {
-        await login(email, password);
+        await login(email, password, undefined, rememberMe);
       }
       navigate('/');
     } catch (err: any) {
@@ -48,7 +49,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
+    <div className="auth-shell min-h-dvh w-full bg-[var(--bg)] grid lg:grid-cols-2 relative">
       <button
         onClick={() => setMode(nextThemeMode)}
         className={`absolute top-6 right-6 z-10 w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
@@ -121,8 +122,10 @@ export function LoginPage() {
 
           <form onSubmit={handleSubmit} className="card p-6 space-y-5">
             <div>
-              <label>Email</label>
+              <label htmlFor="admin_login_email">Email</label>
               <input
+                id="admin_login_email"
+                name="email"
                 type="email"
                 value={email}
                 onChange={(e) => {
@@ -137,9 +140,11 @@ export function LoginPage() {
             </div>
 
             <div>
-              <label>Password</label>
+              <label htmlFor="admin_login_password">Password</label>
               <div className="relative">
                 <input
+                  id="admin_login_password"
+                  name="password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => {
@@ -164,10 +169,28 @@ export function LoginPage() {
               </div>
             </div>
 
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="admin_login_remember"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="w-4 h-4 rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)]/30"
+              />
+              <label
+                htmlFor="admin_login_remember"
+                className="auth-plain-label text-sm cursor-pointer select-none normal-case tracking-normal"
+              >
+                Remember me for 30 days
+              </label>
+            </div>
+
             {accounts && (
               <div>
-                <label>Select organisation</label>
+                <label htmlFor="admin_login_organization">Select organisation</label>
                 <select
+                  id="admin_login_organization"
+                  name="organizationId"
                   value={selectedOrgId}
                   onChange={(e) => {
                     setSelectedOrgId(e.target.value);

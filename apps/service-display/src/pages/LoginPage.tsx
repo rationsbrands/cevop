@@ -75,21 +75,34 @@ export function LoginPage() {
             Live service display for the floor and pass.
           </p>
         </div>
-        <div className="space-y-3 max-w-md">
-          <div className="card p-4">
-            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
-              Real-time
+        <div className="space-y-6 max-w-md">
+          <h2 className="font-display text-4xl text-[var(--text)] leading-tight">
+            Built for the speed of service.
+          </h2>
+          <div className="grid gap-3">
+            <div className="card p-4">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Real-time
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                Keep staff aligned with what’s next.
+              </div>
             </div>
-            <div className="mt-1 text-sm font-semibold text-[var(--text)]">
-              Keep staff aligned with what’s next.
+            <div className="card p-4">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Focused
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                Built for speed and clarity.
+              </div>
             </div>
-          </div>
-          <div className="card p-4">
-            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
-              Focused
-            </div>
-            <div className="mt-1 text-sm font-semibold text-[var(--text)]">
-              Built for speed and clarity.
+            <div className="card p-4">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Reliable
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                Stays online through the rush.
+              </div>
             </div>
           </div>
         </div>
@@ -110,8 +123,10 @@ export function LoginPage() {
 
           <form onSubmit={handleSubmit} className="card p-6 space-y-5">
             <div>
-              <label>Email</label>
+              <label htmlFor="service_login_email">Email</label>
               <input
+                id="service_login_email"
+                name="email"
                 type="email"
                 value={email}
                 onChange={(e) => {
@@ -126,9 +141,11 @@ export function LoginPage() {
             </div>
 
             <div>
-              <label>Password</label>
+              <label htmlFor="service_login_password">Password</label>
               <div className="relative">
                 <input
+                  id="service_login_password"
+                  name="password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => {
@@ -154,8 +171,10 @@ export function LoginPage() {
 
             {accounts && (
               <div>
-                <label>Select organisation</label>
+                <label htmlFor="service_login_organization">Select organisation</label>
                 <select
+                  id="service_login_organization"
+                  name="organizationId"
                   value={selectedOrgId}
                   onChange={(e) => {
                     setSelectedOrgId(e.target.value);

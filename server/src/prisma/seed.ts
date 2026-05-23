@@ -3,10 +3,16 @@ import { PrismaClient } from '@prisma/client';
 // String enum constants (avoid dependency on generated Prisma enums in seed)
 const UserRole = {
   SUPERADMIN: 'SUPERADMIN',
+  ORG_OWNER: 'ORG_OWNER',
   ADMIN: 'ADMIN',
+  ORG_MANAGER: 'ORG_MANAGER',
+  ORG_FINANCE: 'ORG_FINANCE',
+  ORG_AUDITOR: 'ORG_AUDITOR',
   BRANCH_ADMIN: 'BRANCH_ADMIN',
+  BRANCH_FINANCE: 'BRANCH_FINANCE',
   SERVICE: 'SERVICE',
   WAITER: 'WAITER',
+  KITCHEN: 'KITCHEN',
 } as const;
 const OrderStatus = {
   RECEIVED: 'RECEIVED',
@@ -25,7 +31,7 @@ const ServiceRequestStatus = {
   ACKNOWLEDGED: 'ACKNOWLEDGED',
   RESOLVED: 'RESOLVED',
 } as const;
-const HelpOptionType = { WAITER: 'WAITER', SERVICE: 'SERVICE' } as const;
+const HelpOptionType = { WAITER: 'WAITER', SERVICE: 'SERVICE', BILL: 'BILL' } as const;
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
@@ -35,6 +41,7 @@ async function main() {
   console.log('🌱 Seeding Cevop Database...');
 
   await prisma.auditLog.deleteMany();
+  await prisma.helpOption.deleteMany();
   await prisma.refreshToken.deleteMany();
   await prisma.inviteToken.deleteMany();
   await prisma.onboardingToken.deleteMany();
@@ -50,6 +57,7 @@ async function main() {
   await prisma.organization.deleteMany();
 
   const h = (p: string) => bcrypt.hash(p, 12);
+  const seedEmailVerifiedAt = new Date();
 
   // ── CEVOP INTERNAL ORG (owns the SUPERADMIN account) ───────────────────────
   const cevopOrg = await prisma.organization.create({
@@ -71,6 +79,55 @@ async function main() {
       email: 'ops@cevop.io',
       passwordHash: await h('Super1234!'),
       role: UserRole.SUPERADMIN,
+      opsRole: 'SUPER',
+      emailVerified: seedEmailVerifiedAt,
+    } as any,
+  });
+
+  await prisma.user.create({
+    data: {
+      organizationId: cevopOrg.id,
+      name: 'Ops Support',
+      email: 'ops-support@cevop.io',
+      passwordHash: await h('Support1234!'),
+      role: UserRole.SUPERADMIN,
+      opsRole: 'SUPPORT',
+      emailVerified: seedEmailVerifiedAt,
+    } as any,
+  });
+
+  await prisma.user.create({
+    data: {
+      organizationId: cevopOrg.id,
+      name: 'Ops Billing',
+      email: 'ops-billing@cevop.io',
+      passwordHash: await h('Billing1234!'),
+      role: UserRole.SUPERADMIN,
+      opsRole: 'BILLING',
+      emailVerified: seedEmailVerifiedAt,
+    } as any,
+  });
+
+  await prisma.user.create({
+    data: {
+      organizationId: cevopOrg.id,
+      name: 'Ops Readonly',
+      email: 'ops-readonly@cevop.io',
+      passwordHash: await h('Readonly1234!'),
+      role: UserRole.SUPERADMIN,
+      opsRole: 'READONLY',
+      emailVerified: seedEmailVerifiedAt,
+    } as any,
+  });
+
+  await prisma.user.create({
+    data: {
+      organizationId: cevopOrg.id,
+      name: 'Ops Legacy',
+      email: 'ops-legacy@cevop.io',
+      passwordHash: await h('Legacy1234!'),
+      role: UserRole.SUPERADMIN,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
 
@@ -113,9 +170,50 @@ async function main() {
     data: {
       organizationId: org1.id,
       name: 'Bistro Owner',
+      email: 'owner@demobistro.com',
+      passwordHash: await h('Owner1234!'),
+      role: UserRole.ORG_OWNER as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org1.id,
+      name: 'Bistro Admin',
       email: 'admin@demobistro.com',
       passwordHash: await h('Admin1234!'),
       role: UserRole.ADMIN,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org1.id,
+      name: 'Bistro Manager',
+      email: 'manager@demobistro.com',
+      passwordHash: await h('Manager1234!'),
+      role: UserRole.ORG_MANAGER as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org1.id,
+      name: 'Bistro Finance',
+      email: 'finance@demobistro.com',
+      passwordHash: await h('Finance1234!'),
+      role: UserRole.ORG_FINANCE as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org1.id,
+      name: 'Bistro Auditor',
+      email: 'auditor@demobistro.com',
+      passwordHash: await h('Auditor1234!'),
+      role: UserRole.ORG_AUDITOR as any,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
   await prisma.user.create({
@@ -126,6 +224,18 @@ async function main() {
       email: 'downtown@demobistro.com',
       passwordHash: await h('Branch1234!'),
       role: UserRole.BRANCH_ADMIN,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org1.id,
+      branchId: branch1Downtown.id,
+      name: 'Downtown Finance',
+      email: 'finance-downtown@demobistro.com',
+      passwordHash: await h('Finance1234!'),
+      role: UserRole.BRANCH_FINANCE as any,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
   await prisma.user.create({
@@ -136,16 +246,41 @@ async function main() {
       email: 'uptown@demobistro.com',
       passwordHash: await h('Branch1234!'),
       role: UserRole.BRANCH_ADMIN,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org1.id,
+      branchId: branch1Uptown.id,
+      name: 'Uptown Finance',
+      email: 'finance-uptown@demobistro.com',
+      passwordHash: await h('Finance1234!'),
+      role: UserRole.BRANCH_FINANCE as any,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
   await prisma.user.create({
     data: {
       organizationId: org1.id,
       branchId: branch1Downtown.id,
-      name: 'Service Agent',
+      name: 'Demo Service',
       email: 'service@demobistro.com',
       passwordHash: await h('Service1234!'),
-      role: UserRole.SERVICE as any,
+      role: UserRole.SERVICE,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+
+  await prisma.user.create({
+    data: {
+      organizationId: org1.id,
+      branchId: branch1Downtown.id,
+      name: 'Demo Kitchen',
+      email: 'kitchen@demobistro.com',
+      passwordHash: await h('Kitchen1234!'),
+      role: UserRole.KITCHEN as any,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
   await prisma.user.create({
@@ -156,6 +291,18 @@ async function main() {
       email: 'waiter@demobistro.com',
       passwordHash: await h('Waiter1234!'),
       role: UserRole.WAITER,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org1.id,
+      branchId: branch1Uptown.id,
+      name: 'Waiter Ada',
+      email: 'waiter-uptown@demobistro.com',
+      passwordHash: await h('Waiter1234!'),
+      role: UserRole.WAITER,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
 
@@ -312,10 +459,73 @@ async function main() {
   await prisma.user.create({
     data: {
       organizationId: org2.id,
+      name: 'Rations Owner',
+      email: 'owner@rations.com',
+      passwordHash: await h('Owner1234!'),
+      role: UserRole.ORG_OWNER as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org2.id,
       name: 'Rations Admin',
       email: 'admin@rations.com',
       passwordHash: await h('Admin1234!'),
       role: UserRole.ADMIN,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org2.id,
+      name: 'Rations Manager',
+      email: 'manager@rations.com',
+      passwordHash: await h('Manager1234!'),
+      role: UserRole.ORG_MANAGER as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org2.id,
+      name: 'Rations Finance',
+      email: 'finance@rations.com',
+      passwordHash: await h('Finance1234!'),
+      role: UserRole.ORG_FINANCE as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org2.id,
+      name: 'Rations Auditor',
+      email: 'auditor@rations.com',
+      passwordHash: await h('Auditor1234!'),
+      role: UserRole.ORG_AUDITOR as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org2.id,
+      branchId: branch2Main.id,
+      name: 'Rations Branch Admin',
+      email: 'branch@rations.com',
+      passwordHash: await h('Branch1234!'),
+      role: UserRole.BRANCH_ADMIN,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org2.id,
+      branchId: branch2Main.id,
+      name: 'Rations Branch Finance',
+      email: 'branch-finance@rations.com',
+      passwordHash: await h('Finance1234!'),
+      role: UserRole.BRANCH_FINANCE as any,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
   await prisma.user.create({
@@ -326,6 +536,18 @@ async function main() {
       email: 'service@rations.com',
       passwordHash: await h('Service1234!'),
       role: UserRole.SERVICE as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org2.id,
+      branchId: branch2Main.id,
+      name: 'Rations Kitchen',
+      email: 'kitchen@rations.com',
+      passwordHash: await h('Kitchen1234!'),
+      role: UserRole.KITCHEN as any,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
   await prisma.user.create({
@@ -336,6 +558,7 @@ async function main() {
       email: 'waiter@rations.com',
       passwordHash: await h('Waiter1234!'),
       role: UserRole.WAITER,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
 
@@ -429,10 +652,74 @@ async function main() {
   await prisma.user.create({
     data: {
       organizationId: org3.id,
+      name: 'Free Owner',
+      email: 'owner@freebites.com',
+      passwordHash: await h('Owner1234!'),
+      role: UserRole.ORG_OWNER as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org3.id,
       name: 'Free Admin',
       email: 'admin@freebites.com',
       passwordHash: await h('Admin1234!'),
       role: UserRole.ADMIN,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org3.id,
+      name: 'Free Finance',
+      email: 'finance@freebites.com',
+      passwordHash: await h('Finance1234!'),
+      role: UserRole.ORG_FINANCE as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org3.id,
+      name: 'Free Auditor',
+      email: 'auditor@freebites.com',
+      passwordHash: await h('Auditor1234!'),
+      role: UserRole.ORG_AUDITOR as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org3.id,
+      branchId: branch3Main.id,
+      name: 'Free Branch Admin',
+      email: 'branch@freebites.com',
+      passwordHash: await h('Branch1234!'),
+      role: UserRole.BRANCH_ADMIN,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org3.id,
+      branchId: branch3Main.id,
+      name: 'Free Branch Finance',
+      email: 'branch-finance@freebites.com',
+      passwordHash: await h('Finance1234!'),
+      role: UserRole.BRANCH_FINANCE as any,
+      emailVerified: seedEmailVerifiedAt,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      organizationId: org3.id,
+      branchId: branch3Main.id,
+      name: 'Free Service',
+      email: 'service@freebites.com',
+      passwordHash: await h('Service1234!'),
+      role: UserRole.SERVICE as any,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
   await prisma.user.create({
@@ -443,6 +730,7 @@ async function main() {
       email: 'waiter1@freebites.com',
       passwordHash: await h('Waiter1234!'),
       role: UserRole.WAITER,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
   await prisma.user.create({
@@ -453,6 +741,7 @@ async function main() {
       email: 'waiter2@freebites.com',
       passwordHash: await h('Waiter1234!'),
       role: UserRole.WAITER,
+      emailVerified: seedEmailVerifiedAt,
     },
   });
 
@@ -630,9 +919,9 @@ async function main() {
   // ── HELP OPTIONS (Need Help / Service Request) ──────────────────────────────
   console.log('⚡ Seeding help options...');
   const helpOpts = [
-    { type: HelpOptionType.WAITER, label: 'Need help', icon: '❓', sortOrder: 1 },
-    { type: HelpOptionType.WAITER, label: 'Extra napkins', icon: '🧻', sortOrder: 2 },
-    { type: HelpOptionType.WAITER, label: 'Bill please', icon: '💳', sortOrder: 3 },
+    { type: HelpOptionType.WAITER, label: 'Table assistance', icon: '🙋', sortOrder: 1 },
+    { type: HelpOptionType.WAITER, label: 'Question', icon: '❓', sortOrder: 2 },
+    { type: HelpOptionType.BILL, label: 'Request Bill', icon: '💳', sortOrder: 3 },
     { type: HelpOptionType.WAITER, label: 'Refill drinks', icon: '🥤', sortOrder: 4 },
     { type: HelpOptionType.WAITER, label: 'Another round', icon: '🍻', sortOrder: 5 },
     { type: HelpOptionType.WAITER, label: 'Other', icon: '💬', sortOrder: 6 },
@@ -649,22 +938,34 @@ async function main() {
       data: {
         ...opt,
         organizationId: org1.id, // Demo Bistro
+        branchId: branch1Downtown.id,
         isActive: true,
-      },
+      } as any,
     });
     await prisma.helpOption.create({
       data: {
         ...opt,
         organizationId: org2.id, // Rations
+        branchId: branch2Main.id,
         isActive: true,
-      },
+      } as any,
     });
     await prisma.helpOption.create({
       data: {
         ...opt,
         organizationId: org3.id, // Free Bites
+        branchId: branch3Main.id,
         isActive: true,
-      },
+      } as any,
+    });
+
+    await prisma.helpOption.create({
+      data: {
+        ...opt,
+        organizationId: org1.id, // Demo Bistro (Uptown)
+        branchId: branch1Uptown.id,
+        isActive: true,
+      } as any,
     });
   }
 
@@ -673,15 +974,53 @@ async function main() {
   console.log('CEVOP — LOGIN CREDENTIALS (email / password)');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('  Ops Superadmin:  ops@cevop.io              / Super1234!    → :5176 ops portal');
-  console.log('  Demo Admin:      admin@demobistro.com      / Admin1234!    → all branches');
-  console.log('  Demo Downtown:   downtown@demobistro.com   / Branch1234!   → downtown only');
-  console.log('  Demo Uptown:     uptown@demobistro.com     / Branch1234!   → uptown only');
-  console.log('  Demo Service:    service@demobistro.com     / Service1234!  → service display');
-  console.log('  Demo Waiter:     waiter@demobistro.com     / Waiter1234!   → waiter panel');
-  console.log('  Rations Admin:   admin@rations.com         / Admin1234!');
-  console.log('  Rations Service: service@rations.com       / Service1234!');
-  console.log('  Rations Waiter:  waiter@rations.com        / Waiter1234!');
-  console.log('  Free Bites Admin:admin@freebites.com       / Admin1234!');
+  console.log('  Ops Support:     ops-support@cevop.io      / Support1234!  → :5176 ops portal');
+  console.log('  Ops Billing:     ops-billing@cevop.io      / Billing1234!  → :5176 ops portal');
+  console.log('  Ops Readonly:    ops-readonly@cevop.io     / Readonly1234! → :5176 ops portal');
+  console.log('  Demo Owner:      owner@demobistro.com      / Owner1234!    → org owner');
+  console.log('  Demo Admin:      admin@demobistro.com      / Admin1234!    → org admin');
+  console.log('  Demo Manager:    manager@demobistro.com    / Manager1234!  → org manager');
+  console.log('  Demo Finance:    finance@demobistro.com    / Finance1234!  → org finance');
+  console.log('  Demo Auditor:    auditor@demobistro.com    / Auditor1234!  → org auditor');
+  console.log(
+    '  Demo Downtown:   downtown@demobistro.com   / Branch1234!   → branch admin (downtown)',
+  );
+  console.log(
+    '  Demo Dt Finance: finance-downtown@demobistro.com / Finance1234! → branch finance (downtown)',
+  );
+  console.log(
+    '  Demo Uptown:     uptown@demobistro.com     / Branch1234!   → branch admin (uptown)',
+  );
+  console.log(
+    '  Demo Up Finance: finance-uptown@demobistro.com  / Finance1234! → branch finance (uptown)',
+  );
+  console.log('  Demo Service:    service@demobistro.com    / Service1234!  → service display');
+  console.log('  Demo Kitchen:    kitchen@demobistro.com    / Kitchen1234!  → kitchen display');
+  console.log(
+    '  Demo Waiter:     waiter@demobistro.com     / Waiter1234!   → waiter panel (downtown)',
+  );
+  console.log(
+    '  Demo Waiter2:    waiter-uptown@demobistro.com / Waiter1234! → waiter panel (uptown)',
+  );
+  console.log('  Rations Owner:   owner@rations.com         / Owner1234!    → org owner');
+  console.log('  Rations Admin:   admin@rations.com         / Admin1234!    → org admin');
+  console.log('  Rations Manager: manager@rations.com       / Manager1234!  → org manager');
+  console.log('  Rations Finance: finance@rations.com       / Finance1234!  → org finance');
+  console.log('  Rations Auditor: auditor@rations.com       / Auditor1234!  → org auditor');
+  console.log('  Rations Branch:  branch@rations.com        / Branch1234!   → branch admin');
+  console.log('  Rations Br Fin:  branch-finance@rations.com / Finance1234! → branch finance');
+  console.log('  Rations Service: service@rations.com       / Service1234!  → service display');
+  console.log('  Rations Kitchen: kitchen@rations.com       / Kitchen1234!  → kitchen display');
+  console.log('  Rations Waiter:  waiter@rations.com        / Waiter1234!   → waiter panel');
+  console.log('  Free Owner:      owner@freebites.com       / Owner1234!    → org owner');
+  console.log('  Free Admin:      admin@freebites.com       / Admin1234!    → org admin');
+  console.log('  Free Finance:    finance@freebites.com     / Finance1234!  → org finance');
+  console.log('  Free Auditor:    auditor@freebites.com     / Auditor1234!  → org auditor');
+  console.log('  Free Branch:     branch@freebites.com      / Branch1234!   → branch admin');
+  console.log('  Free Br Fin:     branch-finance@freebites.com / Finance1234! → branch finance');
+  console.log('  Free Service:    service@freebites.com     / Service1234!  → service display');
+  console.log('  Free Waiter 1:   waiter1@freebites.com     / Waiter1234!   → waiter panel');
+  console.log('  Free Waiter 2:   waiter2@freebites.com     / Waiter1234!   → waiter panel');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('No org slug needed — email + password only.');
 }

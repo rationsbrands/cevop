@@ -35,6 +35,9 @@ const MenuPage = React.lazy(() =>
 const TablesPage = React.lazy(() =>
   import('./pages/TablesPage').then((m) => ({ default: m.TablesPage })),
 );
+const SectionsPage = React.lazy(() =>
+  import('./pages/SectionsPage').then((m) => ({ default: m.SectionsPage })),
+);
 const OrdersPage = React.lazy(() =>
   import('./pages/OrdersPage').then((m) => ({ default: m.OrdersPage })),
 );
@@ -49,6 +52,12 @@ const SettingsPage = React.lazy(() =>
 );
 const BranchesPage = React.lazy(() =>
   import('./pages/BranchesPage').then((m) => ({ default: m.BranchesPage })),
+);
+const ReportsPage = React.lazy(() =>
+  import('./pages/ReportsPage').then((m) => ({ default: m.ReportsPage })),
+);
+const AuditLogsPage = React.lazy(() =>
+  import('./pages/AuditLogsPage').then((m) => ({ default: m.AuditLogsPage })),
 );
 
 function Protected({ children }: { children: React.ReactNode }) {
@@ -66,7 +75,14 @@ function Protected({ children }: { children: React.ReactNode }) {
 function RequireOrgAdmin({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
-  if (user.role !== 'ADMIN') return <Navigate to="/" replace />;
+  if (!['ORG_OWNER', 'ADMIN'].includes(user.role)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+function RequireRole({ roles, children }: { roles: string[]; children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/login" replace />;
+  if (!roles.includes(user.role)) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -128,11 +144,54 @@ function AppRoutes() {
         }
       >
         <Route index element={<DashboardPage />} />
-        <Route path="menu" element={<MenuPage />} />
-        <Route path="tables" element={<TablesPage />} />
-        <Route path="orders" element={<OrdersPage />} />
-        <Route path="users" element={<UsersPage />} />
-        <Route path="help-options" element={<HelpOptionsPage />} />
+        <Route
+          path="orders"
+          element={
+            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+              <OrdersPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="menu"
+          element={
+            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+              <MenuPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="tables"
+          element={
+            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+              <TablesPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="sections"
+          element={
+            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+              <SectionsPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="users"
+          element={
+            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+              <UsersPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="help-options"
+          element={
+            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+              <HelpOptionsPage />
+            </RequireRole>
+          }
+        />
         <Route
           path="settings"
           element={
@@ -149,13 +208,42 @@ function AppRoutes() {
             </RequireOrgAdmin>
           }
         />
+        <Route
+          path="reports"
+          element={
+            <RequireRole
+              roles={[
+                'ORG_OWNER',
+                'ADMIN',
+                'ORG_MANAGER',
+                'ORG_FINANCE',
+                'ORG_AUDITOR',
+                'BRANCH_ADMIN',
+                'BRANCH_FINANCE',
+                'SUPERADMIN',
+              ]}
+            >
+              <ReportsPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="audit-logs"
+          element={
+            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'ORG_AUDITOR', 'SUPERADMIN']}>
+              <AuditLogsPage />
+            </RequireRole>
+          }
+        />
       </Route>
     </Routes>
   );
 }
 
+const RootWrapper = import.meta.env.DEV ? React.Fragment : React.StrictMode;
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
+  <RootWrapper>
     <ThemeProvider>
       <ErrorBoundary>
         <AuthProvider>
@@ -165,5 +253,5 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         </AuthProvider>
       </ErrorBoundary>
     </ThemeProvider>
-  </React.StrictMode>,
+  </RootWrapper>,
 );

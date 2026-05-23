@@ -7,6 +7,7 @@ import {
   IconDashboard,
   IconMenu,
   IconTables,
+  IconSections,
   IconOrders,
   IconStaff,
   IconHelp,
@@ -15,6 +16,7 @@ import {
   IconLogout,
   IconChevronLeft,
   IconX,
+  IconOverview,
 } from './Icons';
 
 interface BranchOption {
@@ -42,8 +44,36 @@ export function Shell() {
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
   const nextThemeLabel = nextThemeMode === 'system' ? 'OS' : nextThemeMode === 'dark' ? 'D' : 'L';
 
+  const role = user?.role ?? '';
   const isBranchScoped = !!user?.branchId;
-  const isOrgAdmin = user?.role === 'ADMIN';
+  const isOrgWideRole = [
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'ORG_FINANCE',
+    'ORG_AUDITOR',
+  ].includes(role);
+  const hasBranchContext = isBranchScoped || !!activeBranchFilter;
+  const canManageOrg = ['ORG_OWNER', 'ADMIN'].includes(role);
+  const canManageOperations = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(role);
+  const canManageStaff = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(role);
+  const canViewReports = [
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'ORG_FINANCE',
+    'ORG_AUDITOR',
+    'BRANCH_ADMIN',
+    'BRANCH_FINANCE',
+  ].includes(role);
+  const canViewAuditLogs = [
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'ORG_AUDITOR',
+    'SUPERADMIN',
+  ].includes(role);
+  const canViewOrders = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(role);
 
   useEffect(() => {
     const onResize = () => {
@@ -58,16 +88,18 @@ export function Shell() {
   }, []);
 
   useEffect(() => {
-    if (!isOrgAdmin) return;
+    if (!isOrgWideRole) return;
     api
       .get('/api/branches')
       .then(({ data }) => {
-        if (data) setBranches(data);
+        if (data) {
+          setBranches(data);
+        }
       })
       .catch(() => {
         void 0;
       });
-  }, [api, isOrgAdmin]);
+  }, [activeBranchFilter, api, isBranchScoped, isOrgWideRole, setActiveBranchFilter]);
 
   useEffect(() => {
     const t = window.setTimeout(() => setMobileMenuOpen(false), 0);
@@ -76,13 +108,31 @@ export function Shell() {
 
   const NAV = [
     { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true, show: true },
-    { to: '/menu', label: 'Menu', Icon: IconMenu, show: true },
-    { to: '/tables', label: 'Tables & QR', Icon: IconTables, show: true },
-    { to: '/orders', label: 'Orders', Icon: IconOrders, show: true },
-    { to: '/users', label: 'Staff', Icon: IconStaff, show: true },
-    { to: '/help-options', label: 'Help Options', Icon: IconHelp, show: true },
-    { to: '/branches', label: 'Branches', Icon: IconBranches, show: isOrgAdmin },
-    { to: '/settings', label: 'Settings', Icon: IconSettings, show: isOrgAdmin },
+    { to: '/orders', label: 'Orders', Icon: IconOrders, show: canViewOrders && hasBranchContext },
+    { to: '/reports', label: 'Reports', Icon: IconOverview, show: canViewReports },
+    { to: '/menu', label: 'Menu', Icon: IconMenu, show: canManageOperations && hasBranchContext },
+    {
+      to: '/sections',
+      label: 'Sections',
+      Icon: IconSections,
+      show: canManageOperations && hasBranchContext,
+    },
+    {
+      to: '/tables',
+      label: 'Tables & QR',
+      Icon: IconTables,
+      show: canManageOperations && hasBranchContext,
+    },
+    { to: '/users', label: 'Staff', Icon: IconStaff, show: canManageStaff },
+    {
+      to: '/help-options',
+      label: 'Help Options',
+      Icon: IconHelp,
+      show: canManageOperations && hasBranchContext,
+    },
+    { to: '/branches', label: 'Branches', Icon: IconBranches, show: canManageOrg },
+    { to: '/audit-logs', label: 'Audit Logs', Icon: IconSettings, show: canViewAuditLogs },
+    { to: '/settings', label: 'Settings', Icon: IconSettings, show: canManageOrg },
   ].filter((n) => n.show);
 
   async function handleLogout() {
@@ -137,17 +187,22 @@ export function Shell() {
         </div>
 
         {/* Branch selector for org admins */}
-        {(sidebarOpen || mobileMenuOpen) && isOrgAdmin && branches.length > 0 && (
+        {(sidebarOpen || mobileMenuOpen) && isOrgWideRole && branches.length > 0 && (
           <div className="mx-3 mt-4">
-            <label className="text-[10px] mb-1">Active Branch</label>
+            <label htmlFor="admin_active_branch_filter" className="text-[10px] mb-1">
+              Active Branch
+            </label>
             <select
+              id="admin_active_branch_filter"
+              name="activeBranchId"
               className="w-full bg-[var(--surface2)] border-[var(--border)] text-xs py-1.5"
               value={activeBranchFilter?.id ?? ''}
               onChange={(e) =>
                 setActiveBranchFilter(branches.find((b) => b.id === e.target.value) ?? null)
               }
+              autoComplete="off"
             >
-              <option value="">All Branches</option>
+              <option value="">Select branch…</option>
               {branches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
@@ -188,9 +243,9 @@ export function Shell() {
           {/* Theme toggle */}
           {sidebarOpen || mobileMenuOpen ? (
             <div className="flex flex-col gap-1.5 px-1">
-              <label className="text-[9px] text-[var(--muted)] uppercase font-bold tracking-widest px-1">
+              <span className="text-[9px] text-[var(--muted)] uppercase font-bold tracking-widest px-1">
                 Theme
-              </label>
+              </span>
               <div className="flex items-center gap-2 px-1">
                 <button
                   onClick={() => setMode(nextThemeMode)}
@@ -234,11 +289,20 @@ export function Shell() {
               <div className="px-3 mb-3">
                 <p className="text-xs text-[var(--text)] font-bold truncate">{user?.name}</p>
                 <p className="text-[10px] text-[var(--muted)] uppercase tracking-wider">
-                  {user?.role === 'ADMIN' || user?.role === 'SUPERADMIN'
-                    ? `Org. ${user.role.replace(/_/g, ' ')}`
+                  {[
+                    'ORG_OWNER',
+                    'ADMIN',
+                    'ORG_MANAGER',
+                    'ORG_FINANCE',
+                    'ORG_AUDITOR',
+                    'SUPERADMIN',
+                  ].includes(role)
+                    ? `Org. ${role.replace(/_/g, ' ')}`
                     : user?.role === 'BRANCH_ADMIN' && user?.branch
                       ? `${user.branch.name} Admin`
-                      : user?.role?.replace(/_/g, ' ')}
+                      : user?.role === 'BRANCH_FINANCE' && user?.branch
+                        ? `${user.branch.name} Finance`
+                        : user?.role?.replace(/_/g, ' ')}
                 </p>
               </div>
               <button

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useApi } from '../context/auth';
+import { useApi, usePermission } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
 
 const PLAN_OPTS = ['free', 'trial', 'starter', 'growth', 'enterprise'];
@@ -24,6 +24,7 @@ const PLAN_COLOR: Record<string, string> = {
 export function OrgDetailPage() {
   const { orgId } = useParams<{ orgId: string }>();
   const api = useApi();
+  const can = usePermission();
   const [org, setOrg] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -132,7 +133,8 @@ export function OrgDetailPage() {
         <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
       </div>
     );
-  if (!org) return <div className="text-red-400">Organisation not found</div>;
+  if (!can('view_org_detail')) return <div className="text-red-400 p-8">Permission denied</div>;
+  if (!org) return <div className="text-red-400 p-8">Organisation not found</div>;
 
   return (
     <div className="space-y-6 animate-in max-w-4xl">
@@ -169,12 +171,12 @@ export function OrgDetailPage() {
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
-          {org.planStatus === 'active' && org.plan === 'free' && (
+          {can('assign_trial') && org.planStatus === 'active' && org.plan === 'free' && (
             <button onClick={assignTrial} className="btn btn-secondary text-xs px-3 py-1.5">
               Assign 7-Day Trial
             </button>
           )}
-          {org.planStatus !== 'suspended' && (
+          {can('suspend_org') && org.planStatus !== 'suspended' && (
             <button
               onClick={() => quickAction('suspend')}
               disabled={saving}
@@ -183,16 +185,17 @@ export function OrgDetailPage() {
               Suspend
             </button>
           )}
-          {(org.planStatus === 'suspended' || org.planStatus === 'trialing') && (
-            <button
-              onClick={() => quickAction('activate')}
-              disabled={saving}
-              className="btn btn-secondary btn-sm"
-            >
-              Activate
-            </button>
-          )}
-          {org.planStatus !== 'cancelled' && (
+          {can('activate_org') &&
+            (org.planStatus === 'suspended' || org.planStatus === 'trialing') && (
+              <button
+                onClick={() => quickAction('activate')}
+                disabled={saving}
+                className="btn btn-secondary btn-sm"
+              >
+                Activate
+              </button>
+            )}
+          {can('delete_org') && org.planStatus !== 'cancelled' && (
             <button
               onClick={() => quickAction('delete')}
               disabled={saving}
@@ -201,9 +204,11 @@ export function OrgDetailPage() {
               Delete Data
             </button>
           )}
-          <button onClick={impersonate} disabled={saving} className="btn btn-secondary btn-sm">
-            Login as Admin ↗
-          </button>
+          {can('impersonate') && (
+            <button onClick={impersonate} disabled={saving} className="btn btn-secondary btn-sm">
+              Login as Admin ↗
+            </button>
+          )}
         </div>
       </div>
 
@@ -212,7 +217,7 @@ export function OrgDetailPage() {
         <div className="card p-4">
           <p className="text-xs text-[var(--muted)] uppercase tracking-wider">Revenue</p>
           <p className="font-display text-3xl text-[var(--accent)] mt-1">
-            {formatPrice(org.stats?.totalRevenue ?? 0)}
+            {formatPrice(org.stats?.totalRevenue ?? 0, org.currency ?? 'NGN')}
           </p>
         </div>
         <div className="card p-4">
@@ -231,58 +236,77 @@ export function OrgDetailPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Plan Management */}
-        <div className="card p-5 space-y-4">
-          <h2 className="font-semibold text-sm uppercase tracking-wider text-[var(--muted)] border-b border-[var(--border)] pb-2">
-            Plan & Status
-          </h2>
-          <div>
-            <label>Plan</label>
-            <select value={editPlan} onChange={(e) => setEditPlan(e.target.value)}>
-              {PLAN_OPTS.map((p) => (
-                <option key={p} value={p}>
-                  {p.charAt(0).toUpperCase() + p.slice(1)}
-                </option>
-              ))}
-            </select>
+        {can('manage_plans') && (
+          <div className="card p-5 space-y-4">
+            <h2 className="font-semibold text-sm uppercase tracking-wider text-[var(--muted)] border-b border-[var(--border)] pb-2">
+              Plan & Status
+            </h2>
+            <div>
+              <label htmlFor="ops_org_detail_plan">Plan</label>
+              <select
+                id="ops_org_detail_plan"
+                name="plan"
+                value={editPlan}
+                onChange={(e) => setEditPlan(e.target.value)}
+                autoComplete="off"
+              >
+                {PLAN_OPTS.map((p) => (
+                  <option key={p} value={p}>
+                    {p.charAt(0).toUpperCase() + p.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="ops_org_detail_status">Status</label>
+              <select
+                id="ops_org_detail_status"
+                name="planStatus"
+                value={editStatus}
+                onChange={(e) => setEditStatus(e.target.value)}
+                autoComplete="off"
+              >
+                {STATUS_OPTS.map((s) => (
+                  <option key={s} value={s}>
+                    {s.charAt(0).toUpperCase() + s.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="ops_org_detail_trial_end">Trial End Date</label>
+              <input
+                id="ops_org_detail_trial_end"
+                name="trialEndDate"
+                type="date"
+                value={editTrialEnd}
+                onChange={(e) => setEditTrialEnd(e.target.value)}
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <label htmlFor="ops_org_detail_internal_notes">Internal Notes</label>
+              <textarea
+                id="ops_org_detail_internal_notes"
+                name="internalNotes"
+                rows={3}
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+                className="resize-none"
+                placeholder="Notes visible to ops team only"
+              />
+            </div>
+            {success && <p className="text-green-400 text-sm">{success}</p>}
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+            <button
+              onClick={save}
+              disabled={saving}
+              className="btn btn-primary w-full py-2 text-sm disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
           </div>
-          <div>
-            <label>Status</label>
-            <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
-              {STATUS_OPTS.map((s) => (
-                <option key={s} value={s}>
-                  {s.charAt(0).toUpperCase() + s.slice(1)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label>Trial End Date</label>
-            <input
-              type="date"
-              value={editTrialEnd}
-              onChange={(e) => setEditTrialEnd(e.target.value)}
-            />
-          </div>
-          <div>
-            <label>Internal Notes</label>
-            <textarea
-              rows={3}
-              value={editNotes}
-              onChange={(e) => setEditNotes(e.target.value)}
-              className="resize-none"
-              placeholder="Notes visible to ops team only"
-            />
-          </div>
-          {success && <p className="text-green-400 text-sm">{success}</p>}
-          {error && <p className="text-red-400 text-sm">{error}</p>}
-          <button
-            onClick={save}
-            disabled={saving}
-            className="btn btn-primary w-full py-2 text-sm disabled:opacity-50"
-          >
-            {saving ? 'Saving…' : 'Save Changes'}
-          </button>
-        </div>
+        )}
 
         {/* Org Info */}
         <div className="card p-5 space-y-4">

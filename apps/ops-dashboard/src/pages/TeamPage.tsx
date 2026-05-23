@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useApi } from '../context/auth';
+import { useApi, usePermission } from '../context/auth';
 
 interface TeamMember {
   id: string;
@@ -7,16 +7,18 @@ interface TeamMember {
   email: string;
   isActive: boolean;
   mustChangePassword: boolean;
+  opsRole: 'SUPER' | 'SUPPORT' | 'BILLING' | 'READONLY' | null;
   lastLoginAt: string | null;
   createdAt: string;
 }
 
 export function TeamPage() {
   const api = useApi();
+  const can = usePermission();
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [form, setForm] = useState({ name: '', email: '', password: '', opsRole: 'SUPPORT' });
   const [showPw, setShowPw] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -51,7 +53,7 @@ export function TeamPage() {
       setSuccess(
         `Account created for ${form.email}. They must change their password on first login.`,
       );
-      setForm({ name: '', email: '', password: '' });
+      setForm({ name: '', email: '', password: '', opsRole: 'SUPPORT' });
       setShowForm(false);
       await loadTeam();
     } catch {
@@ -72,6 +74,14 @@ export function TeamPage() {
     } catch {
       setError('Something went wrong');
     }
+  }
+
+  if (!can('view_team')) {
+    return (
+      <div className="flex items-center justify-center h-48 text-[var(--muted)] text-sm">
+        You do not have permission to view this page.
+      </div>
+    );
   }
 
   return (
@@ -109,35 +119,44 @@ export function TeamPage() {
           <h2 className="font-semibold text-[var(--text)] mb-4">New Ops Account</h2>
           <form onSubmit={handleCreate} className="space-y-4 max-w-md">
             <div>
-              <label>Full Name</label>
+              <label htmlFor="ops_team_full_name">Full Name</label>
               <input
+                id="ops_team_full_name"
+                name="name"
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm((v) => ({ ...v, name: e.target.value }))}
                 required
                 placeholder="e.g. Jane Doe"
+                autoComplete="name"
               />
             </div>
             <div>
-              <label>Email</label>
+              <label htmlFor="ops_team_email">Email</label>
               <input
+                id="ops_team_email"
+                name="email"
                 type="email"
                 value={form.email}
                 onChange={(e) => setForm((v) => ({ ...v, email: e.target.value }))}
                 required
                 placeholder="e.g. jane@cevop.com"
+                autoComplete="email"
               />
             </div>
             <div>
-              <label>Temporary Password</label>
+              <label htmlFor="ops_team_temp_password">Temporary Password</label>
               <div className="relative">
                 <input
+                  id="ops_team_temp_password"
+                  name="password"
                   type={showPw ? 'text' : 'password'}
                   value={form.password}
                   onChange={(e) => setForm((v) => ({ ...v, password: e.target.value }))}
                   required
                   className="pr-10"
                   placeholder="••••••••"
+                  autoComplete="new-password"
                 />
                 <button
                   type="button"
@@ -151,6 +170,21 @@ export function TeamPage() {
               <p className="text-xs text-[var(--muted)] mt-1">
                 They will be forced to change this on first login.
               </p>
+            </div>
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-[var(--muted)] mb-1">
+                Role
+              </label>
+              <select
+                value={form.opsRole}
+                onChange={(e) => setForm((f) => ({ ...f, opsRole: e.target.value }))}
+                className="w-full bg-[var(--surface2)] border border-[var(--border)] text-sm text-[var(--text)] px-3 py-2 focus:outline-none focus:border-[var(--accent)]"
+              >
+                <option value="SUPPORT">Support — can view orgs, assign trials, view audit</option>
+                <option value="BILLING">Billing — can manage plans and view revenue</option>
+                <option value="READONLY">Read Only — metrics and org list only</option>
+                <option value="SUPER">Super — full access (founders only)</option>
+              </select>
             </div>
             <button
               type="submit"
@@ -178,6 +212,9 @@ export function TeamPage() {
                 <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">
                   Email
                 </th>
+                <th className="text-left text-xs font-bold uppercase tracking-wider text-[var(--muted)] pb-2 px-4">
+                  Role
+                </th>
                 <th className="text-left px-4 py-3 text-[var(--muted)] font-medium text-xs uppercase tracking-wider">
                   Last Login
                 </th>
@@ -199,6 +236,21 @@ export function TeamPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-[var(--muted)]">{member.email}</td>
+                  <td className="py-3 pr-4 px-4">
+                    <span
+                      className={`text-xs font-bold uppercase tracking-wider px-2 py-0.5 border ${
+                        member.opsRole === 'SUPER'
+                          ? 'border-[var(--accent)] text-[var(--accent)]'
+                          : member.opsRole === 'BILLING'
+                            ? 'border-blue-700 text-blue-400'
+                            : member.opsRole === 'SUPPORT'
+                              ? 'border-green-700 text-green-400'
+                              : 'border-[var(--border)] text-[var(--muted)]'
+                      }`}
+                    >
+                      {member.opsRole ?? 'SUPER'}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-[var(--muted)]">
                     {member.lastLoginAt
                       ? new Date(member.lastLoginAt).toLocaleDateString()

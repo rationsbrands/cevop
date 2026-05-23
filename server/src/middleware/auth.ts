@@ -57,8 +57,10 @@ export function requireBranchAccess(req: AuthRequest, res: Response, next: NextF
 
   if (
     (req.user.role === 'BRANCH_ADMIN' ||
+      req.user.role === 'BRANCH_FINANCE' ||
       req.user.role === 'WAITER' ||
-      req.user.role === 'SERVICE') &&
+      req.user.role === 'SERVICE' ||
+      req.user.role === 'KITCHEN') &&
     !req.user.branchId
   ) {
     res.status(403).json({ success: false, error: 'This account must be assigned to a branch' });
@@ -76,6 +78,18 @@ export function requireBranchAccess(req: AuthRequest, res: Response, next: NextF
     req.branchScope = null;
   }
 
+  next();
+}
+
+export function requireBranchSelected(req: AuthRequest, res: Response, next: NextFunction): void {
+  if (!req.user) {
+    res.status(401).json({ success: false, error: 'Unauthenticated' });
+    return;
+  }
+  if (!req.branchScope) {
+    res.status(400).json({ success: false, error: 'branchId is required for this operation' });
+    return;
+  }
   next();
 }
 

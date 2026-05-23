@@ -5,8 +5,39 @@ import crypto from 'crypto';
 import { z } from 'zod';
 import { prisma } from '../services/prisma';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import type { AuthPayload } from '../../../shared/types';
 import { logger } from '../services/logger';
 import { sendPasswordReset, sendVerificationEmail } from '../services/email';
+
+async function generateStaffCode(branchId: string, role: string): Promise<string> {
+  // Prefix based on role
+  const prefix =
+    role === 'WAITER'
+      ? 'W'
+      : role === 'SERVICE'
+        ? 'S'
+        : role === 'KITCHEN'
+          ? 'K'
+          : role === 'BRANCH_ADMIN'
+            ? 'M'
+            : 'T'; // T for team/other
+
+  // Find the highest existing code number for this branch + prefix
+  const existing = await (prisma.user as any).findMany({
+    where: {
+      branchId,
+      staffCode: { startsWith: `${prefix}-` },
+    },
+    select: { staffCode: true },
+  });
+
+  const nums = existing
+    .map((u: any) => parseInt(u.staffCode?.split('-')[1] ?? '0', 10))
+    .filter((n: number) => !isNaN(n));
+
+  const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
+  return `${prefix}-${String(next).padStart(2, '0')}`;
+}
 
 export const authRouter = Router();
 
@@ -71,8 +102,9 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       email: z.string().email().toLowerCase().trim(),
       password: z.string().min(1),
       organizationId: z.string().optional(),
+      rememberMe: z.boolean().optional(),
     });
-    const { email, password, organizationId } = schema.parse(req.body);
+    const { email, password, organizationId, rememberMe } = schema.parse(req.body);
     const ip = getClientIp(req);
 
     // Find all active users with this email (could span multiple orgs if email reused)
@@ -151,7 +183,31 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 
     const matchedUser = matchedUsers[0];
 
-    // Block removed: Unverified users can now login, frontend will show a banner
+    // Block unverified accounts from logging in
+    // Exception: SUPERADMIN accounts created manually bypass this requirement
+    if (!matchedUser.emailVerified && matchedUser.role !== 'SUPERADMIN') {
+      res.status(403).json({
+        success: false,
+        error:
+          'Please verify your email address before logging in. Check your inbox for the verification link.',
+        code: 'EMAIL_NOT_VERIFIED',
+      });
+      return;
+    }
+
+    const matchedUserRole = matchedUser.role as unknown as string;
+    if (
+      ['SERVICE', 'WAITER', 'KITCHEN', 'BRANCH_ADMIN', 'BRANCH_FINANCE'].includes(
+        matchedUserRole,
+      ) &&
+      !matchedUser.branchId
+    ) {
+      res.status(403).json({
+        success: false,
+        error: 'This account must be assigned to a branch before it can log in.',
+      });
+      return;
+    }
 
     // Reset login attempts on success
     await prisma.user.update({
@@ -160,19 +216,23 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     });
 
     // Issue tokens
-    const accessPayload = {
+    const accessPayload: AuthPayload = {
       userId: matchedUser.id,
       organizationId: matchedUser.organizationId,
       branchId: matchedUser.branchId ?? undefined,
       role: matchedUser.role,
       plan: matchedUser.organization?.plan ?? 'free',
+      ...(matchedUser.role === 'SUPERADMIN' && (matchedUser as any).opsRole
+        ? { opsRole: (matchedUser as any).opsRole as any }
+        : {}),
     };
     const accessToken = signAccess(accessPayload);
 
     // Refresh token (stored as hash for security)
     const rawRefresh = generateSecureToken();
     const refreshHash = hashToken(rawRefresh);
-    const refreshExpiry = new Date(Date.now() + REFRESH_TOKEN_MS);
+    const ttlMs = rememberMe ? 30 * 24 * 60 * 60 * 1000 : REFRESH_TOKEN_MS; // 30 days if remember me
+    const refreshExpiry = new Date(Date.now() + ttlMs);
 
     await prisma.refreshToken.create({
       data: {
@@ -199,7 +259,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       })
       .catch(() => {});
 
-    res.cookie(getRefreshCookieName(req), rawRefresh, COOKIE_OPTIONS);
+    res.cookie(getRefreshCookieName(req), rawRefresh, { ...COOKIE_OPTIONS, maxAge: ttlMs });
     res.json({
       success: true,
       data: {
@@ -210,8 +270,13 @@ authRouter.post('/login', async (req: Request, res: Response) => {
           name: matchedUser.name,
           email: matchedUser.email,
           role: matchedUser.role,
+          staffCode: matchedUser.staffCode ?? undefined,
+          ...(matchedUser.role === 'SUPERADMIN' && (matchedUser as any).opsRole
+            ? { opsRole: (matchedUser as any).opsRole }
+            : {}),
           emailVerified: !!matchedUser.emailVerified,
           mustChangePassword: matchedUser.mustChangePassword,
+          isOnShift: !!(matchedUser as any).isOnShift,
           organizationId: matchedUser.organizationId,
           branchId: matchedUser.branchId ?? null,
           organization: {
@@ -289,6 +354,9 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
       branchId: stored.user.branchId ?? undefined,
       role: stored.user.role,
       plan: stored.user.organization?.plan ?? 'free',
+      ...(stored.user.role === 'SUPERADMIN' && (stored.user as any).opsRole
+        ? { opsRole: (stored.user as any).opsRole as any }
+        : {}),
     });
 
     res.cookie(getRefreshCookieName(req), newRawRefresh, COOKIE_OPTIONS);
@@ -358,8 +426,13 @@ authRouter.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        staffCode: user.staffCode ?? undefined,
+        ...(user.role === 'SUPERADMIN' && (user as any).opsRole
+          ? { opsRole: (user as any).opsRole }
+          : {}),
         emailVerified: !!user.emailVerified,
         mustChangePassword: user.mustChangePassword,
+        isOnShift: !!(user as any).isOnShift,
         organizationId: user.organizationId,
         branchId: user.branchId ?? null,
         organization: {
@@ -460,6 +533,50 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
   }
 });
 
+authRouter.post('/resend-verification', async (req: Request, res: Response) => {
+  try {
+    const { email } = z.object({ email: z.string().email().toLowerCase().trim() }).parse(req.body);
+
+    const user = await prisma.user.findFirst({
+      where: { email, isActive: true, emailVerified: null },
+      include: { organization: { select: { name: true } } },
+    });
+
+    // Always return 200 — don't reveal whether email exists
+    if (!user) {
+      res.json({
+        success: true,
+        message: 'If that account exists, a verification email has been sent.',
+      });
+      return;
+    }
+
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { emailVerificationToken: verificationToken },
+    });
+
+    const verifyUrl = `${process.env.ADMIN_DASHBOARD_URL || 'http://localhost:5175'}/verify-email/${verificationToken}`;
+    await sendVerificationEmail(
+      email,
+      verifyUrl,
+      user.organization?.name ?? 'your restaurant',
+    ).catch(() => {});
+
+    res.json({
+      success: true,
+      message: 'If that account exists, a verification email has been sent.',
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      res.status(400).json({ success: false, error: 'Valid email required' });
+      return;
+    }
+    res.status(500).json({ success: false, error: 'Failed to resend verification' });
+  }
+});
+
 // ─── POST /auth/accept-invite ─────────────────────────────────────────────────
 // New user accepts an email invite and sets their password
 authRouter.post('/accept-invite', async (req: Request, res: Response) => {
@@ -474,6 +591,26 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
     const invite = await prisma.inviteToken.findUnique({ where: { token } });
     if (!invite || invite.usedAt || invite.expiresAt < new Date()) {
       res.status(400).json({ success: false, error: 'Invalid or expired invite link' });
+      return;
+    }
+
+    const inviteRole = invite.role as unknown as string;
+    if (
+      ['SERVICE', 'WAITER', 'BRANCH_ADMIN', 'BRANCH_FINANCE'].includes(inviteRole) &&
+      !invite.branchId
+    ) {
+      res
+        .status(400)
+        .json({ success: false, error: 'This invite must include a branch assignment' });
+      return;
+    }
+    if (
+      ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'ORG_FINANCE', 'ORG_AUDITOR'].includes(inviteRole) &&
+      invite.branchId
+    ) {
+      res
+        .status(400)
+        .json({ success: false, error: 'Org-wide roles cannot be assigned to a branch' });
       return;
     }
 
@@ -504,6 +641,12 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
       return;
     }
 
+    // Auto-generate staffCode for branch-scoped staff roles
+    let staffCode: string | undefined;
+    if (invite.branchId && ['SERVICE', 'WAITER', 'BRANCH_ADMIN'].includes(invite.role)) {
+      staffCode = await generateStaffCode(invite.branchId, invite.role).catch(() => undefined);
+    }
+
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
       data: {
@@ -513,6 +656,7 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
         email: invite.email,
         passwordHash,
         role: invite.role,
+        staffCode,
         emailVerified: new Date(),
       },
       include: { organization: true, branch: true },
@@ -540,7 +684,7 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
       },
     });
 
-    res.cookie(COOKIE_NAME, rawRefresh, COOKIE_OPTIONS);
+    res.cookie(getRefreshCookieName(req), rawRefresh, COOKIE_OPTIONS);
     res.status(201).json({
       success: true,
       data: {
@@ -551,6 +695,7 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
           name: user.name,
           email: user.email,
           role: user.role,
+          staffCode: user.staffCode ?? undefined,
           organizationId: user.organizationId,
           branchId: user.branchId ?? null,
           organization: {
@@ -602,73 +747,80 @@ authRouter.get('/validate-invite/:token', async (req: Request, res: Response) =>
   }
 });
 
+import { requireOpsPermission } from '../middleware/opsPermissions';
+
 // ─── POST /auth/onboard ───────────────────────────────────────────────────────
 // Called by SUPERADMIN to provision a new organisation + create its first admin
-authRouter.post('/onboard', authenticate, async (req: AuthRequest, res: Response) => {
-  if (req.user!.role !== 'SUPERADMIN') {
-    res.status(403).json({ success: false, error: 'Superadmin access required' });
-    return;
-  }
-
-  try {
-    const schema = z.object({
-      orgName: z.string().min(2).max(200),
-      orgSlug: z
-        .string()
-        .min(2)
-        .max(100)
-        .regex(/^[a-z0-9-]+$/),
-      adminName: z.string().min(1).max(200),
-      adminEmail: z.string().email().toLowerCase(),
-      adminPassword: z.string().min(8).max(128),
-      timezone: z.string().optional(),
-      currency: z.string().optional(),
-    });
-    const body = schema.parse(req.body);
-
-    const slugExists = await prisma.organization.findUnique({ where: { slug: body.orgSlug } });
-    if (slugExists) {
-      res.status(409).json({ success: false, error: 'Organisation slug already taken' });
+authRouter.post(
+  '/onboard',
+  authenticate,
+  requireOpsPermission('onboard_org'),
+  async (req: AuthRequest, res: Response) => {
+    if (req.user!.role !== 'SUPERADMIN') {
+      res.status(403).json({ success: false, error: 'Superadmin access required' });
       return;
     }
 
-    const org = await prisma.organization.create({
-      data: {
-        name: body.orgName,
-        slug: body.orgSlug,
-        timezone: body.timezone ?? 'Africa/Lagos',
-        currency: body.currency ?? 'NGN',
-      },
-    });
+    try {
+      const schema = z.object({
+        orgName: z.string().min(2).max(200),
+        orgSlug: z
+          .string()
+          .min(2)
+          .max(100)
+          .regex(/^[a-z0-9-]+$/),
+        adminName: z.string().min(1).max(200),
+        adminEmail: z.string().email().toLowerCase(),
+        adminPassword: z.string().min(8).max(128),
+        timezone: z.string().optional(),
+        currency: z.string().optional(),
+      });
+      const body = schema.parse(req.body);
 
-    const passwordHash = await bcrypt.hash(body.adminPassword, 12);
-    const admin = await prisma.user.create({
-      data: {
-        organizationId: org.id,
-        name: body.adminName,
-        email: body.adminEmail,
-        passwordHash,
-        role: 'ADMIN',
-      },
-    });
+      const slugExists = await prisma.organization.findUnique({ where: { slug: body.orgSlug } });
+      if (slugExists) {
+        res.status(409).json({ success: false, error: 'Organisation slug already taken' });
+        return;
+      }
 
-    logger.info('New organisation onboarded', { orgId: org.id, slug: org.slug });
+      const org = await prisma.organization.create({
+        data: {
+          name: body.orgName,
+          slug: body.orgSlug,
+          timezone: body.timezone ?? 'Africa/Lagos',
+          currency: body.currency ?? 'NGN',
+        },
+      });
 
-    res.status(201).json({
-      success: true,
-      data: {
-        organization: { id: org.id, name: org.name, slug: org.slug },
-        admin: { id: admin.id, name: admin.name, email: admin.email },
-      },
-    });
-  } catch (err: unknown) {
-    if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
-      return;
+      const passwordHash = await bcrypt.hash(body.adminPassword, 12);
+      const admin = await prisma.user.create({
+        data: {
+          organizationId: org.id,
+          name: body.adminName,
+          email: body.adminEmail,
+          passwordHash,
+          role: 'ORG_OWNER' as any,
+        },
+      });
+
+      logger.info('New organisation onboarded', { orgId: org.id, slug: org.slug });
+
+      res.status(201).json({
+        success: true,
+        data: {
+          organization: { id: org.id, name: org.name, slug: org.slug },
+          admin: { id: admin.id, name: admin.name, email: admin.email },
+        },
+      });
+    } catch (err: unknown) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+        return;
+      }
+      res.status(500).json({ success: false, error: 'Failed to onboard organisation' });
     }
-    res.status(500).json({ success: false, error: 'Failed to onboard organisation' });
-  }
-});
+  },
+);
 
 // ─── Public: table info for QR ────────────────────────────────────────────────
 authRouter.get('/table/:orgId/:tableId', async (req: Request, res: Response) => {
@@ -760,7 +912,7 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
             name: body.adminName,
             email: body.adminEmail,
             passwordHash,
-            role: 'ADMIN',
+            role: 'ORG_OWNER' as any,
             emailVerificationToken: verificationToken,
           },
         });
@@ -856,6 +1008,7 @@ authRouter.post('/verify-email', async (req: Request, res: Response) => {
           name: user.name,
           email: user.email,
           role: user.role,
+          staffCode: user.staffCode ?? undefined,
           mustChangePassword: user.mustChangePassword,
           organizationId: user.organizationId,
           branchId: user.branchId ?? null,

@@ -7,7 +7,7 @@ interface Branch {
 }
 interface HelpOption {
   id: string;
-  type: 'WAITER' | 'SERVICE';
+  type: 'WAITER' | 'SERVICE' | 'BILL';
   label: string;
   icon?: string;
   sortOrder: number;
@@ -27,7 +27,7 @@ export function HelpOptionsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({
-    type: 'SERVICE' as 'WAITER' | 'SERVICE',
+    type: 'SERVICE' as 'WAITER' | 'SERVICE' | 'BILL',
     label: '',
     icon: '',
     sortOrder: 0,
@@ -60,14 +60,16 @@ export function HelpOptionsPage() {
   );
 
   const isOrgAdmin = me?.role === 'ADMIN' || me?.role === 'SUPERADMIN';
+  const activeBranchName = me?.branch?.name || activeBranchFilter?.name || '';
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const branchId = activeBranchFilter?.id || (me?.branchId ?? '');
+      if (!me?.organizationId) return;
+      if (!api.effectiveBranchId) return;
       const [optRes, branchesRes] = await Promise.all([
-        api.get(`/api/help-options?organizationId=${me?.organizationId}&branchId=${branchId}`),
+        api.get(`/api/help-options`),
         isOrgAdmin ? api.get('/api/branches') : Promise.resolve({ data: [] }),
       ]);
       if (!optRes.success) throw new Error(optRes.error || 'Failed to fetch options');
@@ -78,7 +80,7 @@ export function HelpOptionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeBranchFilter, api, isOrgAdmin, me]);
+  }, [api, isOrgAdmin, me]);
 
   useEffect(() => {
     const t = window.setTimeout(() => void load(), 0);
@@ -90,8 +92,13 @@ export function HelpOptionsPage() {
     setSaving(true);
     setSaveError('');
     try {
-      const payload: any = { ...form };
-      if (!payload.branchId) payload.branchId = null;
+      const payload: any = {
+        type: form.type,
+        label: form.label,
+        icon: form.icon,
+        sortOrder: form.sortOrder,
+        isActive: form.isActive,
+      };
 
       let res;
       if (editingId) {
@@ -155,6 +162,16 @@ export function HelpOptionsPage() {
       </div>
     );
 
+  if (!api.effectiveBranchId)
+    return (
+      <div className="card p-6">
+        <h1 className="font-display text-3xl mb-2 uppercase">Help Options</h1>
+        <p className="text-[var(--muted)] text-sm">
+          Select a branch to manage help options for that branch.
+        </p>
+      </div>
+    );
+
   return (
     <div className="space-y-6 animate-in">
       <div className="flex items-center justify-between">
@@ -163,6 +180,9 @@ export function HelpOptionsPage() {
           <p className="text-[var(--muted)] text-sm">
             Configure what customers see in the "Need Help?" section.
           </p>
+          {activeBranchName && (
+            <p className="text-[var(--muted)] text-xs mt-1">Branch: {activeBranchName}</p>
+          )}
         </div>
         <button
           onClick={() => {
@@ -192,8 +212,14 @@ export function HelpOptionsPage() {
 
       <div className="grid gap-4">
         {options.length === 0 ? (
-          <div className="card p-12 text-center text-[var(--muted)]">
-            No custom help options configured yet.
+          <div className="card p-12 text-center">
+            <p className="text-[var(--text)] font-semibold">
+              No help options found for this branch.
+            </p>
+            <p className="text-[var(--muted)] text-sm mt-1">
+              {activeBranchName ? `Branch: ${activeBranchName}. ` : ''}
+              Select the correct branch, or add your first option.
+            </p>
           </div>
         ) : (
           options.map((opt) => (
@@ -306,20 +332,27 @@ export function HelpOptionsPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label>Type</label>
+                <label htmlFor="help_option_type">Type</label>
                 <select
+                  id="help_option_type"
+                  name="type"
                   value={form.type}
                   onChange={(e) => setForm({ ...form, type: e.target.value as any })}
                 >
-                  <option value="SERVICE">Service Request</option>
-                  <option value="WAITER">Call Waiter</option>
+                  <option value="SERVICE">Service — customer submits a service request</option>
+                  <option value="WAITER">Waiter — calls a waiter to the table</option>
+                  <option value="BILL">
+                    Bill — customer requests the bill (immediate, no input)
+                  </option>
                 </select>
               </div>
             </div>
 
             <div>
-              <label>Label</label>
+              <label htmlFor="help_option_label">Label</label>
               <input
+                id="help_option_label"
+                name="label"
                 value={form.label}
                 onChange={(e) => setForm({ ...form, label: e.target.value })}
                 placeholder="e.g. More Napkins"
@@ -328,8 +361,10 @@ export function HelpOptionsPage() {
             </div>
 
             <div>
-              <label>Icon (Emoji)</label>
+              <label htmlFor="help_option_icon">Icon (Emoji)</label>
               <input
+                id="help_option_icon"
+                name="icon"
                 value={form.icon}
                 onChange={(e) => setForm({ ...form, icon: e.target.value })}
                 placeholder="e.g. Needs Assistance"
@@ -338,8 +373,10 @@ export function HelpOptionsPage() {
 
             {isOrgAdmin && (
               <div>
-                <label>Scope</label>
+                <label htmlFor="help_option_scope">Scope</label>
                 <select
+                  id="help_option_scope"
+                  name="branchId"
                   value={form.branchId || ''}
                   onChange={(e) => setForm({ ...form, branchId: e.target.value || null })}
                 >

@@ -3,7 +3,12 @@ import jwt from 'jsonwebtoken';
 import { logger } from '../services/logger';
 import { prisma } from '../services/prisma';
 import type { AuthPayload } from '../../../shared/types';
-import { registerWaiter, unregisterWaiter, getOnlineWaiters } from '../services/waiterAssignment';
+import {
+  registerWaiter,
+  unregisterWaiter,
+  unregisterWaiterByUserId,
+  getOnlineWaiters,
+} from '../services/waiterAssignment';
 
 export function initSocketHandlers(io: Server): void {
   io.use((socket: Socket, next) => {
@@ -54,47 +59,47 @@ export function initSocketHandlers(io: Server): void {
         }
       }
 
-      // Register waiter as online if they have the WAITER role
       if (user.role === 'WAITER') {
-        registerWaiter(user.organizationId, user.branchId ?? null, user.userId, socket.id);
+        socket.join(`waiter:${user.userId}`);
+        const waiter = await prisma.user.findUnique({
+          where: { id: user.userId },
+          select: { isOnShift: true, branchId: true } as any,
+        });
+        const branchId = (user.branchId ?? (waiter as any)?.branchId ?? null) as string | null;
+        if (waiter?.isOnShift) {
+          registerWaiter(user.organizationId, branchId, user.userId, socket.id);
 
-        // Notify admins that this waiter is now online
-        const waiterOnlinePayload = {
-          userId: user.userId,
-          organizationId: user.organizationId,
-          branchId: user.branchId ?? null,
-          onlineWaiters: getOnlineWaiters(user.organizationId, user.branchId ?? null),
-        };
-        if (user.branchId) {
-          io.to(`${user.organizationId}:${user.branchId}`).emit(
-            'WAITER_ONLINE',
-            waiterOnlinePayload,
-          );
+          const waiterOnlinePayload = {
+            userId: user.userId,
+            organizationId: user.organizationId,
+            branchId,
+            onlineWaiters: getOnlineWaiters(user.organizationId, branchId),
+          };
+          if (branchId) {
+            io.to(`${user.organizationId}:${branchId}`).emit('WAITER_ONLINE', waiterOnlinePayload);
+          }
+          io.to(user.organizationId).emit('WAITER_ONLINE', waiterOnlinePayload);
         }
-        io.to(user.organizationId).emit('WAITER_ONLINE', waiterOnlinePayload);
       }
 
       // Every authenticated user joins their personal room for direct messages
       if (user.userId) {
-        socket.join(`waiter:${user.userId}`);
+        socket.join(`user:${user.userId}`);
       }
     }
 
     socket.on('JOIN_ORG', async (orgId: string) => {
-      if (user) {
-        if (user.organizationId !== orgId && user.role !== 'SUPERADMIN') {
-          socket.emit('ERROR', { message: 'Unauthorized room join' });
-          return;
-        }
-      } else {
-        const exists = await prisma.organization.findUnique({
-          where: { id: orgId },
-          select: { id: true },
-        });
-        if (!exists) {
-          socket.emit('ERROR', { message: 'Unauthorized room join' });
-          return;
-        }
+      if (!user) {
+        socket.emit('ERROR', { message: 'Unauthorized room join' });
+        return;
+      }
+      if (user.organizationId !== orgId && user.role !== 'SUPERADMIN') {
+        socket.emit('ERROR', { message: 'Unauthorized room join' });
+        return;
+      }
+      if (user.branchId) {
+        socket.emit('ERROR', { message: 'Branch-scoped users cannot join org-wide rooms' });
+        return;
       }
 
       socket.join(orgId);
@@ -102,26 +107,27 @@ export function initSocketHandlers(io: Server): void {
       socket.emit('JOINED', { orgId });
     });
 
+    // Unauthenticated join — customer PWA only, for menu availability updates
+    // No sensitive data in these events — only menu item availability changes
+    socket.on('JOIN_ORG_PUBLIC', (orgId: string) => {
+      if (typeof orgId !== 'string' || orgId.length > 100) return; // basic validation
+      socket.join(orgId);
+      logger.info('Customer PWA joined org room for menu updates', { orgId, socketId: socket.id });
+    });
+
     // Join a specific branch room (for branch-scoped service displays)
     socket.on('JOIN_BRANCH', async ({ orgId, branchId }: { orgId: string; branchId: string }) => {
-      if (user) {
-        if (user.organizationId !== orgId) {
-          socket.emit('ERROR', { message: 'Unauthorized room join' });
-          return;
-        }
-        if (user.branchId && user.branchId !== branchId) {
-          socket.emit('ERROR', { message: 'Unauthorized room join' });
-          return;
-        }
-      } else {
-        const exists = await prisma.branch.findFirst({
-          where: { id: branchId, organizationId: orgId, isActive: true },
-          select: { id: true },
-        });
-        if (!exists) {
-          socket.emit('ERROR', { message: 'Unauthorized room join' });
-          return;
-        }
+      if (!user) {
+        socket.emit('ERROR', { message: 'Unauthorized room join' });
+        return;
+      }
+      if (user.organizationId !== orgId) {
+        socket.emit('ERROR', { message: 'Unauthorized room join' });
+        return;
+      }
+      if (user.branchId && user.branchId !== branchId) {
+        socket.emit('ERROR', { message: 'Unauthorized room join' });
+        return;
       }
 
       const room = `${orgId}:${branchId}`;
@@ -130,12 +136,96 @@ export function initSocketHandlers(io: Server): void {
       socket.emit('JOINED', { orgId, branchId, room });
     });
 
+    socket.on('SHIFT_START', async (_: unknown, ack?: (payload: any) => void) => {
+      try {
+        if (!user || user.role !== 'WAITER') {
+          ack?.({ success: false, error: 'Unauthorized' });
+          return;
+        }
+        const waiter = await prisma.user.update({
+          where: { id: user.userId },
+          data: { isOnShift: true, shiftStartedAt: new Date(), shiftEndedAt: null } as any,
+          select: { id: true, organizationId: true, branchId: true },
+        });
+
+        const branchId = waiter.branchId ?? null;
+        registerWaiter(waiter.organizationId, branchId, waiter.id, socket.id);
+
+        const payload = {
+          userId: waiter.id,
+          organizationId: waiter.organizationId,
+          branchId,
+          onlineWaiters: getOnlineWaiters(waiter.organizationId, branchId),
+        };
+        if (branchId) io.to(`${waiter.organizationId}:${branchId}`).emit('WAITER_ONLINE', payload);
+        io.to(waiter.organizationId).emit('WAITER_ONLINE', payload);
+
+        ack?.({ success: true, data: { isOnShift: true } });
+      } catch (err) {
+        logger.error('SHIFT_START error', { err, socketId: socket.id, userId: user?.userId });
+        ack?.({ success: false, error: 'Failed to start shift' });
+      }
+    });
+
+    socket.on('SHIFT_END', async (_: unknown, ack?: (payload: any) => void) => {
+      try {
+        if (!user || user.role !== 'WAITER') {
+          ack?.({ success: false, error: 'Unauthorized' });
+          return;
+        }
+        const waiter = await prisma.user.update({
+          where: { id: user.userId },
+          data: { isOnShift: false, shiftEndedAt: new Date() } as any,
+          select: { id: true, organizationId: true, branchId: true },
+        });
+
+        const branchId = waiter.branchId ?? null;
+        unregisterWaiterByUserId(waiter.organizationId, branchId, waiter.id);
+
+        const payload = {
+          userId: waiter.id,
+          organizationId: waiter.organizationId,
+          branchId,
+          onlineWaiters: getOnlineWaiters(waiter.organizationId, branchId),
+        };
+        if (branchId) io.to(`${waiter.organizationId}:${branchId}`).emit('WAITER_OFFLINE', payload);
+        io.to(waiter.organizationId).emit('WAITER_OFFLINE', payload);
+
+        ack?.({ success: true, data: { isOnShift: false } });
+      } catch (err) {
+        logger.error('SHIFT_END error', { err, socketId: socket.id, userId: user?.userId });
+        ack?.({ success: false, error: 'Failed to end shift' });
+      }
+    });
+
     socket.on('LEAVE_ORG', (orgId: string) => {
       socket.leave(orgId);
     });
 
     socket.on('LEAVE_BRANCH', ({ orgId, branchId }: { orgId: string; branchId: string }) => {
       socket.leave(`${orgId}:${branchId}`);
+    });
+
+    socket.on('JOIN_ORDER', async ({ orderId }: { orderId: string }) => {
+      try {
+        const order = await prisma.order.findUnique({
+          where: { id: orderId },
+          select: { id: true },
+        });
+        if (!order) {
+          socket.emit('ERROR', { message: 'Order not found' });
+          return;
+        }
+        const room = `order:${orderId}`;
+        socket.join(room);
+        socket.emit('JOINED', { orderId, room });
+      } catch {
+        socket.emit('ERROR', { message: 'Failed to join order room' });
+      }
+    });
+
+    socket.on('LEAVE_ORDER', ({ orderId }: { orderId: string }) => {
+      socket.leave(`order:${orderId}`);
     });
 
     socket.on('disconnect', () => {

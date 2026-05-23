@@ -3,9 +3,15 @@ import { z } from 'zod';
 import QRCode from 'qrcode';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
-import { authenticate, requireRole, requireBranchAccess, AuthRequest } from '../middleware/auth';
+import {
+  authenticate,
+  requireRole,
+  requireBranchAccess,
+  requireBranchSelected,
+  AuthRequest,
+} from '../middleware/auth';
 import { checkTableLimit } from '../middleware/checkLimits';
-import { logger } from '../services/logger';
+import { getOrCreateSession } from '../services/tableSession';
 
 export const tablesRouter = Router();
 
@@ -53,6 +59,9 @@ tablesRouter.get('/public/:orgId/:tableId', async (req: Request, res: Response) 
       return;
     }
 
+    // Ensure session is started when customer scans QR and views table
+    await getOrCreateSession(table.id, table.organizationId, table.branchId!);
+
     res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=60'); // 5 minutes
     res.json({
       success: true,
@@ -61,13 +70,13 @@ tablesRouter.get('/public/:orgId/:tableId', async (req: Request, res: Response) 
         label: table.label,
         number: table.number,
         organizationId: table.organizationId,
-        branchId: table.branchId ?? null,
+        branchId: table.branchId,
         organizationName: table.organization.name,
         organizationLogo: table.organization.logo,
         branchName: table.branch?.name ?? null,
       },
     });
-  } catch (err: unknown) {
+  } catch {
     res.status(500).json({ success: false, error: 'Failed to fetch table info' });
   }
 });
@@ -104,26 +113,31 @@ tablesRouter.get('/:id/qr', async (req: Request, res: Response) => {
       res.setHeader('Content-Disposition', `attachment; filename="table-${table.number}-qr.svg"`);
       res.send(svg);
     }
-  } catch (err: unknown) {
+  } catch {
     res.status(500).json({ success: false, error: 'Failed to generate QR code' });
   }
 });
 
 // PROTECTED
-tablesRouter.use(authenticate, requireBranchAccess);
+tablesRouter.use(authenticate, requireBranchAccess, requireBranchSelected);
 
 tablesRouter.get('/', async (req: AuthRequest, res: Response) => {
   try {
-    const where: Prisma.TableWhereInput = { organizationId: req.user!.organizationId };
-    if (req.branchScope) where.branchId = req.branchScope;
+    const where: Prisma.TableWhereInput = {
+      organizationId: req.user!.organizationId,
+      branchId: req.branchScope!,
+    };
 
     const tables = await prisma.table.findMany({
       where,
       orderBy: { number: 'asc' },
-      include: { branch: { select: { id: true, name: true } } },
+      include: {
+        branch: { select: { id: true, name: true } },
+        section: { select: { id: true, name: true, colour: true } },
+      },
     });
     res.json({ success: true, data: tables });
-  } catch (err: unknown) {
+  } catch {
     res.status(500).json({ success: false, error: 'Failed to fetch tables' });
   }
 });
@@ -131,20 +145,18 @@ tablesRouter.get('/', async (req: AuthRequest, res: Response) => {
 const tableSchema = z.object({
   label: z.string().min(1).max(100),
   number: z.number().int().positive(),
-  branchId: z.string().optional().nullable(),
   isActive: z.boolean().optional(),
+  sectionId: z.string().nullable().optional(),
 });
 
 tablesRouter.post(
   '/',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   checkTableLimit,
   async (req: AuthRequest, res: Response) => {
     try {
       const data = tableSchema.parse(req.body);
-
-      // Branch-scoped users can only create tables in their branch
-      const branchId = req.user!.branchId ?? data.branchId ?? null;
+      const branchId = req.branchScope!;
 
       const table = await prisma.table.create({
         data: { ...data, branchId, organizationId: req.user!.organizationId },
@@ -162,7 +174,7 @@ tablesRouter.post(
 
 tablesRouter.put(
   '/:id',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const data = tableSchema.partial().parse(req.body);
@@ -173,9 +185,14 @@ tablesRouter.put(
         res.status(404).json({ success: false, error: 'Table not found' });
         return;
       }
+      if (req.branchScope && existing.branchId !== req.branchScope) {
+        res.status(403).json({ success: false, error: 'Access denied' });
+        return;
+      }
+      (data as any).branchId = req.branchScope!;
       const table = await prisma.table.update({ where: { id: req.params.id }, data });
       res.json({ success: true, data: table });
-    } catch (err: unknown) {
+    } catch {
       res.status(500).json({ success: false, error: 'Failed to update table' });
     }
   },
@@ -183,7 +200,7 @@ tablesRouter.put(
 
 tablesRouter.delete(
   '/:id',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const existing = await prisma.table.findFirst({
@@ -191,6 +208,10 @@ tablesRouter.delete(
       });
       if (!existing) {
         res.status(404).json({ success: false, error: 'Table not found' });
+        return;
+      }
+      if (req.branchScope && existing.branchId !== req.branchScope) {
+        res.status(403).json({ success: false, error: 'Access denied' });
         return;
       }
 
@@ -202,7 +223,7 @@ tablesRouter.delete(
         await prisma.table.update({ where: { id: req.params.id }, data: { isActive: false } });
         res.json({ success: true, message: 'Table deactivated' });
       }
-    } catch (err: unknown) {
+    } catch {
       res.status(500).json({ success: false, error: 'Failed to process table deletion' });
     }
   },
@@ -211,43 +232,35 @@ tablesRouter.delete(
 // Bulk QR
 tablesRouter.get(
   '/qr/bulk',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const where: Prisma.TableWhereInput = {
         organizationId: req.user!.organizationId,
         isActive: true,
       };
-      if (req.branchScope) where.branchId = req.branchScope;
+      where.branchId = req.branchScope!;
 
       const tables = await prisma.table.findMany({ where, orderBy: { number: 'asc' } });
       const baseUrl = getCustomerPwaBaseUrl(req);
 
       const qrCodes = await Promise.all(
-        tables.map(
-          async (table: {
-            id: string;
-            label: string;
-            number: number;
-            branchId: string | null;
-            organizationId: string;
-          }) => {
-            const url = `${baseUrl}/menu/${table.organizationId}/${table.id}`;
-            const dataUrl = await QRCode.toDataURL(url, { width: 300, margin: 2 });
-            return {
-              tableId: table.id,
-              tableLabel: table.label,
-              tableNumber: table.number,
-              branchId: table.branchId,
-              qrDataUrl: dataUrl,
-              url,
-            };
-          },
-        ),
+        tables.map(async (table) => {
+          const url = `${baseUrl}/menu/${table.organizationId}/${table.id}`;
+          const dataUrl = await QRCode.toDataURL(url, { width: 300, margin: 2 });
+          return {
+            tableId: table.id,
+            tableLabel: table.label,
+            tableNumber: table.number,
+            branchId: table.branchId ?? null,
+            qrDataUrl: dataUrl,
+            url,
+          };
+        }),
       );
 
       res.json({ success: true, data: qrCodes });
-    } catch (err: unknown) {
+    } catch {
       res.status(500).json({ success: false, error: 'Failed to generate QR codes' });
     }
   },

@@ -10,15 +10,21 @@ import React, {
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
+const HAS_SESSION_KEY =
+  typeof window !== 'undefined'
+    ? `cevop_service_has_session_${window.location.hostname}`
+    : 'cevop_service_has_session';
 
 interface User {
   id: string;
   name: string;
   email: string;
   role: string;
+  isOnShift?: boolean;
   organizationId: string;
   branchId?: string | null;
   branch?: { id: string; name: string } | null;
+  staffCode?: string;
   organization: { id: string; name: string; slug: string };
 }
 
@@ -29,6 +35,7 @@ interface AuthContextType {
   login: (email: string, password: string, organizationId?: string) => Promise<void>;
   logout: () => void;
   silentRefresh: () => Promise<string | null>;
+  updateUser: (patch: Partial<User>) => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -45,6 +52,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function doLogout() {
     setToken(null);
     setUser(null);
+    try {
+      localStorage.removeItem(HAS_SESSION_KEY);
+    } catch {
+      void 0;
+    }
   }
 
   const scheduleRefresh = useCallback((accessToken: string) => {
@@ -77,6 +89,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(data.accessToken);
       lastRefreshedAt.current = Date.now();
       scheduleRefresh(data.accessToken);
+      try {
+        localStorage.setItem(HAS_SESSION_KEY, '1');
+      } catch {
+        void 0;
+      }
       return data.accessToken;
     } catch {
       return token;
@@ -104,6 +121,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
+        let hasSession = false;
+        try {
+          hasSession = localStorage.getItem(HAS_SESSION_KEY) === '1';
+        } catch {
+          hasSession = false;
+        }
+
+        if (!hasSession) {
+          setLoading(false);
+          return;
+        }
+
         const res = await fetch(`${API_BASE}/api/auth/refresh`, {
           method: 'POST',
           credentials: 'include',
@@ -116,12 +145,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data } = await res.json();
         setToken(data.accessToken);
         scheduleRefresh(data.accessToken);
+        try {
+          localStorage.setItem(HAS_SESSION_KEY, '1');
+        } catch {
+          void 0;
+        }
 
         const meRes = await fetch(`${API_BASE}/api/auth/me`, {
           headers: { Authorization: `Bearer ${data.accessToken}` },
         });
         const { data: userData } = await meRes.json();
         if (userData) {
+          const allowedRoles = ['SERVICE', 'WAITER', 'KITCHEN'];
+          if (!allowedRoles.includes(userData.role) || !userData.branchId) {
+            doLogout();
+            return;
+          }
           setUser(userData);
         } else {
           doLogout();
@@ -169,19 +208,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(error || 'Login failed');
     }
 
-    // Enforce that only service/admin/branch_admin roles can log in here
-    const allowedRoles = ['SERVICE', 'ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN', 'WAITER'];
-    if (!allowedRoles.includes(data.user.role)) {
+    const role = data.user.role;
+    if (role === 'SUPERADMIN') {
+      throw new Error('This account belongs to the Ops team. Please use the Ops Portal.');
+    }
+    if (
+      role === 'ORG_OWNER' ||
+      role === 'ADMIN' ||
+      role === 'ORG_MANAGER' ||
+      role === 'ORG_FINANCE' ||
+      role === 'ORG_AUDITOR' ||
+      role === 'BRANCH_ADMIN'
+    ) {
+      throw new Error('This is an admin account. Please use the Admin Dashboard.');
+    }
+    const allowedRoles = ['SERVICE', 'WAITER', 'KITCHEN'];
+    if (!allowedRoles.includes(role)) {
       throw new Error('Access denied for this role');
     }
 
     setToken(data.accessToken);
     setUser(data.user);
     scheduleRefresh(data.accessToken);
+    try {
+      localStorage.setItem(HAS_SESSION_KEY, '1');
+    } catch {
+      void 0;
+    }
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout, silentRefresh }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        loading,
+        login,
+        logout,
+        silentRefresh,
+        updateUser: (patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev)),
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

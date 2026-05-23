@@ -28,6 +28,9 @@ model Organization {
   contactPhone     String?
   contactEmail     String?
   notes            String?
+  notifyNewOrders       Boolean @default(true)
+  notifyWaiterCalls     Boolean @default(true)
+  notifyServiceRequests Boolean @default(true)
   scheduledForDeletionAt DateTime?
   auditLogs        AuditLog[]
   branches         Branch[]
@@ -41,6 +44,8 @@ model Organization {
   tables           Table[]
   users            User[]
   waiterCalls      WaiterCall[]
+  tableSessions    TableSession[]
+  sections         Section[]
 
   @@map("organizations")
 }
@@ -66,6 +71,8 @@ model Branch {
   tables          Table[]
   users           User[]
   waiterCalls     WaiterCall[]
+  tableSessions   TableSession[]
+  sections        Section[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -75,7 +82,7 @@ model Branch {
 model HelpOption {
   id             String         @id @default(cuid())
   organizationId String
-  branchId       String?
+  branchId       String
   type           HelpOptionType @default(SERVICE)
   label          String
   icon           String?
@@ -83,7 +90,7 @@ model HelpOption {
   isActive       Boolean        @default(true)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
-  branch         Branch?        @relation(fields: [branchId], references: [id])
+  branch         Branch         @relation(fields: [branchId], references: [id])
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
@@ -99,6 +106,9 @@ model User {
   passwordHash        String
   role                UserRole       @default(WAITER)
   isActive            Boolean        @default(true)
+  isOnShift           Boolean        @default(false)
+  shiftStartedAt      DateTime?
+  shiftEndedAt        DateTime?
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
   branchId            String?
@@ -109,17 +119,21 @@ model User {
   passwordResetToken  String?        @unique
   passwordResetExpiry DateTime?
   mustChangePassword  Boolean        @default(false)
+  opsRole             OpsRole?
+  staffCode           String?
   emailVerified       DateTime?
   emailVerificationToken String?     @unique
   waiterCallAssignments    WaiterCall[]     @relation("WaiterCallAssignments")
   serviceRequestAssignments ServiceRequest[] @relation("ServiceRequestAssignments")
   orderWaiterAssignments   Order[]          @relation("OrderWaiterAssignments")
+  sectionAssignments  SectionStaff[]
   auditLogs           AuditLog[]
   refreshTokens       RefreshToken[]
   branch              Branch?        @relation(fields: [branchId], references: [id])
   organization        Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([email, organizationId])
+  @@unique([branchId, staffCode])
   @@index([organizationId])
   @@index([branchId])
   @@index([email])
@@ -182,17 +196,83 @@ model Table {
   isActive        Boolean          @default(true)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
-  branchId        String?
+  branchId        String
+  status          TableStatus      @default(EMPTY)
+  activeSessionId String?
+  sectionId       String?
+  section         Section?         @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  sessions        TableSession[]
   orders          Order[]
   serviceRequests ServiceRequest[]
-  branch          Branch?          @relation(fields: [branchId], references: [id])
+  branch          Branch           @relation(fields: [branchId], references: [id])
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   waiterCalls     WaiterCall[]
 
-  @@unique([organizationId, number])
+  @@unique([branchId, number])
   @@index([organizationId])
   @@index([branchId])
   @@map("tables")
+}
+
+model TableSession {
+  id             String    @id @default(cuid())
+  organizationId String
+  branchId       String
+  tableId        String
+  openedAt       DateTime  @default(now())
+  closedAt       DateTime?
+  closedBy       String?
+  guestCount     Int?
+  notes          String?
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch           @relation(fields: [branchId], references: [id])
+  table          Table            @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  orders         Order[]
+  waiterCalls    WaiterCall[]
+  serviceRequests ServiceRequest[]
+
+  @@index([tableId, closedAt])
+  @@index([branchId, closedAt])
+  @@index([organizationId])
+  @@map("table_sessions")
+}
+
+model Section {
+  id             String        @id @default(cuid())
+  organizationId String
+  branchId       String
+  name           String        // e.g. "Main Floor", "Patio", "Bar"
+  colour         String?       // hex colour for visual floor map — optional
+  sortOrder      Int           @default(0)
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch        @relation(fields: [branchId], references: [id])
+  tables         Table[]
+  staff          SectionStaff[]
+
+  @@unique([branchId, name])
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("sections")
+}
+
+model SectionStaff {
+  id         String   @id @default(cuid())
+  sectionId  String
+  userId     String
+  assignedAt DateTime @default(now())
+
+  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([sectionId, userId])
+  @@index([sectionId])
+  @@index([userId])
+  @@map("section_staff")
 }
 
 model Category {
@@ -204,8 +284,8 @@ model Category {
   isActive       Boolean      @default(true)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
-  branchId       String?
-  branch         Branch?      @relation(fields: [branchId], references: [id])
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id])
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   menuItems      MenuItem[]
 
@@ -227,8 +307,8 @@ model MenuItem {
   sortOrder      Int          @default(0)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
-  branchId       String?
-  branch         Branch?      @relation(fields: [branchId], references: [id])
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id])
   category       Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   orderItems     OrderItem[]
@@ -249,14 +329,17 @@ model Order {
   status         OrderStatus  @default(RECEIVED)
   total          Decimal      @db.Decimal(10, 2)
   notes          String?
+  cancellationReason String?
+  sessionId      String?
+  session        TableSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   assignedWaiter     String?
   assignedWaiterAt   DateTime?
   assignedWaiterUser User?    @relation("OrderWaiterAssignments", fields: [assignedWaiter], references: [id], onDelete: SetNull)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
-  branchId       String?
+  branchId       String
   items          OrderItem[]
-  branch         Branch?      @relation(fields: [branchId], references: [id])
+  branch         Branch       @relation(fields: [branchId], references: [id])
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   table          Table        @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
@@ -280,6 +363,8 @@ model OrderItem {
   quantity   Int
   unitPrice  Decimal  @db.Decimal(10, 2)
   notes      String?
+  cancelledAt   DateTime?
+  cancelReason  String?
   menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
   order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -295,14 +380,16 @@ model WaiterCall {
   status         WaiterCallStatus @default(PENDING)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
-  branchId       String?
+  branchId       String
   notes          String?
   resolvedBy     String?
   resolvedAt     DateTime?
   assignedTo   String?
   assignedAt   DateTime?
+  sessionId    String?
+  session      TableSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   assignedUser User?    @relation("WaiterCallAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
-  branch         Branch?          @relation(fields: [branchId], references: [id])
+  branch         Branch           @relation(fields: [branchId], references: [id])
   organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   table          Table            @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
@@ -324,14 +411,16 @@ model ServiceRequest {
   status         ServiceRequestStatus @default(PENDING)
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
-  branchId       String?
+  branchId       String
   adminNotes     String?
   resolvedBy     String?
   resolvedAt     DateTime?
   assignedTo   String?
   assignedAt   DateTime?
+  sessionId    String?
+  session      TableSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   assignedUser User?    @relation("ServiceRequestAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
-  branch         Branch?              @relation(fields: [branchId], references: [id])
+  branch         Branch               @relation(fields: [branchId], references: [id])
   organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   table          Table                @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
@@ -365,14 +454,28 @@ model AuditLog {
 enum HelpOptionType {
   WAITER
   SERVICE
+  BILL
 }
 
 enum UserRole {
   SUPERADMIN
+  ORG_OWNER
   ADMIN
+  ORG_MANAGER
+  ORG_FINANCE
+  ORG_AUDITOR
+  BRANCH_FINANCE
   SERVICE
   WAITER
+  KITCHEN
   BRANCH_ADMIN
+}
+
+enum OpsRole {
+  SUPER
+  SUPPORT
+  BILLING
+  READONLY
 }
 
 enum OrderStatus {
@@ -393,4 +496,11 @@ enum ServiceRequestStatus {
   PENDING
   ACKNOWLEDGED
   RESOLVED
+}
+
+enum TableStatus {
+  EMPTY
+  OCCUPIED
+  RESERVED
+  CLEANING
 }

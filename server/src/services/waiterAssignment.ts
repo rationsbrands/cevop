@@ -37,6 +37,26 @@ export function unregisterWaiter(socketId: string): { userId: string; key: strin
   return null;
 }
 
+export function unregisterWaiterByUserId(
+  orgId: string,
+  branchId: string | null,
+  userId: string,
+): boolean {
+  const key = branchId ? `${orgId}:${branchId}` : orgId;
+  const waiters = onlineWaiters.get(key);
+  if (!waiters) return false;
+  let removed = false;
+  for (const entry of Array.from(waiters)) {
+    if (entry.userId === userId) {
+      waiters.delete(entry);
+      removed = true;
+    }
+  }
+  if (waiters.size === 0) onlineWaiters.delete(key);
+  if (removed) logger.info('Waiter unregistered offline (by user)', { userId, key });
+  return removed;
+}
+
 export function getOnlineWaiters(orgId: string, branchId: string | null): string[] {
   const key = branchId ? `${orgId}:${branchId}` : orgId;
   const waiters = onlineWaiters.get(key);
@@ -52,9 +72,33 @@ export function getOnlineWaiterCount(orgId: string, branchId: string | null): nu
 export async function findLeastLoadedWaiter(
   orgId: string,
   branchId: string | null,
+  tableId?: string,
 ): Promise<string | null> {
-  const waiterIds = getOnlineWaiters(orgId, branchId);
+  let waiterIds = getOnlineWaiters(orgId, branchId);
   if (waiterIds.length === 0) return null;
+
+  // If tableId is provided, check if it belongs to a section
+  // and if any online waiters are assigned to that section
+  if (tableId) {
+    const table = await prisma.table.findUnique({
+      where: { id: tableId },
+      select: { sectionId: true },
+    });
+
+    if (table?.sectionId) {
+      const sectionStaff = await prisma.sectionStaff.findMany({
+        where: { sectionId: table.sectionId },
+        select: { userId: true },
+      });
+      const sectionStaffIds = sectionStaff.map((s) => s.userId);
+      const onlineSectionStaffIds = waiterIds.filter((id) => sectionStaffIds.includes(id));
+
+      // If there are online staff assigned to this section, restrict assignment to them
+      if (onlineSectionStaffIds.length > 0) {
+        waiterIds = onlineSectionStaffIds;
+      }
+    }
+  }
 
   // Count active tasks per waiter in parallel
   const counts = await Promise.all(

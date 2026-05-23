@@ -5,13 +5,14 @@ import { useTheme } from '../context/theme';
 import { formatPrice } from '../../../../shared/utils/currency';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
-const DEV_SOCKET_URL = 'http://127.0.0.1:4000';
 
 interface OrderItem {
   id: string;
   quantity: number;
   unitPrice: number;
   notes?: string;
+  menuItemId: string;
+  cancelledAt?: string | null;
   menuItem?: { name: string };
 }
 interface Order {
@@ -22,11 +23,14 @@ interface Order {
   table?: { label: string; number: number };
   createdAt: string;
   tableId: string;
+  assignedWaiter?: string | null;
 }
 interface WaiterCall {
   id: string;
   status: string;
   reason?: string;
+  assignedTo?: string | null;
+  assignedUser?: { id: string; name: string } | null;
   table?: { label: string };
   createdAt: string;
   tableId: string;
@@ -36,6 +40,8 @@ interface ServiceRequest {
   status: string;
   serviceType: string;
   notes?: string;
+  assignedTo?: string | null;
+  assignedUser?: { id: string; name: string } | null;
   table?: { label: string };
   createdAt: string;
   tableId: string;
@@ -49,10 +55,10 @@ const STATUS_COLOR: Record<string, string> = {
   SERVED: 'border-[var(--served)]',
 };
 const STATUS_TEXT: Record<string, string> = {
-  RECEIVED: 'text-blue-700 dark:text-blue-300',
-  PREPARING: 'text-amber-700 dark:text-amber-300',
-  READY: 'text-emerald-700 dark:text-emerald-300',
-  SERVED: 'text-gray-500',
+  RECEIVED: 'text-[var(--received)]',
+  PREPARING: 'text-[var(--preparing)]',
+  READY: 'text-[var(--ready)]',
+  SERVED: 'text-[var(--served)]',
 };
 const NEXT_STATUS: Record<string, string> = {
   RECEIVED: 'PREPARING',
@@ -95,9 +101,14 @@ export function ServiceBoard() {
   const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [socketConnected, setSocketConnected] = useState(false);
-  const [activeTab, setActiveTab] = useState<'orders' | 'calls'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'calls' | 'tables'>('orders');
+  const [tables, setTables] = useState<any[]>([]);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const socketRef = useRef<Socket | null>(null);
+  const [onlineWaiters, setOnlineWaiters] = useState<
+    { id: string; name: string; online: boolean }[]
+  >([]);
+  const [assigningItems, setAssigningItems] = useState<Set<string>>(new Set());
 
   // Track items currently being updated to prevent double-clicks
   const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
@@ -134,27 +145,41 @@ export function ServiceBoard() {
     }
   }, []);
 
+  const loadOnlineWaiters = useCallback(async () => {
+    const freshToken = await silentRefresh();
+    if (!freshToken) return;
+    const res = await fetch(`${API_BASE}/api/waiter-calls/waiters/online`, {
+      headers: { Authorization: `Bearer ${freshToken}` },
+    });
+    if (!res.ok) return;
+    const body = await res.json();
+    if (body?.success) setOnlineWaiters(body.data ?? []);
+  }, [silentRefresh]);
+
   const loadData = useCallback(async () => {
     if (!token) return;
     const headers = { Authorization: `Bearer ${token}` };
     const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
-    const [ordersRes, callsRes, serviceRes] = await Promise.all([
+    const [ordersRes, callsRes, serviceRes, tablesRes] = await Promise.all([
       fetch(
         `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&status=READY&limit=50${branchParam}`,
         { headers },
       ),
       fetch(`${API_BASE}/api/waiter-calls?status=PENDING${branchParam}`, { headers }),
       fetch(`${API_BASE}/api/service-requests?status=PENDING${branchParam}`, { headers }),
+      fetch(`${API_BASE}/api/tables?_=${Date.now()}`, { headers }),
     ]);
-    const [ordersData, callsData, serviceData] = await Promise.all([
+    const [ordersData, callsData, serviceData, tablesData] = await Promise.all([
       ordersRes.json(),
       callsRes.json(),
       serviceRes.json(),
+      tablesRes.json(),
     ]);
     if (ordersData.success)
       setOrders(ordersData.data.filter((o: Order) => ACTIVE_STATUSES.includes(o.status)));
     if (callsData.success) setWaiterCalls(callsData.data);
     if (serviceData.success) setServiceRequests(serviceData.data);
+    if (tablesData.success) setTables(tablesData.data);
   }, [token, user]);
 
   useEffect(() => {
@@ -169,7 +194,7 @@ export function ServiceBoard() {
   useEffect(() => {
     if (!user) return; // Wait until user is fully loaded
 
-    const SOCKET_URL = import.meta.env.DEV ? DEV_SOCKET_URL : API_BASE || window.location.origin;
+    const SOCKET_URL = API_BASE || window.location.origin;
     const socket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
       auth: (cb) => {
@@ -200,6 +225,15 @@ export function ServiceBoard() {
 
     socket.on('ORDER_UPDATED', (order: Order) => applyOrderUpdate(order));
 
+    const handleWaiterOnline = () => {
+      loadOnlineWaiters().catch(() => void 0);
+    };
+    const handleWaiterOffline = () => {
+      loadOnlineWaiters().catch(() => void 0);
+    };
+    socket.on('WAITER_ONLINE', handleWaiterOnline);
+    socket.on('WAITER_OFFLINE', handleWaiterOffline);
+
     socket.on('WAITER_CALLED', (call: WaiterCall) => {
       playAlert();
       setWaiterCalls((prev) => [call, ...prev.filter((c) => c.id !== call.id)]);
@@ -228,10 +262,28 @@ export function ServiceBoard() {
       });
     });
 
+    socket.on('TABLE_STATUS_CHANGED', ({ tableId, status }) => {
+      setTables((prev) => prev.map((t) => (t.id === tableId ? { ...t, status } : t)));
+    });
+
+    socket.on('SESSION_OPENED', ({ tableId, sessionId }) => {
+      setTables((prev) =>
+        prev.map((t) => (t.id === tableId ? { ...t, activeSessionId: sessionId } : t)),
+      );
+    });
+
+    socket.on('SESSION_CLOSED', ({ tableId }) => {
+      setTables((prev) =>
+        prev.map((t) => (t.id === tableId ? { ...t, activeSessionId: null } : t)),
+      );
+    });
+
     return () => {
+      socket.off('WAITER_ONLINE', handleWaiterOnline);
+      socket.off('WAITER_OFFLINE', handleWaiterOffline);
       socket.disconnect();
     };
-  }, [user, playAlert, applyOrderUpdate]); // Omitted `token` intentionally so it doesn't reconnect on token refresh
+  }, [user, playAlert, applyOrderUpdate, loadOnlineWaiters]); // Omitted `token` intentionally so it doesn't reconnect on token refresh
 
   // Online/offline
   useEffect(() => {
@@ -273,6 +325,42 @@ export function ServiceBoard() {
         n.delete(orderId);
         return n;
       });
+    }
+  }
+
+  async function toggleItemAvailability(menuItemId: string) {
+    try {
+      const freshToken = (await silentRefresh()) ?? token;
+      if (!freshToken) return;
+
+      await fetch(`${API_BASE}/api/menu/items/${menuItemId}/toggle`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      // Socket event will update other clients — no need to reload locally
+    } catch {
+      void 0;
+    }
+  }
+
+  async function cancelOrderItem(orderId: string, itemId: string, itemName: string) {
+    const reason = `${itemName} unavailable`;
+    try {
+      const freshToken = (await silentRefresh()) ?? token;
+      if (!freshToken) return;
+
+      const res = await fetch(`${API_BASE}/api/orders/${orderId}/items/${itemId}/cancel`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ reason }),
+      });
+
+      if (!res.ok) {
+        // Handle error quietly
+      }
+      // ORDER_UPDATED socket event will refresh the board automatically
+    } catch {
+      void 0;
     }
   }
 
@@ -318,6 +406,110 @@ export function ServiceBoard() {
     }
   }
 
+  async function clearTable(sessionId: string) {
+    if (updatingItems.has(sessionId)) return;
+    setUpdatingItems((prev) => new Set(prev).add(sessionId));
+    try {
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/close`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ nextStatus: 'CLEANING' }),
+      });
+      if (!res.ok) await loadData();
+    } finally {
+      setUpdatingItems((prev) => {
+        const n = new Set(prev);
+        n.delete(sessionId);
+        return n;
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (!user) return;
+    const t = setTimeout(() => {
+      loadOnlineWaiters().catch(() => void 0);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [user, activeTab, loadOnlineWaiters]);
+
+  async function assignWaiterCall(callId: string, waiterId: string | null) {
+    if (assigningItems.has(callId)) return;
+    setAssigningItems((prev) => new Set(prev).add(callId));
+    try {
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const res = await fetch(`${API_BASE}/api/waiter-calls/${callId}/assign`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ waiterId }),
+      });
+      if (!res.ok) return;
+      const body = await res.json();
+      if (body?.success && body?.data) {
+        setWaiterCalls((prev) => prev.map((c) => (c.id === callId ? body.data : c)));
+      }
+    } finally {
+      setAssigningItems((prev) => {
+        const n = new Set(prev);
+        n.delete(callId);
+        return n;
+      });
+    }
+  }
+
+  async function assignServiceRequest(reqId: string, waiterId: string | null) {
+    if (assigningItems.has(reqId)) return;
+    setAssigningItems((prev) => new Set(prev).add(reqId));
+    try {
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const res = await fetch(`${API_BASE}/api/service-requests/${reqId}/assign`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ waiterId }),
+      });
+      if (!res.ok) return;
+      const body = await res.json();
+      if (body?.success && body?.data) {
+        setServiceRequests((prev) => prev.map((r) => (r.id === reqId ? body.data : r)));
+      }
+    } finally {
+      setAssigningItems((prev) => {
+        const n = new Set(prev);
+        n.delete(reqId);
+        return n;
+      });
+    }
+  }
+
+  async function assignOrder(orderId: string, waiterId: string | null) {
+    if (assigningItems.has(orderId)) return;
+    setAssigningItems((prev) => new Set(prev).add(orderId));
+    try {
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const res = await fetch(`${API_BASE}/api/orders/${orderId}/assign-waiter`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ waiterId }),
+      });
+      if (!res.ok) return;
+      const body = await res.json();
+      if (body?.success && body?.data) {
+        applyOrderUpdate(body.data);
+      }
+    } finally {
+      setAssigningItems((prev) => {
+        const n = new Set(prev);
+        n.delete(orderId);
+        return n;
+      });
+    }
+  }
+
   const pendingCallsCount = waiterCalls.length + serviceRequests.length;
   const activeOrdersByStatus = {
     RECEIVED: orders.filter((o) => o.status === 'RECEIVED'),
@@ -354,33 +546,39 @@ export function ServiceBoard() {
   return (
     <div className="h-dvh flex flex-col bg-[var(--bg)] overflow-hidden">
       {/* Header */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
-        <div className="flex items-center gap-4">
-          <h1 className="text-2xl text-[var(--accent)] flex items-baseline gap-2">
+      <header className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-2">
+        <div className="flex items-center gap-2 sm:gap-4 shrink-0 min-w-0">
+          <h1 className="text-base sm:text-2xl text-[var(--accent)] flex items-baseline gap-1.5 shrink-0">
             <span className="brand-mark">CEVOP</span>
-            <span className="font-display">SERVICE</span>
+            <span className="font-display hidden xs:inline">SERVICE</span>
           </h1>
           <div
-            className={`flex items-center gap-1.5 text-xs px-2 py-1 border ${isOnline && socketConnected ? 'border-green-800 text-green-400 bg-green-900/20' : 'border-red-800 text-red-400 bg-red-900/20'}`}
+            className={`flex items-center gap-1 sm:gap-1.5 text-[9px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 ${
+              isOnline && socketConnected
+                ? 'border-[var(--ready)] text-[var(--ready)] bg-[var(--surface2)]'
+                : 'border-[var(--danger)] text-[var(--danger)] bg-[var(--surface2)]'
+            }`}
           >
             <span
-              className={`w-1.5 h-1.5 rounded-full ${isOnline && socketConnected ? 'bg-green-400' : 'bg-red-400'}`}
+              className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${
+                isOnline && socketConnected ? 'bg-[var(--ready)]' : 'bg-[var(--danger)]'
+              }`}
             />
             {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <span className="text-[var(--muted)] text-xs">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+          <span className="text-[var(--muted)] text-[10px] sm:text-xs hidden md:block max-w-[150px] truncate">
             {user?.organization?.name}
             {user?.branch ? ` — ${user.branch.name}` : ''}
           </span>
-          <div className="text-[var(--muted)] text-xs font-mono">
+          <div className="text-[var(--muted)] text-[10px] sm:text-xs font-mono hidden sm:block">
             {new Date().toLocaleTimeString()}
           </div>
           <button
             onClick={() => setMode(nextThemeMode)}
-            className={`w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
+            className={`w-7 h-7 sm:w-10 sm:h-10 rounded-full border flex items-center justify-center transition-colors text-[9px] sm:text-[10px] font-bold tracking-widest shrink-0 ${
               mode === 'system'
                 ? 'bg-[var(--surface2)] border-[var(--border)] text-[var(--text)] shadow-sm'
                 : mode === 'dark'
@@ -394,7 +592,7 @@ export function ServiceBoard() {
           </button>
           <button
             onClick={logout}
-            className="text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 py-1 transition-colors"
+            className="text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0"
           >
             LOGOUT
           </button>
@@ -421,11 +619,17 @@ export function ServiceBoard() {
             </span>
           )}
         </button>
+        <button
+          onClick={() => setActiveTab('tables')}
+          className={`px-4 sm:px-6 py-2.5 text-xs sm:text-sm font-bold tracking-wider transition-all ${activeTab === 'tables' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
+        >
+          TABLES
+        </button>
       </div>
 
       {/* Content */}
       {activeTab === 'orders' ? (
-        <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 lg:divide-x divide-[var(--border)] overflow-y-auto lg:overflow-hidden">
+        <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 divide-y lg:divide-y-0 lg:divide-x divide-[var(--border)] overflow-y-auto lg:overflow-hidden">
           {(['RECEIVED', 'PREPARING', 'READY'] as const).map((status) => (
             <div
               key={status}
@@ -454,7 +658,7 @@ export function ServiceBoard() {
                           {order.table?.label || `Table ${order.tableId.slice(-4)}`}
                         </div>
                         <div className="text-[var(--muted)] text-xs font-mono">
-                          #{order.id.slice(-6).toUpperCase()}
+                          {order.id.slice(-6).toUpperCase()}
                         </div>
                       </div>
                       <div className="text-right">
@@ -466,19 +670,96 @@ export function ServiceBoard() {
                     </div>
                     <div className="space-y-1 border-t border-[var(--border)] pt-2">
                       {order.items.map((item) => (
-                        <div key={item.id} className="flex items-start gap-2 text-xs">
-                          <span className="font-bold text-[var(--accent)] shrink-0">
-                            {item.quantity}×
-                          </span>
-                          <div>
-                            <span className="text-[var(--text)]">{item.menuItem?.name || '—'}</span>
-                            {item.notes && (
-                              <div className="text-[var(--muted)] italic">"{item.notes}"</div>
-                            )}
+                        <React.Fragment key={item.id}>
+                          <div
+                            className={`flex items-start gap-2 text-xs ${item.cancelledAt ? 'opacity-40 line-through' : ''}`}
+                          >
+                            <span className="font-bold text-[var(--accent)] shrink-0">
+                              {item.quantity}×
+                            </span>
+                            <div className="flex-1 min-w-0 flex items-center justify-between gap-1">
+                              <span className="text-[var(--text)] truncate">
+                                {item.menuItem?.name || '—'}
+                              </span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {/* Per-item 86 button — only shown to SERVICE role */}
+                                {user?.role === 'SERVICE' && item.menuItemId && (
+                                  <button
+                                    onClick={() => toggleItemAvailability(item.menuItemId)}
+                                    title="Mark this item as unavailable (86'd)"
+                                    className="text-[9px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors ml-1 shrink-0"
+                                  >
+                                    86
+                                  </button>
+                                )}
+                                {!item.cancelledAt &&
+                                  order.status !== 'READY' &&
+                                  order.status !== 'SERVED' && (
+                                    <button
+                                      onClick={() =>
+                                        cancelOrderItem(
+                                          order.id,
+                                          item.id,
+                                          item.menuItem?.name ?? 'Item',
+                                        )
+                                      }
+                                      className="text-[9px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors shrink-0 border border-transparent hover:border-[var(--danger)]/40 px-1 py-0.5"
+                                      title="Mark this item as unable to fulfil"
+                                    >
+                                      ✕ can't fulfil
+                                    </button>
+                                  )}
+                                {item.cancelledAt && (
+                                  <span className="text-[9px] uppercase text-[var(--danger)]">
+                                    Cancelled
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                        </div>
+                          {item.notes && (
+                            <div className="text-[var(--muted)] italic text-[10px] pl-6">
+                              "{item.notes}"
+                            </div>
+                          )}
+                        </React.Fragment>
                       ))}
                     </div>
+                    {status === 'READY' && onlineWaiters.length > 0 && (
+                      <div className="pt-2 border-t border-[var(--border)] space-y-2">
+                        <div className="text-xs text-[var(--muted)]">
+                          Assigned:{' '}
+                          <span className="text-[var(--text)] font-medium">
+                            {order.assignedWaiter
+                              ? onlineWaiters.find((w) => w.id === order.assignedWaiter)?.name ||
+                                'Waiter'
+                              : '—'}
+                          </span>
+                        </div>
+                        <div className="flex gap-2">
+                          <select
+                            id={`service_order_assign_${order.id}`}
+                            name="assignedWaiter"
+                            className="flex-1 text-xs"
+                            value={order.assignedWaiter ?? ''}
+                            onChange={(e) =>
+                              assignOrder(order.id, e.target.value ? e.target.value : null)
+                            }
+                            disabled={assigningItems.has(order.id)}
+                            autoComplete="off"
+                            aria-label="Assign order to waiter"
+                          >
+                            <option value="">— Unassigned —</option>
+                            {onlineWaiters.map((w) => (
+                              <option key={w.id} value={w.id}>
+                                {w.name}
+                                {w.online ? ' (online)' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
                     {NEXT_STATUS[order.status] && (
                       <button
                         onClick={() => updateOrderStatus(order.id, NEXT_STATUS[order.status])}
@@ -494,7 +775,7 @@ export function ServiceBoard() {
             </div>
           ))}
         </div>
-      ) : (
+      ) : activeTab === 'calls' ? (
         <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 md:grid-cols-2 gap-4 content-start">
           {/* Waiter Calls */}
           <div>
@@ -508,10 +789,10 @@ export function ServiceBoard() {
               {waiterCalls.map((call) => (
                 <div
                   key={call.id}
-                  className="border border-yellow-800 bg-yellow-900/10 p-3 space-y-2 animate-slide-in"
+                  className="border border-[var(--preparing)] bg-[var(--surface2)] p-3 space-y-2 animate-slide-in"
                 >
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-sm text-yellow-300">
+                    <span className="font-bold text-sm text-[var(--preparing)]">
                       {call.table?.label || call.tableId}
                     </span>
                     <TimeElapsed
@@ -520,10 +801,34 @@ export function ServiceBoard() {
                     />
                   </div>
                   {call.reason && <p className="text-xs text-[var(--text)]">"{call.reason}"</p>}
+                  {onlineWaiters.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <select
+                        id={`service_waiter_call_assign_${call.id}`}
+                        name="assignedTo"
+                        className="flex-1 text-xs"
+                        value={call.assignedTo ?? ''}
+                        onChange={(e) =>
+                          assignWaiterCall(call.id, e.target.value ? e.target.value : null)
+                        }
+                        disabled={assigningItems.has(call.id)}
+                        autoComplete="off"
+                        aria-label="Assign waiter call to waiter"
+                      >
+                        <option value="">— Unassigned —</option>
+                        {onlineWaiters.map((w) => (
+                          <option key={w.id} value={w.id}>
+                            {w.name}
+                            {w.online ? ' (online)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   <button
                     onClick={() => acknowledgeWaiterCall(call.id)}
                     disabled={updatingItems.has(call.id)}
-                    className="w-full text-xs py-1.5 font-bold border border-yellow-800 hover:bg-yellow-500 hover:text-black transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full text-xs py-1.5 font-bold border border-[var(--preparing)] hover:bg-[var(--preparing)] hover:text-black transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {updatingItems.has(call.id) ? 'RESOLVING...' : 'RESOLVE'}
                   </button>
@@ -544,10 +849,10 @@ export function ServiceBoard() {
               {serviceRequests.map((req) => (
                 <div
                   key={req.id}
-                  className="border border-purple-800 bg-purple-900/10 p-3 space-y-2 animate-slide-in"
+                  className="border border-[var(--accent)] bg-[var(--surface2)] p-3 space-y-2 animate-slide-in"
                 >
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-sm text-purple-300">
+                    <span className="font-bold text-sm text-[var(--accent)]">
                       {req.table?.label || req.tableId}
                     </span>
                     <TimeElapsed
@@ -557,10 +862,34 @@ export function ServiceBoard() {
                   </div>
                   <p className="text-xs text-[var(--text)] font-bold">{req.serviceType}</p>
                   {req.notes && <p className="text-xs text-[var(--muted)]">"{req.notes}"</p>}
+                  {onlineWaiters.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <select
+                        id={`service_request_assign_${req.id}`}
+                        name="assignedTo"
+                        className="flex-1 text-xs"
+                        value={req.assignedTo ?? ''}
+                        onChange={(e) =>
+                          assignServiceRequest(req.id, e.target.value ? e.target.value : null)
+                        }
+                        disabled={assigningItems.has(req.id)}
+                        autoComplete="off"
+                        aria-label="Assign service request to waiter"
+                      >
+                        <option value="">— Unassigned —</option>
+                        {onlineWaiters.map((w) => (
+                          <option key={w.id} value={w.id}>
+                            {w.name}
+                            {w.online ? ' (online)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   <button
                     onClick={() => acknowledgeService(req.id)}
                     disabled={updatingItems.has(req.id)}
-                    className="w-full text-xs py-1.5 font-bold border border-purple-800 hover:bg-purple-500 hover:text-black transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full text-xs py-1.5 font-bold border border-[var(--accent)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {updatingItems.has(req.id) ? 'RESOLVING...' : 'RESOLVE'}
                   </button>
@@ -568,6 +897,52 @@ export function ServiceBoard() {
               ))}
             </div>
           </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 content-start">
+          {tables
+            .filter((t) => t.isActive)
+            .map((t) => (
+              <div
+                key={t.id}
+                className={`border p-3 space-y-3 flex flex-col justify-between ${
+                  t.status === 'EMPTY'
+                    ? 'border-[var(--border)] bg-[var(--surface2)]'
+                    : t.status === 'OCCUPIED'
+                      ? 'border-[var(--preparing)] bg-[var(--surface2)]'
+                      : 'border-[var(--accent)] bg-[var(--surface2)]'
+                }`}
+              >
+                <div>
+                  <div className="font-bold text-lg text-[var(--text)]">{t.label}</div>
+                  <div
+                    className={`text-xs font-bold tracking-widest uppercase mt-1 ${
+                      t.status === 'EMPTY'
+                        ? 'text-[var(--muted)]'
+                        : t.status === 'OCCUPIED'
+                          ? 'text-[var(--preparing)]'
+                          : 'text-[var(--accent)]'
+                    }`}
+                  >
+                    {t.status}
+                  </div>
+                </div>
+                {t.activeSessionId && (
+                  <button
+                    onClick={() => clearTable(t.activeSessionId)}
+                    disabled={updatingItems.has(t.activeSessionId)}
+                    className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50"
+                  >
+                    {updatingItems.has(t.activeSessionId) ? 'CLEARING...' : 'CLEAR TABLE'}
+                  </button>
+                )}
+              </div>
+            ))}
+          {tables.filter((t) => t.isActive).length === 0 && (
+            <div className="col-span-full text-center text-[var(--muted)] text-sm pt-8">
+              No tables found
+            </div>
+          )}
         </div>
       )}
     </div>
