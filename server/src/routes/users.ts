@@ -238,6 +238,8 @@ usersRouter.post(
           passwordHash,
           role: role as any,
           staffCode,
+          emailVerified: new Date(),
+          emailVerificationToken: null,
         } as any,
         select: {
           id: true,
@@ -461,7 +463,12 @@ usersRouter.post(
       const expiry = new Date(Date.now() + 60 * 60 * 1000);
       await prisma.user.update({
         where: { id: targetUser.id },
-        data: { passwordResetToken: token, passwordResetExpiry: expiry },
+        data: {
+          passwordResetToken: token,
+          passwordResetExpiry: expiry,
+          emailVerified: targetUser.emailVerified ?? new Date(),
+          emailVerificationToken: null,
+        },
       });
 
       const resetUrl = `${process.env.ADMIN_DASHBOARD_URL || 'http://localhost:5175'}/reset-password/${token}`;
