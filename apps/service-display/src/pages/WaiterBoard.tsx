@@ -57,6 +57,7 @@ export function WaiterBoard() {
   const { mode, setMode } = useTheme();
   const [activeTab, setActiveTab] = useState<'tasks' | 'tables'>('tasks');
   const [tables, setTables] = useState<any[]>([]);
+  const tablesRef = useRef<any[]>([]);
   const [myTasks, setMyTasks] = useState<TaskItem[]>([]);
   const [unassignedTasks, setUnassignedTasks] = useState<TaskItem[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
@@ -77,8 +78,14 @@ export function WaiterBoard() {
     onShiftRef.current = !!user?.isOnShift;
   }, [user?.isOnShift]);
 
+  useEffect(() => {
+    tablesRef.current = tables;
+  }, [tables]);
+
   const isWaiter = user?.role === 'WAITER';
   const isOnShift = !!user?.isOnShift;
+  const userId = user?.id ?? null;
+  const userBranchId = user?.branchId ?? null;
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
@@ -100,39 +107,37 @@ export function WaiterBoard() {
     }
   }, []);
 
-  const normaliseTask = useCallback(
-    (type: TaskItem['type'], data: any): TaskItem => {
-      let details: string;
-      let notes: string;
-      if (type === 'WAITER_CALL') {
-        details = data.reason || 'Customer needs assistance';
-        notes = data.notes || '';
-      } else if (type === 'SERVICE_REQUEST') {
-        details = data.serviceType;
-        notes = data.notes || '';
-      } else {
-        details =
-          data.items?.map((i: any) => `${i.quantity}× ${i.menuItem?.name || '?'}`).join(', ') ||
-          'Order ready';
-        notes = '';
-      }
-      const tableId = data.table?.id ?? data.tableId;
-      const section = data.table?.section ?? tables.find((t) => t.id === tableId)?.section ?? null;
-      return {
-        id: data.id,
-        type,
-        tableLabel: data.table?.label || data.tableId,
-        section,
-        details,
-        notes,
-        createdAt: data.createdAt,
-        assignedTo: data.assignedTo ?? data.assignedWaiter ?? null,
-        status: data.status,
-        originalData: data,
-      };
-    },
-    [tables],
-  );
+  const normaliseTask = useCallback((type: TaskItem['type'], data: any): TaskItem => {
+    let details: string;
+    let notes: string;
+    if (type === 'WAITER_CALL') {
+      details = data.reason || 'Customer needs assistance';
+      notes = data.notes || '';
+    } else if (type === 'SERVICE_REQUEST') {
+      details = data.serviceType;
+      notes = data.notes || '';
+    } else {
+      details =
+        data.items?.map((i: any) => `${i.quantity}× ${i.menuItem?.name || '?'}`).join(', ') ||
+        'Order ready';
+      notes = '';
+    }
+    const tableId = data.table?.id ?? data.tableId;
+    const section =
+      data.table?.section ?? tablesRef.current.find((t) => t.id === tableId)?.section ?? null;
+    return {
+      id: data.id,
+      type,
+      tableLabel: data.table?.label || data.tableId,
+      section,
+      details,
+      notes,
+      createdAt: data.createdAt,
+      assignedTo: data.assignedTo ?? data.assignedWaiter ?? null,
+      status: data.status,
+      originalData: data,
+    };
+  }, []);
 
   const loadTasks = useCallback(async () => {
     if (isWaiter && !isOnShift) {
@@ -144,7 +149,7 @@ export function WaiterBoard() {
     const freshToken = await silentRefresh();
     if (!freshToken) return;
     const h = { Authorization: `Bearer ${freshToken}` };
-    const bq = user?.branchId ? `&branchId=${user.branchId}` : '';
+    const bq = userBranchId ? `&branchId=${userBranchId}` : '';
 
     const [callsRes, serviceRes, ordersRes, tablesRes] = await Promise.all([
       fetch(`${API_BASE}/api/waiter-calls?status=PENDING${bq}`, { headers: h }),
@@ -161,6 +166,7 @@ export function WaiterBoard() {
     ]);
 
     if (tablesData.success) {
+      tablesRef.current = tablesData.data;
       setTables(tablesData.data);
     }
 
@@ -180,9 +186,9 @@ export function WaiterBoard() {
     // Deduplicate allTasks by ID to prevent React key warnings
     const uniqueTasks = Array.from(new Map(allTasks.map((t) => [t.id, t])).values());
 
-    setMyTasks(uniqueTasks.filter((t) => t.assignedTo === user?.id));
+    setMyTasks(uniqueTasks.filter((t) => t.assignedTo === userId));
     setUnassignedTasks(uniqueTasks.filter((t) => t.assignedTo === null));
-  }, [isOnShift, isWaiter, normaliseTask, token, user, silentRefresh]);
+  }, [isOnShift, isWaiter, normaliseTask, silentRefresh, token, userBranchId, userId]);
 
   useEffect(() => {
     if (!token) return;
