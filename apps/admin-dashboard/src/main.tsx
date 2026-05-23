@@ -203,9 +203,9 @@ function AppRoutes() {
         <Route
           path="branches"
           element={
-            <RequireOrgAdmin>
+            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER']}>
               <BranchesPage />
-            </RequireOrgAdmin>
+            </RequireRole>
           }
         />
         <Route

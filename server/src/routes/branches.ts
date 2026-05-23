@@ -58,7 +58,7 @@ branchesRouter.get(
 // POST / — create a branch (org-wide admin)
 branchesRouter.post(
   '/',
-  requireRole('ORG_OWNER', 'ADMIN', 'SUPERADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'),
   checkBranchLimit,
   async (req: AuthRequest, res: Response) => {
     try {
@@ -172,7 +172,7 @@ branchesRouter.put('/:branchId', async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    if (!['SUPERADMIN', 'ORG_OWNER', 'ADMIN'].includes(user.role)) {
+    if (!['SUPERADMIN', 'ORG_OWNER', 'ADMIN', 'ORG_MANAGER'].includes(user.role)) {
       res.status(403).json({ success: false, error: 'Insufficient permissions' });
       return;
     }
@@ -216,7 +216,7 @@ branchesRouter.put('/:branchId', async (req: AuthRequest, res: Response) => {
 // DELETE /:branchId — deactivate a branch (org-wide admin only)
 branchesRouter.delete(
   '/:branchId',
-  requireRole('ORG_OWNER', 'ADMIN', 'SUPERADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const { branchId } = req.params;
@@ -238,7 +238,7 @@ branchesRouter.delete(
 // POST /:branchId/admin — create a BRANCH_ADMIN user for a branch (org-wide admin only)
 branchesRouter.post(
   '/:branchId/admin',
-  requireRole('ORG_OWNER', 'ADMIN', 'SUPERADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'),
   checkStaffLimit,
   async (req: AuthRequest, res: Response) => {
     try {

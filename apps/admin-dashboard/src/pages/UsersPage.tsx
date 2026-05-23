@@ -101,11 +101,13 @@ export function UsersPage() {
   const isBranchAdmin = me?.role === 'BRANCH_ADMIN';
 
   const canCreateOrgOwner = me?.role === 'ORG_OWNER' || me?.role === 'SUPERADMIN';
+  const canCreateOrgAdmin =
+    me?.role === 'ORG_OWNER' || me?.role === 'ADMIN' || me?.role === 'SUPERADMIN';
   const availableRoles = isBranchAdmin
     ? ['SERVICE', 'WAITER', 'KITCHEN']
     : [
         ...(canCreateOrgOwner ? ['ORG_OWNER'] : []),
-        'ADMIN',
+        ...(canCreateOrgAdmin ? ['ADMIN'] : []),
         'ORG_MANAGER',
         'ORG_FINANCE',
         'ORG_AUDITOR',

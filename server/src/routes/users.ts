@@ -148,6 +148,11 @@ usersRouter.post(
         return;
       }
 
+      if (req.user!.role === 'ORG_MANAGER' && (role === 'ADMIN' || role === 'SUPERADMIN')) {
+        res.status(403).json({ success: false, error: 'Access denied' });
+        return;
+      }
+
       // BRANCH_ADMIN must have a branchId
       if (role === 'BRANCH_ADMIN' && !branchId) {
         res.status(400).json({ success: false, error: 'BRANCH_ADMIN role requires a branchId' });
@@ -267,7 +272,7 @@ usersRouter.post(
 
 usersRouter.patch(
   '/:id',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const schema = z.object({
@@ -327,6 +332,15 @@ usersRouter.patch(
         res.status(404).json({ success: false, error: 'User not found' });
         return;
       }
+
+      if (
+        req.user!.role === 'ORG_MANAGER' &&
+        ['ORG_OWNER', 'ADMIN', 'SUPERADMIN'].includes(targetUser.role)
+      ) {
+        res.status(403).json({ success: false, error: 'Access denied' });
+        return;
+      }
+
       if (
         req.user!.role === 'BRANCH_ADMIN' &&
         req.branchScope &&
@@ -344,6 +358,15 @@ usersRouter.patch(
         res
           .status(403)
           .json({ success: false, error: 'Only org owners can assign ORG_OWNER role' });
+        return;
+      }
+
+      if (
+        req.user!.role === 'ORG_MANAGER' &&
+        data.role &&
+        ['ORG_OWNER', 'ADMIN', 'SUPERADMIN'].includes(data.role)
+      ) {
+        res.status(403).json({ success: false, error: 'Access denied' });
         return;
       }
 
@@ -428,7 +451,7 @@ usersRouter.patch(
 
 usersRouter.post(
   '/:id/password-reset',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const targetUser = await prisma.user.findFirst({
@@ -437,6 +460,13 @@ usersRouter.post(
       });
       if (!targetUser) {
         res.status(404).json({ success: false, error: 'User not found' });
+        return;
+      }
+      if (
+        req.user!.role === 'ORG_MANAGER' &&
+        ['ORG_OWNER', 'ADMIN', 'SUPERADMIN'].includes(targetUser.role)
+      ) {
+        res.status(403).json({ success: false, error: 'Access denied' });
         return;
       }
       if (targetUser.id === req.user!.userId) {
@@ -490,7 +520,7 @@ usersRouter.post(
 
 usersRouter.delete(
   '/:id',
-  requireRole('ADMIN', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
   async (req: AuthRequest, res: Response) => {
     try {
       const targetUser = await prisma.user.findFirst({
@@ -498,6 +528,13 @@ usersRouter.delete(
       });
       if (!targetUser) {
         res.status(404).json({ success: false, error: 'User not found' });
+        return;
+      }
+      if (
+        req.user!.role === 'ORG_MANAGER' &&
+        ['ORG_OWNER', 'ADMIN', 'SUPERADMIN'].includes(targetUser.role)
+      ) {
+        res.status(403).json({ success: false, error: 'Access denied' });
         return;
       }
       if (targetUser.id === req.user!.userId) {

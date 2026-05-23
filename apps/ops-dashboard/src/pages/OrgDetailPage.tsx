@@ -102,7 +102,9 @@ export function OrgDetailPage() {
     setError('');
     const res = await api.post(`/api/ops/orgs/${orgId}/impersonate`, {});
     if (res.success) {
-      const adminDashUrl = `${import.meta.env.VITE_ADMIN_DASHBOARD_URL || 'http://localhost:5175'}`;
+      const adminDashUrl =
+        import.meta.env.VITE_ADMIN_DASHBOARD_URL ||
+        (import.meta.env.PROD ? 'https://admin.cevop.com' : 'http://localhost:5175');
       window.open(`${adminDashUrl}?token=${res.data.token}`, '_blank');
       setSuccess('Impersonation session started.');
     } else {
