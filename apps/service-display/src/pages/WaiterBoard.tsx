@@ -66,9 +66,11 @@ export function WaiterBoard() {
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [shiftBusy, setShiftBusy] = useState(false);
   const [shiftError, setShiftError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const tokenRef = useRef(token);
   const onShiftRef = useRef<boolean>(!!user?.isOnShift);
+  const lastSyncAtRef = useRef(0);
 
   useEffect(() => {
     tokenRef.current = token;
@@ -190,6 +192,27 @@ export function WaiterBoard() {
     setUnassignedTasks(uniqueTasks.filter((t) => t.assignedTo === null));
   }, [isOnShift, isWaiter, normaliseTask, silentRefresh, token, userBranchId, userId]);
 
+  const loadTasksRef = useRef(loadTasks);
+  useEffect(() => {
+    loadTasksRef.current = loadTasks;
+  }, [loadTasks]);
+
+  const refreshNow = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await silentRefresh();
+      await loadTasksRef.current();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing, silentRefresh]);
+
+  const refreshNowRef = useRef(refreshNow);
+  useEffect(() => {
+    refreshNowRef.current = refreshNow;
+  }, [refreshNow]);
+
   useEffect(() => {
     if (!token) return;
     const t = setTimeout(() => {
@@ -296,7 +319,16 @@ export function WaiterBoard() {
       );
     });
 
+    const handleSyncRequired = () => {
+      const now = Date.now();
+      if (now - lastSyncAtRef.current < 8000) return;
+      lastSyncAtRef.current = now;
+      refreshNowRef.current().catch(() => void 0);
+    };
+    socket.on('SYNC_REQUIRED', handleSyncRequired);
+
     return () => {
+      socket.off('SYNC_REQUIRED', handleSyncRequired);
       socket.disconnect();
     };
   }, [isWaiter, normaliseTask, user, playAlert]);
@@ -580,6 +612,13 @@ export function WaiterBoard() {
               {user.staffCode}
             </span>
           )}
+          <button
+            onClick={() => refreshNow().catch(() => void 0)}
+            disabled={refreshing}
+            className="text-[9px] sm:text-xs border border-[var(--border)] px-2 sm:px-3 py-1 font-bold tracking-tight disabled:opacity-50 whitespace-nowrap rounded-full font-display text-[var(--muted)] hover:text-[var(--text)]"
+          >
+            {refreshing ? '...' : 'REFRESH'}
+          </button>
           {isWaiter && (
             <button
               onClick={isOnShift ? endShift : startShift}

@@ -234,6 +234,73 @@ app.use('/api/waiter-tasks', waiterTasksRouter);
 // WebSocket
 initSocketHandlers(io);
 
+const staleOrderCutoffMinutes = Number(process.env.STALE_ORDER_MINUTES || 120);
+const staleOrderCheckEveryMs = Number(process.env.STALE_ORDER_CHECK_MS || 5 * 60 * 1000);
+const staleOrderAuditThrottleMs = 60 * 60 * 1000;
+const lastStaleAudit = new Map<string, { count: number; at: number }>();
+
+function startStaleOrderMonitor() {
+  if (process.env.NODE_ENV === 'test') return;
+  if (!Number.isFinite(staleOrderCutoffMinutes) || staleOrderCutoffMinutes <= 0) return;
+  if (!Number.isFinite(staleOrderCheckEveryMs) || staleOrderCheckEveryMs < 30_000) return;
+
+  const interval = setInterval(async () => {
+    try {
+      const cutoff = new Date(Date.now() - staleOrderCutoffMinutes * 60 * 1000);
+      const groups = await prisma.order.groupBy({
+        by: ['organizationId', 'branchId'],
+        where: { status: { in: ['RECEIVED', 'PREPARING', 'READY'] }, updatedAt: { lt: cutoff } },
+        _count: { _all: true },
+      });
+
+      const now = Date.now();
+      for (const g of groups) {
+        const count = (g as any)?._count?._all ?? 0;
+        if (!count) continue;
+        const key = `${g.organizationId}:${g.branchId}`;
+        const prev = lastStaleAudit.get(key);
+        const shouldWrite =
+          !prev || prev.count !== count || now - prev.at > staleOrderAuditThrottleMs;
+        if (!shouldWrite) continue;
+
+        await prisma.auditLog
+          .create({
+            data: {
+              organizationId: g.organizationId,
+              userId: null,
+              action: 'STALE_ORDERS_DETECTED',
+              entity: 'branch',
+              entityId: g.branchId as string,
+              metadata: {
+                branchId: g.branchId as string,
+                staleCount: count,
+                cutoffMinutes: staleOrderCutoffMinutes,
+                cutoffIso: cutoff.toISOString(),
+              },
+              ipAddress: null,
+            },
+          })
+          .catch(() => void 0);
+
+        logger.warn('Stale orders detected', {
+          organizationId: g.organizationId,
+          branchId: g.branchId,
+          staleCount: count,
+          cutoffMinutes: staleOrderCutoffMinutes,
+        });
+
+        lastStaleAudit.set(key, { count, at: now });
+      }
+    } catch (err) {
+      logger.error('Stale order monitor failed', { err });
+    }
+  }, staleOrderCheckEveryMs);
+
+  (interval as any).unref?.();
+}
+
+startStaleOrderMonitor();
+
 // Error handler (must be last)
 app.use(errorHandler);
 

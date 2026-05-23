@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useApi } from '../context/auth';
+import { useApi, useAuth } from '../context/auth';
 
 interface Table {
   id: string;
@@ -27,10 +27,12 @@ const PWA_URL =
   (import.meta.env.PROD ? 'https://order.cevop.com' : 'http://localhost:5173');
 
 export function TablesPage() {
+  const { user } = useAuth();
   const api = useApi();
   const [tables, setTables] = useState<Table[]>([]);
   const [, setSections] = useState<{ id: string; name: string }[]>([]);
   const [qrCodes, setQrCodes] = useState<QREntry[]>([]);
+  const [qrCardCache, setQrCardCache] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({ label: '', number: '', sectionId: '' });
@@ -38,6 +40,10 @@ export function TablesPage() {
   const [saving, setSaving] = useState(false);
   const [qrLoading, setQrLoading] = useState(false);
   const [error, setError] = useState('');
+  const [qrPreviewOpen, setQrPreviewOpen] = useState(false);
+  const [qrPreviewTable, setQrPreviewTable] = useState<Table | null>(null);
+  const [qrPreviewDataUrl, setQrPreviewDataUrl] = useState<string | null>(null);
+  const [qrPreviewBusy, setQrPreviewBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -118,6 +124,102 @@ export function TablesPage() {
     a.href = entry.qrDataUrl;
     a.download = `table-${entry.tableNumber}-qr.png`;
     a.click();
+  }
+
+  function downloadPng(dataUrl: string, filename: string) {
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    a.click();
+  }
+
+  async function getOrFetchQrEntry(tableId: string): Promise<QREntry | null> {
+    const existing = qrCodes.find((q) => q.tableId === tableId);
+    if (existing) return existing;
+    const res = await api.get('/api/tables/qr/bulk');
+    if (!res?.success) return null;
+    const list: QREntry[] = res.data ?? [];
+    setQrCodes(list);
+    return list.find((q) => q.tableId === tableId) ?? null;
+  }
+
+  async function buildQrCardPng(entry: QREntry, orgName: string): Promise<string> {
+    const cached = qrCardCache[entry.tableId];
+    if (cached) return cached;
+
+    const canvas = document.createElement('canvas');
+    const w = 900;
+    const h = 1200;
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return entry.qrDataUrl;
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#111111';
+    ctx.strokeRect(30, 30, w - 60, h - 60);
+
+    ctx.fillStyle = '#111111';
+    ctx.textAlign = 'center';
+
+    const safeOrg = (orgName || 'CEVOP').toUpperCase();
+    ctx.font = '800 44px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText(safeOrg.length > 24 ? safeOrg.slice(0, 24) + '…' : safeOrg, w / 2, 110);
+
+    const tableTitle = entry.tableLabel?.trim() ? entry.tableLabel : `TABLE ${entry.tableNumber}`;
+    ctx.font = '900 80px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText(
+      tableTitle.length > 14 ? tableTitle.slice(0, 14) + '…' : tableTitle.toUpperCase(),
+      w / 2,
+      210,
+    );
+
+    const img = new Image();
+    img.src = entry.qrDataUrl;
+    await new Promise<void>((resolve) => {
+      img.onload = () => resolve();
+      img.onerror = () => resolve();
+    });
+
+    const qrSize = 620;
+    const qrX = Math.round((w - qrSize) / 2);
+    const qrY = 290;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(qrX - 20, qrY - 20, qrSize + 40, qrSize + 40);
+    ctx.drawImage(img, qrX, qrY, qrSize, qrSize);
+
+    ctx.fillStyle = '#111111';
+    ctx.font = '700 34px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.fillText('SCAN TO VIEW MENU', w / 2, 980);
+
+    const dataUrl = canvas.toDataURL('image/png');
+    setQrCardCache((prev) => ({ ...prev, [entry.tableId]: dataUrl }));
+    return dataUrl;
+  }
+
+  async function openQrPreview(t: Table) {
+    setQrPreviewOpen(true);
+    setQrPreviewTable(t);
+    setQrPreviewDataUrl(null);
+    setQrPreviewBusy(true);
+    try {
+      const entry = await getOrFetchQrEntry(t.id);
+      if (!entry) return;
+      const orgName = user?.organization?.name ?? 'CEVOP';
+      const card = await buildQrCardPng(entry, orgName);
+      setQrPreviewDataUrl(card);
+    } finally {
+      setQrPreviewBusy(false);
+    }
+  }
+
+  async function saveQrCard(entry: QREntry) {
+    const orgName = user?.organization?.name ?? 'CEVOP';
+    const card = await buildQrCardPng(entry, orgName);
+    downloadPng(card, `table-${entry.tableNumber}-qr.png`);
   }
 
   async function clearTable(sessionId: string) {
@@ -225,14 +327,22 @@ export function TablesPage() {
                   </span>
                 </td>
                 <td>
-                  <a
-                    href={`${API_BASE}/api/tables/${t.id}/qr?format=png`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-[var(--accent)] hover:underline"
-                  >
-                    ↓ Download QR
-                  </a>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => void openQrPreview(t)}
+                    >
+                      View QR
+                    </button>
+                    <a
+                      href={`${API_BASE}/api/tables/${t.id}/qr?format=png`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-[var(--muted)] hover:text-[var(--text)] hover:underline"
+                    >
+                      Raw
+                    </a>
+                  </div>
                 </td>
                 <td>
                   <div className="flex items-center gap-2">
@@ -298,19 +408,92 @@ export function TablesPage() {
             {qrCodes.map((entry) => (
               <div key={entry.tableId} className="card p-4 text-center space-y-2">
                 <img
-                  src={entry.qrDataUrl}
+                  src={qrCardCache[entry.tableId] || entry.qrDataUrl}
                   alt={entry.tableLabel}
                   className="w-full aspect-square"
+                  onClick={() => {
+                    const t = tables.find((x) => x.id === entry.tableId);
+                    if (t) void openQrPreview(t);
+                  }}
                 />
                 <p className="font-bold text-sm">{entry.tableLabel}</p>
-                <button
-                  className="btn btn-secondary btn-sm w-full"
-                  onClick={() => downloadQR(entry)}
-                >
-                  ↓ Save
-                </button>
+                <div className="space-y-2">
+                  <button
+                    className="btn btn-secondary btn-sm w-full"
+                    onClick={() => void saveQrCard(entry)}
+                  >
+                    ↓ Save
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm w-full"
+                    onClick={() => downloadQR(entry)}
+                  >
+                    Raw
+                  </button>
+                </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {qrPreviewOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setQrPreviewOpen(false)}
+        >
+          <div
+            className="card w-full max-w-xl p-6 space-y-4 animate-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="font-display text-2xl">TABLE QR</h2>
+                <p className="text-sm text-[var(--muted)]">
+                  {qrPreviewTable?.label ? qrPreviewTable.label : ''}
+                </p>
+              </div>
+              <button className="btn btn-secondary btn-sm" onClick={() => setQrPreviewOpen(false)}>
+                Close
+              </button>
+            </div>
+
+            <div className="flex items-center justify-center">
+              {qrPreviewBusy || !qrPreviewDataUrl ? (
+                <div className="flex items-center justify-center py-10">
+                  <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : (
+                <img
+                  src={qrPreviewDataUrl}
+                  alt="QR preview"
+                  className="w-full max-w-[420px] border border-[var(--border)] bg-white"
+                />
+              )}
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <button
+                className="btn btn-primary flex-1 disabled:opacity-50"
+                disabled={qrPreviewBusy || !qrPreviewDataUrl}
+                onClick={() => {
+                  if (!qrPreviewDataUrl || !qrPreviewTable) return;
+                  downloadPng(qrPreviewDataUrl, `table-${qrPreviewTable.number}-qr.png`);
+                }}
+              >
+                Download PNG
+              </button>
+              <button
+                className="btn btn-secondary flex-1 disabled:opacity-50"
+                disabled={!qrPreviewTable}
+                onClick={() => {
+                  if (!qrPreviewTable) return;
+                  copyLink(qrPreviewTable);
+                }}
+              >
+                Copy Link
+              </button>
+            </div>
           </div>
         </div>
       )}

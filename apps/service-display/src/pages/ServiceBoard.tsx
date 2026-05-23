@@ -97,14 +97,19 @@ export function ServiceBoard() {
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
   const nextThemeLabel = nextThemeMode === 'system' ? 'OS' : nextThemeMode === 'dark' ? 'D' : 'L';
   const [orders, setOrders] = useState<Order[]>([]);
+  const [ordersHasMore, setOrdersHasMore] = useState(false);
+  const [ordersCursor, setOrdersCursor] = useState<string | null>(null);
+  const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
   const [waiterCalls, setWaiterCalls] = useState<WaiterCall[]>([]);
   const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'orders' | 'calls' | 'tables'>('orders');
   const [tables, setTables] = useState<any[]>([]);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const socketRef = useRef<Socket | null>(null);
+  const lastSyncAtRef = useRef(0);
   const [onlineWaiters, setOnlineWaiters] = useState<
     { id: string; name: string; online: boolean }[]
   >([]);
@@ -175,12 +180,78 @@ export function ServiceBoard() {
       serviceRes.json(),
       tablesRes.json(),
     ]);
-    if (ordersData.success)
+    if (ordersData.success) {
       setOrders(ordersData.data.filter((o: Order) => ACTIVE_STATUSES.includes(o.status)));
+      setOrdersHasMore(Boolean(ordersData.pagination?.hasMore));
+      setOrdersCursor(ordersData.pagination?.nextCursor ?? null);
+    }
     if (callsData.success) setWaiterCalls(callsData.data);
     if (serviceData.success) setServiceRequests(serviceData.data);
     if (tablesData.success) setTables(tablesData.data);
   }, [token, user]);
+
+  const loadDataRef = useRef(loadData);
+  useEffect(() => {
+    loadDataRef.current = loadData;
+  }, [loadData]);
+
+  const loadOnlineWaitersRef = useRef(loadOnlineWaiters);
+  useEffect(() => {
+    loadOnlineWaitersRef.current = loadOnlineWaiters;
+  }, [loadOnlineWaiters]);
+
+  const refreshNow = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await silentRefresh();
+      await Promise.all([loadDataRef.current(), loadOnlineWaitersRef.current()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing, silentRefresh]);
+
+  const refreshNowRef = useRef(refreshNow);
+  useEffect(() => {
+    refreshNowRef.current = refreshNow;
+  }, [refreshNow]);
+
+  const loadMoreOrders = useCallback(async () => {
+    if (!token) return;
+    if (!ordersHasMore || !ordersCursor) return;
+    if (ordersLoadingMore) return;
+    setOrdersLoadingMore(true);
+    try {
+      const freshToken = (await silentRefresh()) ?? token;
+      if (!freshToken) return;
+      const headers = { Authorization: `Bearer ${freshToken}` };
+      const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
+      const res = await fetch(
+        `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&status=READY&limit=50&cursor=${ordersCursor}${branchParam}`,
+        { headers },
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.success) return;
+
+      const pageOrders: Order[] = Array.isArray(body.data) ? body.data : [];
+      setOrders((prev) => {
+        const seen = new Set(prev.map((o) => o.id));
+        const merged = [...prev];
+        for (const o of pageOrders) {
+          if (!ACTIVE_STATUSES.includes(o.status)) continue;
+          if (!seen.has(o.id)) {
+            merged.push(o);
+            seen.add(o.id);
+          }
+        }
+        return merged;
+      });
+      setOrdersHasMore(Boolean(body.pagination?.hasMore));
+      setOrdersCursor(body.pagination?.nextCursor ?? null);
+    } finally {
+      setOrdersLoadingMore(false);
+    }
+  }, [ordersCursor, ordersHasMore, ordersLoadingMore, silentRefresh, token, user]);
 
   useEffect(() => {
     if (!token) return;
@@ -278,9 +349,18 @@ export function ServiceBoard() {
       );
     });
 
+    const handleSyncRequired = () => {
+      const now = Date.now();
+      if (now - lastSyncAtRef.current < 8000) return;
+      lastSyncAtRef.current = now;
+      refreshNowRef.current().catch(() => void 0);
+    };
+    socket.on('SYNC_REQUIRED', handleSyncRequired);
+
     return () => {
       socket.off('WAITER_ONLINE', handleWaiterOnline);
       socket.off('WAITER_OFFLINE', handleWaiterOffline);
+      socket.off('SYNC_REQUIRED', handleSyncRequired);
       socket.disconnect();
     };
   }, [user, playAlert, applyOrderUpdate, loadOnlineWaiters]); // Omitted `token` intentionally so it doesn't reconnect on token refresh
@@ -577,6 +657,13 @@ export function ServiceBoard() {
             {new Date().toLocaleTimeString()}
           </div>
           <button
+            onClick={() => refreshNow().catch(() => void 0)}
+            disabled={refreshing}
+            className="text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0 disabled:opacity-50"
+          >
+            {refreshing ? 'REFRESHING…' : 'REFRESH'}
+          </button>
+          <button
             onClick={() => setMode(nextThemeMode)}
             className={`w-7 h-7 sm:w-10 sm:h-10 rounded-full border flex items-center justify-center transition-colors text-[9px] sm:text-[10px] font-bold tracking-widest shrink-0 ${
               mode === 'system'
@@ -629,151 +716,167 @@ export function ServiceBoard() {
 
       {/* Content */}
       {activeTab === 'orders' ? (
-        <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 divide-y lg:divide-y-0 lg:divide-x divide-[var(--border)] overflow-y-auto lg:overflow-hidden">
-          {(['RECEIVED', 'PREPARING', 'READY'] as const).map((status) => (
-            <div
-              key={status}
-              className="flex flex-col lg:overflow-hidden min-h-[400px] lg:min-h-0 border-b lg:border-b-0 border-[var(--border)]"
-            >
-              <div
-                className={`px-3 py-2 border-b border-[var(--border)] shrink-0 ${STATUS_TEXT[status]} sticky top-0 bg-[var(--surface)] z-10`}
+        <div className="flex-1 overflow-hidden flex flex-col">
+          <div className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-2">
+            <div className="text-xs text-[var(--muted)]">
+              Loaded {orders.length} active orders{ordersHasMore ? ' · older available' : ''}
+            </div>
+            {ordersHasMore && (
+              <button
+                className="px-3 py-1.5 text-xs font-bold tracking-wider border border-[var(--border)] bg-[var(--surface2)] hover:brightness-110 disabled:opacity-50"
+                onClick={() => loadMoreOrders().catch(() => void 0)}
+                disabled={ordersLoadingMore}
               >
-                <span className="font-bold text-xs tracking-widest">{status}</span>
-                <span className="ml-2 text-[var(--muted)] text-xs">
-                  ({activeOrdersByStatus[status].length})
-                </span>
-              </div>
-              <div className="flex-1 overflow-y-visible lg:overflow-y-auto p-3 space-y-3">
-                {activeOrdersByStatus[status].length === 0 && (
-                  <div className="text-center text-[var(--muted)] text-xs pt-8">— Empty —</div>
-                )}
-                {activeOrdersByStatus[status].map((order) => (
-                  <div
-                    key={order.id}
-                    className={`border p-3 space-y-2 animate-slide-in ${STATUS_COLOR[order.status]}`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-sm text-[var(--text)]">
-                          {order.table?.label || `Table ${order.tableId.slice(-4)}`}
+                {ordersLoadingMore ? 'Loading…' : 'Load Older'}
+              </button>
+            )}
+          </div>
+          <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 divide-y lg:divide-y-0 lg:divide-x divide-[var(--border)] overflow-y-auto lg:overflow-hidden">
+            {(['RECEIVED', 'PREPARING', 'READY'] as const).map((status) => (
+              <div
+                key={status}
+                className="flex flex-col lg:overflow-hidden min-h-[400px] lg:min-h-0 border-b lg:border-b-0 border-[var(--border)]"
+              >
+                <div
+                  className={`px-3 py-2 border-b border-[var(--border)] shrink-0 ${STATUS_TEXT[status]} sticky top-0 bg-[var(--surface)] z-10`}
+                >
+                  <span className="font-bold text-xs tracking-widest">{status}</span>
+                  <span className="ml-2 text-[var(--muted)] text-xs">
+                    ({activeOrdersByStatus[status].length})
+                  </span>
+                </div>
+                <div className="flex-1 overflow-y-visible lg:overflow-y-auto p-3 space-y-3">
+                  {activeOrdersByStatus[status].length === 0 && (
+                    <div className="text-center text-[var(--muted)] text-xs pt-8">— Empty —</div>
+                  )}
+                  {activeOrdersByStatus[status].map((order) => (
+                    <div
+                      key={order.id}
+                      className={`border p-3 space-y-2 animate-slide-in ${STATUS_COLOR[order.status]}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-bold text-sm text-[var(--text)]">
+                            {order.table?.label || `Table ${order.tableId.slice(-4)}`}
+                          </div>
+                          <div className="text-[var(--muted)] text-xs font-mono">
+                            {order.id.slice(-6).toUpperCase()}
+                          </div>
                         </div>
-                        <div className="text-[var(--muted)] text-xs font-mono">
-                          {order.id.slice(-6).toUpperCase()}
+                        <div className="text-right">
+                          <TimeElapsed createdAt={order.createdAt} className="text-xs font-bold" />
+                          <div className="text-[var(--muted)] text-xs">
+                            {formatPrice(order.total)}
+                          </div>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <TimeElapsed createdAt={order.createdAt} className="text-xs font-bold" />
-                        <div className="text-[var(--muted)] text-xs">
-                          {formatPrice(order.total)}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="space-y-1 border-t border-[var(--border)] pt-2">
-                      {order.items.map((item) => (
-                        <React.Fragment key={item.id}>
-                          <div
-                            className={`flex items-start gap-2 text-xs ${item.cancelledAt ? 'opacity-40 line-through' : ''}`}
-                          >
-                            <span className="font-bold text-[var(--accent)] shrink-0">
-                              {item.quantity}×
-                            </span>
-                            <div className="flex-1 min-w-0 flex items-center justify-between gap-1">
-                              <span className="text-[var(--text)] truncate">
-                                {item.menuItem?.name || '—'}
+                      <div className="space-y-1 border-t border-[var(--border)] pt-2">
+                        {order.items.map((item) => (
+                          <React.Fragment key={item.id}>
+                            <div
+                              className={`flex items-start gap-2 text-xs ${item.cancelledAt ? 'opacity-40 line-through' : ''}`}
+                            >
+                              <span className="font-bold text-[var(--accent)] shrink-0">
+                                {item.quantity}×
                               </span>
-                              <div className="flex items-center gap-1 shrink-0">
-                                {/* Per-item 86 button — only shown to SERVICE role */}
-                                {user?.role === 'SERVICE' && item.menuItemId && (
-                                  <button
-                                    onClick={() => toggleItemAvailability(item.menuItemId)}
-                                    title="Mark this item as unavailable (86'd)"
-                                    className="text-[9px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors ml-1 shrink-0"
-                                  >
-                                    86
-                                  </button>
-                                )}
-                                {!item.cancelledAt &&
-                                  order.status !== 'READY' &&
-                                  order.status !== 'SERVED' && (
+                              <div className="flex-1 min-w-0 flex items-center justify-between gap-1">
+                                <span className="text-[var(--text)] truncate">
+                                  {item.menuItem?.name || '—'}
+                                </span>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {/* Per-item 86 button — only shown to SERVICE role */}
+                                  {user?.role === 'SERVICE' && item.menuItemId && (
                                     <button
-                                      onClick={() =>
-                                        cancelOrderItem(
-                                          order.id,
-                                          item.id,
-                                          item.menuItem?.name ?? 'Item',
-                                        )
-                                      }
-                                      className="text-[9px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors shrink-0 border border-transparent hover:border-[var(--danger)]/40 px-1 py-0.5"
-                                      title="Mark this item as unable to fulfil"
+                                      onClick={() => toggleItemAvailability(item.menuItemId)}
+                                      title="Mark this item as unavailable (86'd)"
+                                      className="text-[9px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors ml-1 shrink-0"
                                     >
-                                      ✕ can't fulfil
+                                      86
                                     </button>
                                   )}
-                                {item.cancelledAt && (
-                                  <span className="text-[9px] uppercase text-[var(--danger)]">
-                                    Cancelled
-                                  </span>
-                                )}
+                                  {!item.cancelledAt &&
+                                    order.status !== 'READY' &&
+                                    order.status !== 'SERVED' && (
+                                      <button
+                                        onClick={() =>
+                                          cancelOrderItem(
+                                            order.id,
+                                            item.id,
+                                            item.menuItem?.name ?? 'Item',
+                                          )
+                                        }
+                                        className="text-[9px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors shrink-0 border border-transparent hover:border-[var(--danger)]/40 px-1 py-0.5"
+                                        title="Mark this item as unable to fulfil"
+                                      >
+                                        ✕ can't fulfil
+                                      </button>
+                                    )}
+                                  {item.cancelledAt && (
+                                    <span className="text-[9px] uppercase text-[var(--danger)]">
+                                      Cancelled
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                          {item.notes && (
-                            <div className="text-[var(--muted)] italic text-[10px] pl-6">
-                              "{item.notes}"
-                            </div>
-                          )}
-                        </React.Fragment>
-                      ))}
-                    </div>
-                    {status === 'READY' && onlineWaiters.length > 0 && (
-                      <div className="pt-2 border-t border-[var(--border)] space-y-2">
-                        <div className="text-xs text-[var(--muted)]">
-                          Assigned:{' '}
-                          <span className="text-[var(--text)] font-medium">
-                            {order.assignedWaiter
-                              ? onlineWaiters.find((w) => w.id === order.assignedWaiter)?.name ||
-                                'Waiter'
-                              : '—'}
-                          </span>
-                        </div>
-                        <div className="flex gap-2">
-                          <select
-                            id={`service_order_assign_${order.id}`}
-                            name="assignedWaiter"
-                            className="flex-1 text-xs"
-                            value={order.assignedWaiter ?? ''}
-                            onChange={(e) =>
-                              assignOrder(order.id, e.target.value ? e.target.value : null)
-                            }
-                            disabled={assigningItems.has(order.id)}
-                            autoComplete="off"
-                            aria-label="Assign order to waiter"
-                          >
-                            <option value="">— Unassigned —</option>
-                            {onlineWaiters.map((w) => (
-                              <option key={w.id} value={w.id}>
-                                {w.name}
-                                {w.online ? ' (online)' : ''}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                            {item.notes && (
+                              <div className="text-[var(--muted)] italic text-[10px] pl-6">
+                                "{item.notes}"
+                              </div>
+                            )}
+                          </React.Fragment>
+                        ))}
                       </div>
-                    )}
-                    {NEXT_STATUS[order.status] && (
-                      <button
-                        onClick={() => updateOrderStatus(order.id, NEXT_STATUS[order.status])}
-                        disabled={updatingItems.has(order.id)}
-                        className="w-full text-xs py-1.5 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black hover:border-[var(--accent)] transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {updatingItems.has(order.id) ? 'UPDATING...' : NEXT_LABEL[order.status]}
-                      </button>
-                    )}
-                  </div>
-                ))}
+                      {status === 'READY' && onlineWaiters.length > 0 && (
+                        <div className="pt-2 border-t border-[var(--border)] space-y-2">
+                          <div className="text-xs text-[var(--muted)]">
+                            Assigned:{' '}
+                            <span className="text-[var(--text)] font-medium">
+                              {order.assignedWaiter
+                                ? onlineWaiters.find((w) => w.id === order.assignedWaiter)?.name ||
+                                  'Waiter'
+                                : '—'}
+                            </span>
+                          </div>
+                          <div className="flex gap-2">
+                            <select
+                              id={`service_order_assign_${order.id}`}
+                              name="assignedWaiter"
+                              className="flex-1 text-xs"
+                              value={order.assignedWaiter ?? ''}
+                              onChange={(e) =>
+                                assignOrder(order.id, e.target.value ? e.target.value : null)
+                              }
+                              disabled={assigningItems.has(order.id)}
+                              autoComplete="off"
+                              aria-label="Assign order to waiter"
+                            >
+                              <option value="">— Unassigned —</option>
+                              {onlineWaiters.map((w) => (
+                                <option key={w.id} value={w.id}>
+                                  {w.name}
+                                  {w.online ? ' (online)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      )}
+                      {NEXT_STATUS[order.status] && (
+                        <button
+                          onClick={() => updateOrderStatus(order.id, NEXT_STATUS[order.status])}
+                          disabled={updatingItems.has(order.id)}
+                          className="w-full text-xs py-1.5 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black hover:border-[var(--accent)] transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {updatingItems.has(order.id) ? 'UPDATING...' : NEXT_LABEL[order.status]}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       ) : activeTab === 'calls' ? (
         <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 md:grid-cols-2 gap-4 content-start">

@@ -58,10 +58,15 @@ export function KitchenBoard() {
   useTheme();
 
   const [orders, setOrders] = useState<Order[]>([]);
+  const [ordersHasMore, setOrdersHasMore] = useState(false);
+  const [ordersCursor, setOrdersCursor] = useState<string | null>(null);
+  const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
+  const lastSyncAtRef = useRef(0);
 
   const applyOrderUpdate = useCallback((order: Order) => {
     setOrders((prev) => {
@@ -105,8 +110,68 @@ export function KitchenBoard() {
     const ordersData = await ordersRes.json();
     if (ordersData.success) {
       setOrders(ordersData.data);
+      setOrdersHasMore(Boolean(ordersData.pagination?.hasMore));
+      setOrdersCursor(ordersData.pagination?.nextCursor ?? null);
     }
   }, [token, user]);
+
+  const loadDataRef = useRef(loadData);
+  useEffect(() => {
+    loadDataRef.current = loadData;
+  }, [loadData]);
+
+  const refreshNow = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await silentRefresh();
+      await loadDataRef.current();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing, silentRefresh]);
+
+  const refreshNowRef = useRef(refreshNow);
+  useEffect(() => {
+    refreshNowRef.current = refreshNow;
+  }, [refreshNow]);
+
+  const loadMoreOrders = useCallback(async () => {
+    if (!token) return;
+    if (!ordersHasMore || !ordersCursor) return;
+    if (ordersLoadingMore) return;
+    setOrdersLoadingMore(true);
+    try {
+      const freshToken = (await silentRefresh()) ?? token;
+      if (!freshToken) return;
+      const headers = { Authorization: `Bearer ${freshToken}` };
+      const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
+      const res = await fetch(
+        `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&limit=50&cursor=${ordersCursor}${branchParam}`,
+        { headers },
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.success) return;
+
+      const pageOrders: Order[] = Array.isArray(body.data) ? body.data : [];
+      setOrders((prev) => {
+        const seen = new Set(prev.map((o) => o.id));
+        const merged = [...prev];
+        for (const o of pageOrders) {
+          if (!KITCHEN_STATUSES.includes(o.status)) continue;
+          if (!seen.has(o.id)) {
+            merged.push(o);
+            seen.add(o.id);
+          }
+        }
+        return merged;
+      });
+      setOrdersHasMore(Boolean(body.pagination?.hasMore));
+      setOrdersCursor(body.pagination?.nextCursor ?? null);
+    } finally {
+      setOrdersLoadingMore(false);
+    }
+  }, [ordersCursor, ordersHasMore, ordersLoadingMore, silentRefresh, token, user]);
 
   useEffect(() => {
     if (!token) return;
@@ -151,7 +216,16 @@ export function KitchenBoard() {
 
     socket.on('ORDER_UPDATED', (order: Order) => applyOrderUpdate(order));
 
+    const handleSyncRequired = () => {
+      const now = Date.now();
+      if (now - lastSyncAtRef.current < 8000) return;
+      lastSyncAtRef.current = now;
+      refreshNowRef.current().catch(() => void 0);
+    };
+    socket.on('SYNC_REQUIRED', handleSyncRequired);
+
     return () => {
+      socket.off('SYNC_REQUIRED', handleSyncRequired);
       socket.disconnect();
     };
   }, [user, playAlert, applyOrderUpdate]);
@@ -254,6 +328,22 @@ export function KitchenBoard() {
           <div className="text-[10px] font-mono hidden xs:block">
             {new Date().toLocaleTimeString()}
           </div>
+          <button
+            onClick={() => refreshNow().catch(() => void 0)}
+            disabled={refreshing}
+            className="text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
+          >
+            {refreshing ? '...' : 'REFRESH'}
+          </button>
+          {ordersHasMore && (
+            <button
+              onClick={() => loadMoreOrders().catch(() => void 0)}
+              disabled={ordersLoadingMore}
+              className="text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
+            >
+              {ordersLoadingMore ? '...' : 'OLDER'}
+            </button>
+          )}
           <button
             onClick={logout}
             className="text-[10px] sm:text-xs text-gray-500 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display"

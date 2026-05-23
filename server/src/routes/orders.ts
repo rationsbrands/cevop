@@ -885,6 +885,226 @@ ordersRouter.patch(
 
 ordersRouter.use(requireBranchSelected);
 
+ordersRouter.get(
+  '/stale',
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { minAgeMinutes, status, limit, cursor } = z
+        .object({
+          minAgeMinutes: z.coerce
+            .number()
+            .int()
+            .min(5)
+            .max(60 * 24 * 30)
+            .default(120),
+          status: z.union([z.string(), z.array(z.string())]).optional(),
+          limit: z.coerce.number().int().min(1).max(100).default(50),
+          cursor: z.string().optional(),
+        })
+        .parse(req.query);
+
+      const cutoff = new Date(Date.now() - minAgeMinutes * 60 * 1000);
+      const statuses = status
+        ? Array.isArray(status)
+          ? status
+          : [status]
+        : ['RECEIVED', 'PREPARING', 'READY'];
+
+      const where: Prisma.OrderWhereInput = {
+        organizationId: req.user!.organizationId,
+        branchId: req.branchScope!,
+        status: { in: statuses as any },
+        updatedAt: { lt: cutoff },
+      };
+
+      const orders = await prisma.order.findMany({
+        where,
+        include: {
+          items: { include: { menuItem: { select: { name: true } } } },
+          table: { select: { label: true, number: true } },
+        },
+        orderBy: { updatedAt: 'asc' },
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+
+      const hasMore = orders.length > limit;
+      const data = hasMore ? orders.slice(0, limit) : orders;
+      const nextCursor = hasMore ? data[data.length - 1].id : null;
+
+      res.json({
+        success: true,
+        data,
+        meta: { cutoff: cutoff.toISOString(), minAgeMinutes, statuses },
+        pagination: { hasMore, nextCursor, limit },
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError)
+        return res.status(400).json({ success: false, error: err.errors[0].message });
+      res.status(500).json({ success: false, error: 'Failed to fetch stale orders' });
+    }
+  },
+);
+
+ordersRouter.post(
+  '/reconcile',
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { orderIds, action, reason } = z
+        .object({
+          orderIds: z.array(z.string().min(1)).min(1).max(200),
+          action: z.enum(['CANCEL', 'SERVE']),
+          reason: z.string().trim().min(1).max(500).optional(),
+        })
+        .parse(req.body);
+
+      if (action === 'CANCEL' && !reason) {
+        res.status(400).json({ success: false, error: 'reason is required for CANCEL' });
+        return;
+      }
+
+      const now = new Date();
+      const orgId = req.user!.organizationId;
+      const branchId = req.branchScope!;
+      const ipAddress =
+        (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+        req.socket?.remoteAddress;
+
+      const eligible = await prisma.order.findMany({
+        where: {
+          id: { in: orderIds },
+          organizationId: orgId,
+          branchId,
+          status: { in: ['RECEIVED', 'PREPARING', 'READY'] },
+        },
+        select: { id: true, status: true },
+      });
+
+      const eligibleIds = eligible.map((o) => o.id);
+      if (eligibleIds.length === 0) {
+        res.json({
+          success: true,
+          data: [],
+          meta: { requested: orderIds.length, reconciled: 0, ignored: orderIds.length },
+        });
+        return;
+      }
+
+      const targetStatus = action === 'SERVE' ? 'SERVED' : 'CANCELLED';
+
+      await prisma.$transaction(async (tx) => {
+        await tx.order.updateMany({
+          where: {
+            id: { in: eligibleIds },
+            organizationId: orgId,
+            branchId,
+            status: { in: ['RECEIVED', 'PREPARING', 'READY'] },
+          },
+          data: {
+            status: targetStatus as any,
+            ...(targetStatus === 'CANCELLED' ? { cancellationReason: reason! } : {}),
+          },
+        });
+
+        await tx.auditLog
+          .createMany({
+            data: eligibleIds.map((id) => ({
+              organizationId: orgId,
+              userId: req.user!.userId,
+              action: 'ORDER_RECONCILED',
+              entity: 'order',
+              entityId: id,
+              metadata: {
+                action,
+                toStatus: targetStatus,
+                reason: targetStatus === 'CANCELLED' ? reason : null,
+                reconciledAt: now.toISOString(),
+              },
+              ipAddress,
+            })),
+          })
+          .catch(() => void 0);
+      });
+
+      const updatedOrders = await prisma.order.findMany({
+        where: { id: { in: eligibleIds }, organizationId: orgId, branchId },
+        include: { items: { include: { menuItem: true } }, table: true },
+      });
+
+      for (const order of updatedOrders) {
+        io.to(`${orgId}:${branchId}`).emit('ORDER_UPDATED', order);
+        io.to(`order:${order.id}`).emit('ORDER_UPDATED', order);
+      }
+      analyticsCache.delete(`${orgId}:${branchId || 'all'}`);
+
+      res.json({
+        success: true,
+        data: updatedOrders,
+        meta: {
+          requested: orderIds.length,
+          reconciled: eligibleIds.length,
+          ignored: orderIds.length - eligibleIds.length,
+          action,
+          toStatus: targetStatus,
+        },
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError)
+        return res.status(400).json({ success: false, error: err.errors[0].message });
+      logger.error('POST /orders/reconcile error', { err });
+      res.status(500).json({ success: false, error: 'Failed to reconcile orders' });
+    }
+  },
+);
+
+ordersRouter.post(
+  '/force-sync',
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { reason } = z
+        .object({ reason: z.string().trim().min(1).max(200).optional() })
+        .parse(req.body ?? {});
+
+      const orgId = req.user!.organizationId;
+      const branchId = req.branchScope!;
+      const ipAddress =
+        (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+        req.socket?.remoteAddress;
+
+      io.to(`${orgId}:${branchId}`).emit('SYNC_REQUIRED', {
+        scope: 'branch',
+        orgId,
+        branchId,
+        reason: reason ?? 'Manual resync',
+        at: new Date().toISOString(),
+      });
+
+      await prisma.auditLog
+        .create({
+          data: {
+            organizationId: orgId,
+            userId: req.user!.userId,
+            action: 'FORCE_SYNC',
+            entity: 'branch',
+            entityId: branchId,
+            metadata: { reason: reason ?? null },
+            ipAddress,
+          },
+        })
+        .catch(() => void 0);
+
+      res.json({ success: true });
+    } catch (err) {
+      if (err instanceof z.ZodError)
+        return res.status(400).json({ success: false, error: err.errors[0].message });
+      res.status(500).json({ success: false, error: 'Failed to force sync' });
+    }
+  },
+);
+
 ordersRouter.get('/', async (req: AuthRequest, res: Response) => {
   try {
     const { status, tableId, limit, cursor } = z

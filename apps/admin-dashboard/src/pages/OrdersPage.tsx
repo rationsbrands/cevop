@@ -41,8 +41,13 @@ export function OrdersPage() {
   const { socket } = useSocket();
   const canEdit =
     user && ['SUPERADMIN', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'WAITER'].includes(user.role);
+  const canReconcile =
+    user && ['SUPERADMIN', 'ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(user.role);
   const currency = user?.organization?.currency ?? 'NGN';
   const [orders, setOrders] = useState<any[]>([]);
+  const [ordersHasMore, setOrdersHasMore] = useState(false);
+  const [ordersCursor, setOrdersCursor] = useState<string | null>(null);
+  const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
   const [waiterCalls, setWaiterCalls] = useState<WaiterCall[]>([]);
   const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
   const [statusFilter, setStatusFilter] = useState('');
@@ -61,7 +66,18 @@ export function OrdersPage() {
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState('');
 
+  const [staleOpen, setStaleOpen] = useState(false);
+  const [staleMinAgeMinutes, setStaleMinAgeMinutes] = useState(120);
+  const [staleOrders, setStaleOrders] = useState<any[]>([]);
+  const [staleHasMore, setStaleHasMore] = useState(false);
+  const [staleCursor, setStaleCursor] = useState<string | null>(null);
+  const [staleLoading, setStaleLoading] = useState(false);
+  const [staleSelected, setStaleSelected] = useState<Set<string>>(new Set());
+  const [staleActionLoading, setStaleActionLoading] = useState(false);
+  const [staleCancelReason, setStaleCancelReason] = useState('Backlog cleanup');
+
   const [refreshing, setRefreshing] = useState(false);
+  const [forceSyncing, setForceSyncing] = useState(false);
   const [onlineWaiters, setOnlineWaiters] = useState<
     { id: string; name: string; online: boolean }[]
   >([]);
@@ -102,6 +118,8 @@ export function OrdersPage() {
     try {
       if (!api.effectiveBranchId) {
         setOrders([]);
+        setOrdersHasMore(false);
+        setOrdersCursor(null);
         setWaiterCalls([]);
         setServiceRequests([]);
         return;
@@ -112,7 +130,11 @@ export function OrdersPage() {
         api.get('/api/waiter-calls'),
         api.get('/api/service-requests'),
       ]);
-      if (ordersRes.success) setOrders(ordersRes.data);
+      if (ordersRes.success) {
+        setOrders(ordersRes.data);
+        setOrdersHasMore(Boolean(ordersRes.pagination?.hasMore));
+        setOrdersCursor(ordersRes.pagination?.nextCursor ?? null);
+      }
       if (callsRes.success) setWaiterCalls(callsRes.data);
       if (serviceRes.success) setServiceRequests(serviceRes.data);
     } finally {
@@ -120,6 +142,35 @@ export function OrdersPage() {
       setRefreshing(false);
     }
   }, [api, statusFilter]);
+
+  const loadMoreOrders = useCallback(async () => {
+    if (!api.effectiveBranchId) return;
+    if (!ordersHasMore || !ordersCursor) return;
+    if (ordersLoadingMore) return;
+    setOrdersLoadingMore(true);
+    try {
+      const qs = statusFilter ? `?status=${statusFilter}&limit=100` : '?limit=100';
+      const res = await api.get(`/api/orders${qs}&cursor=${ordersCursor}`);
+      if (!res?.success) return;
+
+      const newOrders: any[] = Array.isArray(res.data) ? res.data : [];
+      setOrders((prev) => {
+        const seen = new Set(prev.map((o) => o.id));
+        const merged = [...prev];
+        for (const o of newOrders) {
+          if (o?.id && !seen.has(o.id)) {
+            merged.push(o);
+            seen.add(o.id);
+          }
+        }
+        return merged;
+      });
+      setOrdersHasMore(Boolean(res.pagination?.hasMore));
+      setOrdersCursor(res.pagination?.nextCursor ?? null);
+    } finally {
+      setOrdersLoadingMore(false);
+    }
+  }, [api, ordersCursor, ordersHasMore, ordersLoadingMore, statusFilter]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -217,6 +268,78 @@ export function OrdersPage() {
       setOrderAssigningId((v) => (v === orderId ? null : v));
     }
   }
+
+  const loadStale = useCallback(
+    async (opts?: { reset?: boolean }) => {
+      if (!api.effectiveBranchId) return;
+      const reset = opts?.reset ?? false;
+      if (staleLoading) return;
+      setStaleLoading(true);
+      try {
+        const cursor = reset ? null : staleCursor;
+        const base = `/api/orders/stale?minAgeMinutes=${staleMinAgeMinutes}&limit=50`;
+        const url = cursor ? `${base}&cursor=${encodeURIComponent(cursor)}` : base;
+        const res = await api.get(url);
+        if (!res?.success) return;
+
+        const data: any[] = Array.isArray(res.data) ? res.data : [];
+        if (reset) {
+          setStaleOrders(data);
+          setStaleSelected(new Set());
+        } else {
+          setStaleOrders((prev) => {
+            const seen = new Set(prev.map((o) => o.id));
+            const merged = [...prev];
+            for (const o of data) {
+              if (o?.id && !seen.has(o.id)) {
+                merged.push(o);
+                seen.add(o.id);
+              }
+            }
+            return merged;
+          });
+        }
+        setStaleHasMore(Boolean(res.pagination?.hasMore));
+        setStaleCursor(res.pagination?.nextCursor ?? null);
+      } finally {
+        setStaleLoading(false);
+      }
+    },
+    [api, staleCursor, staleLoading, staleMinAgeMinutes],
+  );
+
+  const reconcileSelected = useCallback(
+    async (action: 'SERVE' | 'CANCEL') => {
+      if (!canReconcile) return;
+      if (staleActionLoading) return;
+      const orderIds = Array.from(staleSelected);
+      if (orderIds.length === 0) return;
+      setStaleActionLoading(true);
+      try {
+        const payload =
+          action === 'CANCEL'
+            ? { orderIds, action, reason: staleCancelReason.trim() || 'Backlog cleanup' }
+            : { orderIds, action };
+        const res = await api.post('/api/orders/reconcile', payload);
+        if (!res?.success) return;
+        await Promise.all([loadStale({ reset: true }), load()]);
+      } finally {
+        setStaleActionLoading(false);
+      }
+    },
+    [api, canReconcile, load, loadStale, staleActionLoading, staleCancelReason, staleSelected],
+  );
+
+  const forceSync = useCallback(async () => {
+    if (!canReconcile) return;
+    if (forceSyncing) return;
+    setForceSyncing(true);
+    try {
+      await api.post('/api/orders/force-sync', { reason: 'Admin requested resync' });
+    } finally {
+      setForceSyncing(false);
+    }
+  }, [api, canReconcile, forceSyncing]);
 
   async function saveCallEdit() {
     if (!editingCall) return;
@@ -334,14 +457,37 @@ export function OrdersPage() {
               </>
             )}
           </div>
-          <button
-            className="btn btn-secondary btn-sm disabled:opacity-50 w-full sm:w-auto"
-            onClick={load}
-            disabled={refreshing}
-          >
-            <span className={refreshing ? 'animate-spin inline-block mr-1' : 'mr-1'}>↻</span>
-            {refreshing ? 'Refreshing...' : 'Refresh'}
-          </button>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            {activeTab === 'orders' && canReconcile && (
+              <button
+                className="btn btn-secondary btn-sm disabled:opacity-50 w-full sm:w-auto"
+                onClick={() => {
+                  setStaleOpen(true);
+                  void loadStale({ reset: true });
+                }}
+                disabled={staleLoading}
+              >
+                {staleLoading ? 'Loading…' : 'Stale Orders'}
+              </button>
+            )}
+            {activeTab === 'orders' && canReconcile && (
+              <button
+                className="btn btn-secondary btn-sm disabled:opacity-50 w-full sm:w-auto"
+                onClick={() => forceSync().catch(() => void 0)}
+                disabled={forceSyncing}
+              >
+                {forceSyncing ? 'Syncing…' : 'Force Resync'}
+              </button>
+            )}
+            <button
+              className="btn btn-secondary btn-sm disabled:opacity-50 w-full sm:w-auto"
+              onClick={load}
+              disabled={refreshing}
+            >
+              <span className={refreshing ? 'animate-spin inline-block mr-1' : 'mr-1'}>↻</span>
+              {refreshing ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -495,6 +641,17 @@ export function OrdersPage() {
               ))}
             </tbody>
           </table>
+          {ordersHasMore && (
+            <div className="flex items-center justify-center p-3 border-t border-[var(--border)]">
+              <button
+                className="btn btn-secondary btn-sm disabled:opacity-50"
+                onClick={loadMoreOrders}
+                disabled={ordersLoadingMore}
+              >
+                {ordersLoadingMore ? 'Loading…' : 'Load Older'}
+              </button>
+            </div>
+          )}
         </div>
       ) : activeTab === 'calls' ? (
         <div className="card overflow-x-auto">
@@ -803,6 +960,169 @@ export function OrdersPage() {
               >
                 {editSaving ? 'Saving…' : 'Save'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {staleOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setStaleOpen(false)}
+        >
+          <div className="card w-full max-w-4xl p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="font-display text-2xl">STALE ORDERS</h2>
+                <p className="text-sm text-[var(--muted)]">
+                  Orders older than the threshold based on last update time.
+                </p>
+              </div>
+              <button className="btn btn-secondary btn-sm" onClick={() => setStaleOpen(false)}>
+                Close
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="flex items-center gap-2">
+                  <label htmlFor="admin_stale_min_age" className="mb-0 text-sm">
+                    Min age (minutes)
+                  </label>
+                  <input
+                    id="admin_stale_min_age"
+                    name="minAgeMinutes"
+                    type="number"
+                    min={5}
+                    max={43200}
+                    value={staleMinAgeMinutes}
+                    onChange={(e) => setStaleMinAgeMinutes(Number(e.target.value))}
+                    className="w-28 text-sm"
+                  />
+                  <button
+                    className="btn btn-secondary btn-sm disabled:opacity-50"
+                    onClick={() => loadStale({ reset: true })}
+                    disabled={staleLoading}
+                  >
+                    {staleLoading ? 'Loading…' : 'Reload'}
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2 ml-auto">
+                  <button
+                    className="btn btn-secondary btn-sm disabled:opacity-50"
+                    onClick={() =>
+                      setStaleSelected((prev) => {
+                        if (prev.size === staleOrders.length) return new Set();
+                        return new Set(staleOrders.map((o) => o.id));
+                      })
+                    }
+                    disabled={staleOrders.length === 0}
+                  >
+                    {staleSelected.size === staleOrders.length && staleOrders.length > 0
+                      ? 'Clear'
+                      : 'Select All'}
+                  </button>
+                  <button
+                    className="btn btn-primary btn-sm disabled:opacity-50"
+                    onClick={() => reconcileSelected('SERVE')}
+                    disabled={staleSelected.size === 0 || staleActionLoading}
+                  >
+                    {staleActionLoading ? 'Working…' : 'Serve Selected'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-end">
+                <div className="flex-1">
+                  <label htmlFor="admin_stale_cancel_reason" className="text-sm">
+                    Cancel reason (required for cancel)
+                  </label>
+                  <input
+                    id="admin_stale_cancel_reason"
+                    name="cancelReason"
+                    value={staleCancelReason}
+                    onChange={(e) => setStaleCancelReason(e.target.value)}
+                    className="w-full text-sm"
+                    placeholder="Backlog cleanup"
+                  />
+                </div>
+                <button
+                  className="btn btn-sm border border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white disabled:opacity-50"
+                  onClick={() => reconcileSelected('CANCEL')}
+                  disabled={staleSelected.size === 0 || staleActionLoading}
+                >
+                  {staleActionLoading ? 'Working…' : 'Cancel Selected'}
+                </button>
+              </div>
+            </div>
+
+            <div className="card overflow-x-auto">
+              <table className="min-w-[900px]">
+                <thead>
+                  <tr>
+                    <th />
+                    <th>Order</th>
+                    <th>Table</th>
+                    <th>Status</th>
+                    <th>Updated</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {staleOrders.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center text-[var(--muted)] py-10">
+                        No stale orders found
+                      </td>
+                    </tr>
+                  )}
+                  {staleOrders.map((o) => (
+                    <tr key={o.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={staleSelected.has(o.id)}
+                          onChange={() =>
+                            setStaleSelected((prev) => {
+                              const n = new Set(prev);
+                              if (n.has(o.id)) n.delete(o.id);
+                              else n.add(o.id);
+                              return n;
+                            })
+                          }
+                        />
+                      </td>
+                      <td className="font-mono text-xs text-[var(--muted)]">
+                        {String(o.id).slice(-6).toUpperCase()}
+                      </td>
+                      <td className="font-medium">{o.table?.label || '—'}</td>
+                      <td>
+                        <span className={'text-xs font-bold ' + (SC[o.status] || '')}>
+                          {o.status}
+                        </span>
+                      </td>
+                      <td className="text-[var(--muted)] text-xs">
+                        {o.updatedAt ? new Date(o.updatedAt).toLocaleString() : '—'}
+                      </td>
+                      <td className="text-[var(--muted)] text-xs">
+                        {o.createdAt ? new Date(o.createdAt).toLocaleString() : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {staleHasMore && (
+                <div className="flex items-center justify-center p-3 border-t border-[var(--border)]">
+                  <button
+                    className="btn btn-secondary btn-sm disabled:opacity-50"
+                    onClick={() => loadStale({ reset: false })}
+                    disabled={staleLoading}
+                  >
+                    {staleLoading ? 'Loading…' : 'Load More'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

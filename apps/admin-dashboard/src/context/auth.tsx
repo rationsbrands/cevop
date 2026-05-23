@@ -367,6 +367,8 @@ export function useApi() {
       pathname.startsWith('/api/orders') ||
       pathname.startsWith('/api/waiter-calls') ||
       pathname.startsWith('/api/service-requests') ||
+      pathname.startsWith('/api/sections') ||
+      pathname.startsWith('/api/sessions') ||
       pathname.startsWith('/api/help-options') ||
       pathname.startsWith('/api/waiter-tasks')
     );
