@@ -75,3 +75,5 @@ tmp/
 **/tmp/
 .tmp/
 **/.tmp/
+.agents/
+.DS_Store
