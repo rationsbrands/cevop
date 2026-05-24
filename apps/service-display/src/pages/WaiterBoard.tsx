@@ -18,6 +18,44 @@ interface TaskItem {
   originalData: any;
 }
 
+type WaiterSnapshot = {
+  ts: number;
+  tables: any[];
+  tasks: TaskItem[];
+};
+
+function readWaiterSnapshot(key: string): WaiterSnapshot | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as WaiterSnapshot;
+    if (!parsed || typeof parsed.ts !== 'number') return null;
+    if (!Array.isArray(parsed.tables) || !Array.isArray(parsed.tasks)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeWaiterSnapshot(key: string, snapshot: WaiterSnapshot): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(snapshot));
+  } catch {
+    void 0;
+  }
+}
+
+function waiterSnapshotKey(params: {
+  organizationId?: string;
+  branchId?: string | null;
+  userId?: string | null;
+}): string | null {
+  if (!params.organizationId) return null;
+  const scope = params.branchId ? `branch:${params.branchId}` : 'org';
+  const who = params.userId ? `user:${params.userId}` : 'user:unknown';
+  return `cevop_service_snapshot:waiter:${params.organizationId}:${scope}:${who}`;
+}
+
 function elapsed(dateStr: string): string {
   const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
   if (diff < 60) return `${diff}s`;
@@ -53,8 +91,10 @@ function getServiceTypeColor(serviceType: string): string {
 }
 
 export function WaiterBoard() {
-  const { user, token, logout, silentRefresh, updateUser } = useAuth();
+  const { user, token, logout, silentRefresh, updateUser, pushStatus, enablePush } = useAuth();
   const { mode, setMode } = useTheme();
+  const [installAvailable, setInstallAvailable] = useState(false);
+  const [installHelpOpen, setInstallHelpOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'tasks' | 'tables'>('tasks');
   const [tables, setTables] = useState<any[]>([]);
   const tablesRef = useRef<any[]>([]);
@@ -62,6 +102,7 @@ export function WaiterBoard() {
   const [unassignedTasks, setUnassignedTasks] = useState<TaskItem[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [offlineSnapshotTs, setOfflineSnapshotTs] = useState<number | null>(null);
   const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [shiftBusy, setShiftBusy] = useState(false);
@@ -91,6 +132,37 @@ export function WaiterBoard() {
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
+
+  const isStandalone =
+    typeof window !== 'undefined' &&
+    (window.matchMedia?.('(display-mode: standalone)')?.matches || (navigator as any)?.standalone);
+  const isIos =
+    typeof navigator !== 'undefined' &&
+    /iphone|ipad|ipod/i.test(navigator.userAgent) &&
+    !(window as any).MSStream;
+  const showInstallButton = !isStandalone && (installAvailable || isIos);
+
+  useEffect(() => {
+    const update = () => setInstallAvailable(!!(window as any).__cevopDeferredInstallPrompt);
+    update();
+    window.addEventListener('cevop-install-available', update as any);
+    return () => window.removeEventListener('cevop-install-available', update as any);
+  }, []);
+
+  const handleInstall = useCallback(async () => {
+    const deferred = (window as any).__cevopDeferredInstallPrompt;
+    if (deferred && typeof deferred.prompt === 'function') {
+      try {
+        await deferred.prompt();
+        await deferred.userChoice.catch(() => void 0);
+      } finally {
+        (window as any).__cevopDeferredInstallPrompt = null;
+        window.dispatchEvent(new Event('cevop-install-available'));
+      }
+      return;
+    }
+    if (isIos) setInstallHelpOpen(true);
+  }, [isIos]);
 
   const playAlert = useCallback(() => {
     try {
@@ -145,52 +217,92 @@ export function WaiterBoard() {
     if (isWaiter && !isOnShift) {
       setMyTasks([]);
       setUnassignedTasks([]);
+      setOfflineSnapshotTs(null);
       return;
     }
     if (!token) return;
-    const freshToken = await silentRefresh();
-    if (!freshToken) return;
-    const h = { Authorization: `Bearer ${freshToken}` };
-    const bq = userBranchId ? `&branchId=${userBranchId}` : '';
+    const cacheKey = waiterSnapshotKey({
+      organizationId: user?.organizationId,
+      branchId: userBranchId,
+      userId,
+    });
 
-    const [callsRes, serviceRes, ordersRes, tablesRes] = await Promise.all([
-      fetch(`${API_BASE}/api/waiter-calls?status=PENDING${bq}`, { headers: h }),
-      fetch(`${API_BASE}/api/service-requests?status=PENDING${bq}`, { headers: h }),
-      fetch(`${API_BASE}/api/orders?status=READY&limit=50${bq}`, { headers: h }),
-      fetch(`${API_BASE}/api/tables?_=${Date.now()}`, { headers: h }),
-    ]);
-
-    const [callsData, serviceData, ordersData, tablesData] = await Promise.all([
-      callsRes.json(),
-      serviceRes.json(),
-      ordersRes.json(),
-      tablesRes.json(),
-    ]);
-
-    if (tablesData.success) {
-      tablesRef.current = tablesData.data;
-      setTables(tablesData.data);
+    if (!navigator.onLine && cacheKey) {
+      const snap = readWaiterSnapshot(cacheKey);
+      if (snap) {
+        tablesRef.current = snap.tables;
+        setTables(snap.tables);
+        setMyTasks(snap.tasks.filter((t) => t.assignedTo === userId));
+        setUnassignedTasks(snap.tasks.filter((t) => t.assignedTo === null));
+        setOfflineSnapshotTs(snap.ts);
+      }
+      return;
     }
 
-    const allTasks: TaskItem[] = [];
-    if (callsData.success) {
-      callsData.data.forEach((c: any) => allTasks.push(normaliseTask('WAITER_CALL', c)));
-    }
-    if (serviceData.success) {
-      serviceData.data.forEach((s: any) => allTasks.push(normaliseTask('SERVICE_REQUEST', s)));
-    }
-    if (ordersData.success) {
-      ordersData.data
-        .filter((o: any) => o.status === 'READY')
-        .forEach((o: any) => allTasks.push(normaliseTask('ORDER_READY', o)));
-    }
+    try {
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const h = { Authorization: `Bearer ${freshToken}` };
+      const bq = userBranchId ? `&branchId=${userBranchId}` : '';
 
-    // Deduplicate allTasks by ID to prevent React key warnings
-    const uniqueTasks = Array.from(new Map(allTasks.map((t) => [t.id, t])).values());
+      const [callsRes, serviceRes, ordersRes, tablesRes] = await Promise.all([
+        fetch(`${API_BASE}/api/waiter-calls?status=PENDING${bq}`, { headers: h }),
+        fetch(`${API_BASE}/api/service-requests?status=PENDING${bq}`, { headers: h }),
+        fetch(`${API_BASE}/api/orders?status=READY&limit=50${bq}`, { headers: h }),
+        fetch(`${API_BASE}/api/tables?_=${Date.now()}`, { headers: h }),
+      ]);
 
-    setMyTasks(uniqueTasks.filter((t) => t.assignedTo === userId));
-    setUnassignedTasks(uniqueTasks.filter((t) => t.assignedTo === null));
-  }, [isOnShift, isWaiter, normaliseTask, silentRefresh, token, userBranchId, userId]);
+      if (!callsRes.ok || !serviceRes.ok || !ordersRes.ok || !tablesRes.ok) {
+        throw new Error('Network error');
+      }
+
+      const [callsData, serviceData, ordersData, tablesData] = await Promise.all([
+        callsRes.json(),
+        serviceRes.json(),
+        ordersRes.json(),
+        tablesRes.json(),
+      ]);
+
+      const nextTables = tablesData?.success ? tablesData.data : tablesRef.current;
+      if (tablesData?.success) {
+        tablesRef.current = nextTables;
+        setTables(nextTables);
+      }
+
+      const allTasks: TaskItem[] = [];
+      if (callsData?.success) {
+        callsData.data.forEach((c: any) => allTasks.push(normaliseTask('WAITER_CALL', c)));
+      }
+      if (serviceData?.success) {
+        serviceData.data.forEach((s: any) => allTasks.push(normaliseTask('SERVICE_REQUEST', s)));
+      }
+      if (ordersData?.success) {
+        ordersData.data
+          .filter((o: any) => o.status === 'READY')
+          .forEach((o: any) => allTasks.push(normaliseTask('ORDER_READY', o)));
+      }
+
+      const uniqueTasks = Array.from(new Map(allTasks.map((t) => [t.id, t])).values());
+      setMyTasks(uniqueTasks.filter((t) => t.assignedTo === userId));
+      setUnassignedTasks(uniqueTasks.filter((t) => t.assignedTo === null));
+      setOfflineSnapshotTs(null);
+
+      if (cacheKey) {
+        writeWaiterSnapshot(cacheKey, { ts: Date.now(), tables: nextTables, tasks: uniqueTasks });
+      }
+    } catch {
+      if (cacheKey) {
+        const snap = readWaiterSnapshot(cacheKey);
+        if (snap) {
+          tablesRef.current = snap.tables;
+          setTables(snap.tables);
+          setMyTasks(snap.tasks.filter((t) => t.assignedTo === userId));
+          setUnassignedTasks(snap.tasks.filter((t) => t.assignedTo === null));
+          setOfflineSnapshotTs(snap.ts);
+        }
+      }
+    }
+  }, [isOnShift, isWaiter, normaliseTask, silentRefresh, token, user, userBranchId, userId]);
 
   const loadTasksRef = useRef(loadTasks);
   useEffect(() => {
@@ -378,7 +490,10 @@ export function WaiterBoard() {
 
   // Online/offline
   useEffect(() => {
-    const up = () => setIsOnline(true);
+    const up = () => {
+      setIsOnline(true);
+      refreshNowRef.current().catch(() => void 0);
+    };
     const down = () => setIsOnline(false);
     window.addEventListener('online', up);
     window.addEventListener('offline', down);
@@ -386,6 +501,15 @@ export function WaiterBoard() {
       window.removeEventListener('online', up);
       window.removeEventListener('offline', down);
     };
+  }, []);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      refreshNowRef.current().catch(() => void 0);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
   async function resolveTask(task: TaskItem) {
@@ -477,6 +601,27 @@ export function WaiterBoard() {
       setUpdatingItems((prev) => {
         const n = new Set(prev);
         n.delete(sessionId);
+        return n;
+      });
+    }
+  }
+
+  async function markTableEmpty(tableId: string) {
+    if (updatingItems.has(tableId)) return;
+    setUpdatingItems((prev) => new Set(prev).add(tableId));
+    try {
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const res = await fetch(`${API_BASE}/api/tables/${tableId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ status: 'EMPTY' }),
+      });
+      if (!res.ok) await loadTasks();
+    } finally {
+      setUpdatingItems((prev) => {
+        const n = new Set(prev);
+        n.delete(tableId);
         return n;
       });
     }
@@ -582,13 +727,34 @@ export function WaiterBoard() {
 
   return (
     <div className="h-dvh flex flex-col bg-[var(--bg)] overflow-hidden relative">
+      {installHelpOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="text-sm font-bold tracking-wider text-[var(--text)]">
+              Install on iPhone
+            </div>
+            <div className="mt-2 text-xs text-[var(--muted)] leading-relaxed">
+              Tap Share, then Add to Home Screen. Open Cevop from the Home Screen to receive alerts
+              while the phone is asleep.
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setInstallHelpOpen(false)}
+                className="text-xs border border-[var(--border)] px-3 py-1.5 text-[var(--muted)] hover:text-[var(--text)]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="text-texture" />
       {/* Header */}
       <header className="flex items-center justify-between px-2 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-1.5 overflow-hidden relative z-20">
         <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 shrink">
-          <h1 className="text-sm sm:text-2xl text-[var(--accent)] flex items-baseline gap-1 shrink-0">
-            <span className="brand-mark">CEVOP</span>
-            <span className="font-display hidden xs:inline">WAITER</span>
+          <h1 className="text-sm sm:text-2xl flex items-center gap-2 shrink-0">
+            <span role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-md" />
+            <span className="font-display hidden xs:inline text-[var(--accent)]">WAITER</span>
           </h1>
           <div
             className={`flex items-center gap-1 sm:gap-1.5 text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 font-mono ${
@@ -619,6 +785,27 @@ export function WaiterBoard() {
           >
             {refreshing ? '...' : 'REFRESH'}
           </button>
+          {pushStatus !== 'unsupported' && pushStatus !== 'on' && (
+            <button
+              onClick={() => enablePush().catch(() => void 0)}
+              disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
+              className="text-[9px] sm:text-xs border border-[var(--border)] px-2 sm:px-3 py-1 font-bold tracking-tight disabled:opacity-50 whitespace-nowrap rounded-full font-display text-[var(--muted)] hover:text-[var(--text)]"
+            >
+              {pushStatus === 'loading'
+                ? '...'
+                : pushStatus === 'blocked'
+                  ? 'ALERTS BLOCKED'
+                  : 'ENABLE ALERTS'}
+            </button>
+          )}
+          {showInstallButton && (
+            <button
+              onClick={() => handleInstall().catch(() => void 0)}
+              className="text-[9px] sm:text-xs border border-[var(--border)] px-2 sm:px-3 py-1 font-bold tracking-tight whitespace-nowrap rounded-full font-display text-[var(--muted)] hover:text-[var(--text)]"
+            >
+              INSTALL
+            </button>
+          )}
           {isWaiter && (
             <button
               onClick={isOnShift ? endShift : startShift}
@@ -647,6 +834,11 @@ export function WaiterBoard() {
           </button>
         </div>
       </header>
+      {(!isOnline || !socketConnected) && offlineSnapshotTs && (
+        <div className="px-2 sm:px-4 py-1 text-[10px] sm:text-xs text-[var(--muted)] border-b border-[var(--border)] bg-[var(--surface)]">
+          Showing last saved snapshot — {new Date(offlineSnapshotTs).toLocaleString()}
+        </div>
+      )}
 
       {shiftError && (
         <div className="px-4 py-2 bg-red-900/20 border-b border-red-800 text-red-400 text-xs">
@@ -771,7 +963,7 @@ export function WaiterBoard() {
                       {t.status}
                     </div>
                   </div>
-                  {t.activeSessionId && (
+                  {t.activeSessionId ? (
                     <button
                       onClick={() => clearTable(t.activeSessionId)}
                       disabled={updatingItems.has(t.activeSessionId)}
@@ -779,7 +971,15 @@ export function WaiterBoard() {
                     >
                       {updatingItems.has(t.activeSessionId) ? 'CLEARING...' : 'CLEAR TABLE'}
                     </button>
-                  )}
+                  ) : t.status === 'CLEANING' ? (
+                    <button
+                      onClick={() => markTableEmpty(t.id)}
+                      disabled={updatingItems.has(t.id)}
+                      className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50"
+                    >
+                      {updatingItems.has(t.id) ? 'UPDATING...' : 'MARK CLEAN'}
+                    </button>
+                  ) : null}
                 </div>
               ))}
           {(!isWaiter || isOnShift) && tables.filter((t) => t.isActive).length === 0 && (

@@ -19,6 +19,15 @@ const PLATFORM_SLUG = 'cevop-internal'; // Internal platform org — excluded fr
 export const opsRouter = Router();
 opsRouter.use(authenticate, requireRole('SUPERADMIN'));
 
+function getImpersonationCodeStore(): Map<
+  string,
+  { token: string; expiresAt: number; orgId: string; opsUserId: string; createdAt: number }
+> {
+  const g = globalThis as any;
+  if (!g.__cevopImpersonationCodeStore) g.__cevopImpersonationCodeStore = new Map();
+  return g.__cevopImpersonationCodeStore;
+}
+
 // ─── Platform metrics ─────────────────────────────────────────────────────────
 // In-memory cache for ops metrics — 60s TTL (ops dashboard doesn't need real-time)
 let metricsCache: { data: unknown; expiresAt: number } | null = null;
@@ -127,7 +136,14 @@ opsRouter.get(
       const skip = (parseInt(page) - 1) * parseInt(limit);
 
       const where: Prisma.OrganizationWhereInput = { slug: { not: PLATFORM_SLUG } };
-      if (planStatus) where.planStatus = planStatus;
+      if (planStatus) {
+        const statuses = planStatus
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (statuses.length === 1) where.planStatus = statuses[0];
+        else if (statuses.length > 1) where.planStatus = { in: statuses as any };
+      }
       if (plan) where.plan = plan;
       if (search) {
         where.OR = [
@@ -422,7 +438,17 @@ opsRouter.post(
           // Don't fail the request if audit log fails — just log it
         });
 
-      res.json({ success: true, data: { token } });
+      const code = crypto.randomBytes(24).toString('hex');
+      const expiresAt = Date.now() + 2 * 60 * 1000;
+      getImpersonationCodeStore().set(code, {
+        token,
+        expiresAt,
+        orgId: org.id,
+        opsUserId: req.user!.userId,
+        createdAt: Date.now(),
+      });
+
+      res.json({ success: true, data: { code, expiresAt } });
     } catch {
       res.status(500).json({ success: false, error: 'Failed to impersonate' });
     }

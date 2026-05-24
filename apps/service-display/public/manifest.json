@@ -1,0 +1,19 @@
+{
+  "name": "Cevop Service",
+  "short_name": "Cevop",
+  "description": "Real-time service display for Cevop restaurants",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0D0D0D",
+  "theme_color": "#00B3A6",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Cpath%20fill%3D%27%2300B3A6%27%20fill-rule%3D%27evenodd%27%20d%3D%27M22%2012a20%2020%200%201%200%200%2040a20%2020%200%201%200%200-40ZM30%2018a14%2014%200%201%201%200%2028a14%2014%200%201%201%200-28Z%27%2F%3E%3C%2Fsvg%3E",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["business", "productivity"]
+}

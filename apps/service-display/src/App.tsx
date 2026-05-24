@@ -1,6 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './services/auth';
+import { InstallPrompt } from './components/InstallPrompt';
 import './index.css';
 
 const ServiceBoard = React.lazy(() =>
@@ -59,6 +60,7 @@ function AppRoutes() {
           }
         />
       </Routes>
+      <InstallPrompt />
     </React.Suspense>
   );
 }

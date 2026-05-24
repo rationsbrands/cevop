@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApi, usePermission } from '../context/auth';
+import { ConfirmDialog, showToast } from '../components/Popup';
 
 interface TeamMember {
   id: string;
@@ -23,6 +24,46 @@ export function TeamPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmLabel, setConfirmLabel] = useState('Confirm');
+  const [confirmVariant, setConfirmVariant] = useState<'default' | 'danger'>('default');
+  const confirmActionRef = useRef<null | (() => Promise<void> | void)>(null);
+
+  function openConfirm(opts: {
+    title: string;
+    message?: string;
+    confirmLabel?: string;
+    variant?: 'default' | 'danger';
+    action: () => Promise<void> | void;
+  }) {
+    confirmActionRef.current = opts.action;
+    setConfirmTitle(opts.title);
+    setConfirmMessage(opts.message ?? '');
+    setConfirmLabel(opts.confirmLabel ?? 'Confirm');
+    setConfirmVariant(opts.variant ?? 'default');
+    setConfirmOpen(true);
+  }
+
+  async function onConfirm() {
+    if (confirmBusy) return;
+    const action = confirmActionRef.current;
+    if (!action) {
+      setConfirmOpen(false);
+      return;
+    }
+    setConfirmBusy(true);
+    try {
+      await action();
+      setConfirmOpen(false);
+    } catch (e: any) {
+      showToast(e?.message ? String(e.message) : 'Action failed', 'error');
+    } finally {
+      setConfirmBusy(false);
+    }
+  }
 
   const loadTeam = useCallback(async () => {
     setLoading(true);
@@ -65,15 +106,21 @@ export function TeamPage() {
 
   async function toggleActive(member: TeamMember) {
     const action = member.isActive ? 'deactivate' : 'reactivate';
-    if (!confirm(`${action === 'deactivate' ? 'Deactivate' : 'Reactivate'} ${member.name}?`))
-      return;
-    try {
-      const res = await api.patch(`/api/ops/team/${member.id}`, { isActive: !member.isActive });
-      if (res.success) await loadTeam();
-      else setError(res.error || 'Failed to update');
-    } catch {
-      setError('Something went wrong');
-    }
+    openConfirm({
+      title: action === 'deactivate' ? 'Deactivate Member' : 'Reactivate Member',
+      message: `${action === 'deactivate' ? 'Deactivate' : 'Reactivate'} ${member.name}?`,
+      confirmLabel: action === 'deactivate' ? 'Deactivate' : 'Reactivate',
+      variant: action === 'deactivate' ? 'danger' : 'default',
+      action: async () => {
+        try {
+          const res = await api.patch(`/api/ops/team/${member.id}`, { isActive: !member.isActive });
+          if (res.success) await loadTeam();
+          else setError(res.error || 'Failed to update');
+        } catch {
+          setError('Something went wrong');
+        }
+      },
+    });
   }
 
   if (!can('view_team')) {
@@ -86,6 +133,19 @@ export function TeamPage() {
 
   return (
     <div className="space-y-6">
+      <ConfirmDialog
+        open={confirmOpen}
+        title={confirmTitle}
+        message={confirmMessage}
+        confirmLabel={confirmLabel}
+        variant={confirmVariant}
+        busy={confirmBusy}
+        onCancel={() => {
+          if (confirmBusy) return;
+          setConfirmOpen(false);
+        }}
+        onConfirm={() => void onConfirm()}
+      />
       <div className="flex items-start justify-between">
         <div>
           <h1 className="font-display text-2xl text-[var(--text)]">Ops Team</h1>

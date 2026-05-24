@@ -8,6 +8,7 @@ import React, {
   useCallback,
 } from 'react';
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
+import { subscribeToPush } from './push';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 const HAS_SESSION_KEY =
@@ -36,15 +37,30 @@ interface AuthContextType {
   logout: () => void;
   silentRefresh: () => Promise<string | null>;
   updateUser: (patch: Partial<User>) => void;
+  pushStatus: 'unsupported' | 'off' | 'on' | 'blocked' | 'loading';
+  enablePush: () => Promise<void>;
+  disablePush: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 const AUTH_HEADERS = { 'Content-Type': 'application/json', 'x-cevop-app': 'service' };
 
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pushStatus, setPushStatus] = useState<
+    'unsupported' | 'off' | 'on' | 'blocked' | 'loading'
+  >('unsupported');
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRefreshedAt = useRef<number>(0);
   const silentRefreshRef = useRef<() => void>(() => void 0);
@@ -56,6 +72,106 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem(HAS_SESSION_KEY);
     } catch {
       void 0;
+    }
+  }
+
+  const getWebPushPublicKey = useCallback(async (): Promise<string | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/push/public-key`, {
+        headers: AUTH_HEADERS,
+        credentials: 'include',
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      const key = json?.data?.publicKey;
+      return typeof key === 'string' && key.length > 10 ? key : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const subscribeCurrentDevice = useCallback(
+    async (accessToken: string): Promise<void> => {
+      if (typeof window === 'undefined') return;
+      if (
+        !('serviceWorker' in navigator) ||
+        !('PushManager' in window) ||
+        !('Notification' in window)
+      )
+        return;
+      if (Notification.permission !== 'granted') return;
+
+      const publicKey = await getWebPushPublicKey();
+      if (!publicKey) return;
+
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      const existing = await reg.pushManager.getSubscription();
+      const key = urlBase64ToUint8Array(publicKey) as Uint8Array<ArrayBuffer>;
+      const subscription =
+        existing ||
+        (await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: key,
+        }));
+
+      await fetch(`${API_BASE}/api/auth/push/subscribe`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { ...AUTH_HEADERS, Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
+      });
+    },
+    [getWebPushPublicKey],
+  );
+
+  async function enablePush(): Promise<void> {
+    if (typeof window === 'undefined') return;
+    if (!token) return;
+    if (
+      !('serviceWorker' in navigator) ||
+      !('PushManager' in window) ||
+      !('Notification' in window)
+    ) {
+      setPushStatus('unsupported');
+      return;
+    }
+    setPushStatus('loading');
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      setPushStatus(permission === 'denied' ? 'blocked' : 'off');
+      return;
+    }
+    try {
+      await subscribeCurrentDevice(token);
+      setPushStatus('on');
+    } catch {
+      setPushStatus('off');
+    }
+  }
+
+  async function disablePush(): Promise<void> {
+    if (typeof window === 'undefined') return;
+    if (!token) return;
+    if (!('serviceWorker' in navigator)) return;
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) return;
+      const sub = await reg.pushManager.getSubscription();
+      if (!sub) return;
+      const endpoint = sub.endpoint;
+      await sub.unsubscribe();
+      await fetch(`${API_BASE}/api/auth/push/unsubscribe`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { ...AUTH_HEADERS, Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ endpoint }),
+      });
+    } finally {
+      const supported =
+        'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+      if (!supported) setPushStatus('unsupported');
+      else if (Notification.permission === 'denied') setPushStatus('blocked');
+      else setPushStatus('off');
     }
   }
 
@@ -117,6 +233,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     document.addEventListener('visibilitychange', handleWake);
     return () => document.removeEventListener('visibilitychange', handleWake);
   }, [silentRefresh, token]);
+
+  useEffect(() => {
+    const supported =
+      typeof window !== 'undefined' &&
+      'serviceWorker' in navigator &&
+      'PushManager' in window &&
+      'Notification' in window;
+    if (!supported) {
+      Promise.resolve().then(() => setPushStatus('unsupported'));
+      return;
+    }
+    if (Notification.permission === 'granted') {
+      Promise.resolve().then(() => setPushStatus('on'));
+    } else if (Notification.permission === 'denied') {
+      Promise.resolve().then(() => setPushStatus('blocked'));
+    } else {
+      Promise.resolve().then(() => setPushStatus('off'));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!token) return;
+    const supported =
+      typeof window !== 'undefined' &&
+      'serviceWorker' in navigator &&
+      'PushManager' in window &&
+      'Notification' in window;
+    if (!supported) return;
+    if (Notification.permission !== 'granted') return;
+    subscribeCurrentDevice(token)
+      .then(() => setPushStatus('on'))
+      .catch(() => void 0);
+  }, [subscribeCurrentDevice, token]);
 
   useEffect(() => {
     (async () => {
@@ -185,7 +334,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: AUTH_HEADERS,
       });
     } catch {
-      /* ignore */
+      void 0;
     }
     doLogout();
   }
@@ -235,6 +384,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       void 0;
     }
+    subscribeToPush(data.accessToken, API_BASE).catch(() => void 0);
   }
 
   return (
@@ -247,6 +397,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         silentRefresh,
         updateUser: (patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev)),
+        pushStatus,
+        enablePush,
+        disablePush,
       }}
     >
       {children}

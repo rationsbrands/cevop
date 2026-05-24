@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth, useApi } from '../context/auth';
+import { ConfirmDialog, showToast } from '../components/Popup';
 
 interface Branch {
   id: string;
@@ -9,7 +10,6 @@ interface HelpOption {
   id: string;
   type: 'WAITER' | 'SERVICE' | 'BILL';
   label: string;
-  icon?: string;
   sortOrder: number;
   isActive: boolean;
   branchId?: string | null;
@@ -29,13 +29,52 @@ export function HelpOptionsPage() {
   const [form, setForm] = useState({
     type: 'SERVICE' as 'WAITER' | 'SERVICE' | 'BILL',
     label: '',
-    icon: '',
     sortOrder: 0,
     isActive: true,
     branchId: '' as string | null,
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmLabel, setConfirmLabel] = useState('Confirm');
+  const [confirmVariant, setConfirmVariant] = useState<'default' | 'danger'>('default');
+  const confirmActionRef = useRef<null | (() => Promise<void> | void)>(null);
+
+  function openConfirm(opts: {
+    title: string;
+    message?: string;
+    confirmLabel?: string;
+    variant?: 'default' | 'danger';
+    action: () => Promise<void> | void;
+  }) {
+    confirmActionRef.current = opts.action;
+    setConfirmTitle(opts.title);
+    setConfirmMessage(opts.message ?? '');
+    setConfirmLabel(opts.confirmLabel ?? 'Confirm');
+    setConfirmVariant(opts.variant ?? 'default');
+    setConfirmOpen(true);
+  }
+
+  async function onConfirm() {
+    if (confirmBusy) return;
+    const action = confirmActionRef.current;
+    if (!action) {
+      setConfirmOpen(false);
+      return;
+    }
+    setConfirmBusy(true);
+    try {
+      await action();
+      setConfirmOpen(false);
+    } catch (e: any) {
+      showToast(e?.message ? String(e.message) : 'Action failed', 'error');
+    } finally {
+      setConfirmBusy(false);
+    }
+  }
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
   function moveById<T extends { id: string }>(list: T[], fromId: string, toId: string): T[] {
@@ -95,7 +134,6 @@ export function HelpOptionsPage() {
       const payload: any = {
         type: form.type,
         label: form.label,
-        icon: form.icon,
         sortOrder: form.sortOrder,
         isActive: form.isActive,
       };
@@ -117,7 +155,6 @@ export function HelpOptionsPage() {
       setForm({
         type: 'SERVICE',
         label: '',
-        icon: '',
         sortOrder: 0,
         isActive: true,
         branchId: activeBranchFilter?.id || me?.branchId || '',
@@ -131,15 +168,20 @@ export function HelpOptionsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!window.confirm('Are you sure you want to delete this option?')) return;
-    try {
-      const res = await api.delete(`/api/help-options/${id}`);
-      if (res.success) {
-        setOptions((prev) => prev.filter((o) => o.id !== id));
-      }
-    } catch {
-      alert('Failed to delete help option');
-    }
+    openConfirm({
+      title: 'Delete Help Option',
+      message: 'Are you sure you want to delete this option?',
+      confirmLabel: 'Delete',
+      variant: 'danger',
+      action: async () => {
+        const res = await api.delete(`/api/help-options/${id}`);
+        if (res.success) {
+          setOptions((prev) => prev.filter((o) => o.id !== id));
+        } else {
+          throw new Error(res.error || 'Failed to delete help option');
+        }
+      },
+    });
   }
 
   function startEdit(opt: HelpOption) {
@@ -147,7 +189,6 @@ export function HelpOptionsPage() {
     setForm({
       type: opt.type,
       label: opt.label,
-      icon: opt.icon || '',
       sortOrder: opt.sortOrder,
       isActive: opt.isActive,
       branchId: opt.branchId || '',
@@ -174,6 +215,19 @@ export function HelpOptionsPage() {
 
   return (
     <div className="space-y-6 animate-in">
+      <ConfirmDialog
+        open={confirmOpen}
+        title={confirmTitle}
+        message={confirmMessage}
+        confirmLabel={confirmLabel}
+        variant={confirmVariant}
+        busy={confirmBusy}
+        onCancel={() => {
+          if (confirmBusy) return;
+          setConfirmOpen(false);
+        }}
+        onConfirm={() => void onConfirm()}
+      />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-4xl uppercase">Help Options</h1>
@@ -191,7 +245,6 @@ export function HelpOptionsPage() {
             setForm({
               type: 'SERVICE',
               label: '',
-              icon: '',
               sortOrder: nextSort,
               isActive: true,
               branchId: activeBranchFilter?.id || me?.branchId || '',
@@ -266,8 +319,10 @@ export function HelpOptionsPage() {
                 >
                   ≡
                 </button>
-                <div className="text-2xl w-12 h-12 flex items-center justify-center bg-[var(--surface2)] rounded-lg shrink-0 border border-[var(--border)]">
-                  {opt.icon || (opt.type === 'WAITER' ? '🛎️' : '✨')}
+                <div className="w-12 h-12 flex items-center justify-center bg-[var(--surface2)] rounded-lg shrink-0 border border-[var(--border)]">
+                  <span className="text-sm font-bold tracking-widest text-[var(--accent)]">
+                    {opt.type === 'WAITER' ? 'W' : opt.type === 'SERVICE' ? 'S' : 'B'}
+                  </span>
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
@@ -357,17 +412,6 @@ export function HelpOptionsPage() {
                 onChange={(e) => setForm({ ...form, label: e.target.value })}
                 placeholder="e.g. More Napkins"
                 required
-              />
-            </div>
-
-            <div>
-              <label htmlFor="help_option_icon">Icon (Emoji)</label>
-              <input
-                id="help_option_icon"
-                name="icon"
-                value={form.icon}
-                onChange={(e) => setForm({ ...form, icon: e.target.value })}
-                placeholder="e.g. Needs Assistance"
               />
             </div>
 

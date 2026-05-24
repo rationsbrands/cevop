@@ -69,18 +69,19 @@ export function VerifyEmailPage() {
 
       <div className="hidden lg:flex flex-col justify-between p-10 border-r border-[var(--border)] bg-[var(--surface)]">
         <div className="space-y-3">
-          <div className="brand-mark text-4xl text-[var(--accent)] leading-none">CEVOP</div>
+          <div role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-lg" />
           <p className="text-sm text-[var(--muted)] max-w-sm">Secure access for your team.</p>
         </div>
-        <div className="text-xs text-[var(--muted)] font-medium">
-          Powered by <span className="brand-mark text-[var(--text)]">CEVOP</span>
+        <div className="text-xs text-[var(--muted)] font-medium flex items-center gap-2">
+          <span>Powered by</span>
+          <div role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-sm" />
         </div>
       </div>
 
       <div className="flex items-center justify-center p-6">
         <div className="w-full max-w-md space-y-6 animate-in text-center">
-          <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">
-            CEVOP
+          <div className="flex justify-center lg:hidden">
+            <div role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-lg" />
           </div>
 
           <div className="card p-6 space-y-4">

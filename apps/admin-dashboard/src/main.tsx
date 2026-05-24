@@ -26,6 +26,39 @@ import { ThemeProvider } from './context/theme';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './index.css';
 
+type DeferredPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
+};
+
+declare global {
+  interface Window {
+    __cevopDeferredInstallPrompt?: DeferredPromptEvent | null;
+  }
+}
+
+try {
+  window.addEventListener('beforeinstallprompt', (e: Event) => {
+    e.preventDefault();
+    window.__cevopDeferredInstallPrompt = e as DeferredPromptEvent;
+    window.dispatchEvent(new Event('cevop-install-available'));
+  });
+  window.addEventListener('appinstalled', () => {
+    window.__cevopDeferredInstallPrompt = null;
+    window.dispatchEvent(new Event('cevop-install-available'));
+  });
+} catch {
+  void 0;
+}
+
+try {
+  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => void 0);
+  }
+} catch {
+  void 0;
+}
+
 const DashboardPage = React.lazy(() =>
   import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })),
 );
@@ -104,139 +137,145 @@ function PageLoader() {
 }
 
 import { Outlet } from 'react-router-dom';
+import { InstallPrompt } from './components/InstallPrompt';
 
 function AppRoutes() {
   return (
-    <Routes>
-      {/* Public */}
-      <Route
-        element={
-          <React.Suspense fallback={<PageLoader />}>
-            <Outlet />
-          </React.Suspense>
-        }
-      >
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/signup" element={<SignupPage />} />
-        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
-        <Route path="/verify-email/:token" element={<VerifyEmailPage />} />
-        <Route path="/accept-invite/:token" element={<AcceptInvitePage />} />
-      </Route>
-
-      {/* Protected */}
-      <Route
-        path="/"
-        element={
-          <Protected>
-            <React.Suspense
-              fallback={
-                <div className="min-h-dvh flex items-center justify-center bg-[var(--bg)]">
-                  <div className="w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
-                </div>
-              }
-            >
-              <SocketWrapper>
-                <Shell />
-              </SocketWrapper>
+    <>
+      <Routes>
+        {/* Public */}
+        <Route
+          element={
+            <React.Suspense fallback={<PageLoader />}>
+              <Outlet />
             </React.Suspense>
-          </Protected>
-        }
-      >
-        <Route index element={<DashboardPage />} />
-        <Route
-          path="orders"
-          element={
-            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-              <OrdersPage />
-            </RequireRole>
           }
-        />
+        >
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
+          <Route path="/verify-email/:token" element={<VerifyEmailPage />} />
+          <Route path="/accept-invite/:token" element={<AcceptInvitePage />} />
+        </Route>
+
+        {/* Protected */}
         <Route
-          path="menu"
+          path="/"
           element={
-            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-              <MenuPage />
-            </RequireRole>
+            <Protected>
+              <React.Suspense
+                fallback={
+                  <div className="min-h-dvh flex items-center justify-center bg-[var(--bg)]">
+                    <div className="w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                  </div>
+                }
+              >
+                <SocketWrapper>
+                  <Shell />
+                </SocketWrapper>
+              </React.Suspense>
+            </Protected>
           }
-        />
-        <Route
-          path="tables"
-          element={
-            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-              <TablesPage />
-            </RequireRole>
-          }
-        />
-        <Route
-          path="sections"
-          element={
-            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-              <SectionsPage />
-            </RequireRole>
-          }
-        />
-        <Route
-          path="users"
-          element={
-            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-              <UsersPage />
-            </RequireRole>
-          }
-        />
-        <Route
-          path="help-options"
-          element={
-            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-              <HelpOptionsPage />
-            </RequireRole>
-          }
-        />
-        <Route
-          path="settings"
-          element={
-            <RequireOrgAdmin>
-              <SettingsPage />
-            </RequireOrgAdmin>
-          }
-        />
-        <Route
-          path="branches"
-          element={
-            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER']}>
-              <BranchesPage />
-            </RequireRole>
-          }
-        />
-        <Route
-          path="reports"
-          element={
-            <RequireRole
-              roles={[
-                'ORG_OWNER',
-                'ADMIN',
-                'ORG_MANAGER',
-                'ORG_FINANCE',
-                'ORG_AUDITOR',
-                'BRANCH_ADMIN',
-                'BRANCH_FINANCE',
-                'SUPERADMIN',
-              ]}
-            >
-              <ReportsPage />
-            </RequireRole>
-          }
-        />
-        <Route
-          path="audit-logs"
-          element={
-            <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'ORG_AUDITOR', 'SUPERADMIN']}>
-              <AuditLogsPage />
-            </RequireRole>
-          }
-        />
-      </Route>
-    </Routes>
+        >
+          <Route index element={<DashboardPage />} />
+          <Route
+            path="orders"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+                <OrdersPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="menu"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+                <MenuPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="tables"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+                <TablesPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="sections"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+                <SectionsPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="users"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+                <UsersPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="help-options"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+                <HelpOptionsPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="settings"
+            element={
+              <RequireOrgAdmin>
+                <SettingsPage />
+              </RequireOrgAdmin>
+            }
+          />
+          <Route
+            path="branches"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER']}>
+                <BranchesPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="reports"
+            element={
+              <RequireRole
+                roles={[
+                  'ORG_OWNER',
+                  'ADMIN',
+                  'ORG_MANAGER',
+                  'ORG_FINANCE',
+                  'ORG_AUDITOR',
+                  'BRANCH_ADMIN',
+                  'BRANCH_FINANCE',
+                  'SUPERADMIN',
+                ]}
+              >
+                <ReportsPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="audit-logs"
+            element={
+              <RequireRole
+                roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'ORG_AUDITOR', 'SUPERADMIN']}
+              >
+                <AuditLogsPage />
+              </RequireRole>
+            }
+          />
+        </Route>
+      </Routes>
+      <InstallPrompt />
+    </>
   );
 }
 

@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth, useApi } from '../context/auth';
+import { ConfirmDialog, showToast } from '../components/Popup';
 
 interface Branch {
   id: string;
@@ -90,6 +91,46 @@ export function UsersPage() {
   const [editForm, setEditForm] = useState({ role: 'WAITER', branchId: '' });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmLabel, setConfirmLabel] = useState('Confirm');
+  const [confirmVariant, setConfirmVariant] = useState<'default' | 'danger'>('default');
+  const confirmActionRef = useRef<null | (() => Promise<void> | void)>(null);
+
+  function openConfirm(opts: {
+    title: string;
+    message?: string;
+    confirmLabel?: string;
+    variant?: 'default' | 'danger';
+    action: () => Promise<void> | void;
+  }) {
+    confirmActionRef.current = opts.action;
+    setConfirmTitle(opts.title);
+    setConfirmMessage(opts.message ?? '');
+    setConfirmLabel(opts.confirmLabel ?? 'Confirm');
+    setConfirmVariant(opts.variant ?? 'default');
+    setConfirmOpen(true);
+  }
+
+  async function onConfirm() {
+    if (confirmBusy) return;
+    const action = confirmActionRef.current;
+    if (!action) {
+      setConfirmOpen(false);
+      return;
+    }
+    setConfirmBusy(true);
+    try {
+      await action();
+      setConfirmOpen(false);
+    } catch (e: any) {
+      showToast(e?.message ? String(e.message) : 'Action failed', 'error');
+    } finally {
+      setConfirmBusy(false);
+    }
+  }
 
   const isOrgAdmin =
     !!me?.role && ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'].includes(me.role);
@@ -237,26 +278,30 @@ export function UsersPage() {
 
   async function deleteUser(user: User) {
     if (actionLoading.has(user.id)) return;
-    const ok = window.confirm(
-      `Deactivate ${user.name}? They will be logged out and won’t be able to sign in.`,
-    );
-    if (!ok) return;
-    setActionError('');
-    setActionLoading((prev) => new Set(prev).add(user.id));
-    try {
-      const { success, error: err } = await api.delete(`/api/users/${user.id}`);
-      if (!success) {
-        setActionError(err || 'Failed to deactivate user');
-        return;
-      }
-      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, isActive: false } : u)));
-    } finally {
-      setActionLoading((prev) => {
-        const n = new Set(prev);
-        n.delete(user.id);
-        return n;
-      });
-    }
+    openConfirm({
+      title: 'Deactivate User',
+      message: `Deactivate ${user.name}?\n\nThey will be logged out and won’t be able to sign in.`,
+      confirmLabel: 'Deactivate',
+      variant: 'danger',
+      action: async () => {
+        setActionError('');
+        setActionLoading((prev) => new Set(prev).add(user.id));
+        try {
+          const { success, error: err } = await api.delete(`/api/users/${user.id}`);
+          if (!success) {
+            setActionError(err || 'Failed to deactivate user');
+            return;
+          }
+          setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, isActive: false } : u)));
+        } finally {
+          setActionLoading((prev) => {
+            const n = new Set(prev);
+            n.delete(user.id);
+            return n;
+          });
+        }
+      },
+    });
   }
 
   async function saveUserEdit(e: React.FormEvent) {
@@ -316,7 +361,20 @@ export function UsersPage() {
   if (error) return <div className="text-red-400 text-sm">{error}</div>;
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6">
+      <ConfirmDialog
+        open={confirmOpen}
+        title={confirmTitle}
+        message={confirmMessage}
+        confirmLabel={confirmLabel}
+        variant={confirmVariant}
+        busy={confirmBusy}
+        onCancel={() => {
+          if (confirmBusy) return;
+          setConfirmOpen(false);
+        }}
+        onConfirm={() => void onConfirm()}
+      />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-4xl">STAFF</h1>
@@ -677,7 +735,7 @@ export function UsersPage() {
 
       {tab === 'users' ? (
         <div className="card overflow-x-auto">
-          <table className="w-full text-sm min-w-[600px]">
+          <table className="w-full text-sm min-w-[900px]">
             <thead>
               <tr className="border-b border-[var(--border)] text-left">
                 <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">
@@ -771,9 +829,9 @@ export function UsersPage() {
                       {u.isActive ? 'Active' : 'Inactive'}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
                     {u.id !== me?.id && (isOrgAdmin || isBranchAdmin) && (
-                      <div className="flex items-center justify-end gap-3">
+                      <div className="flex items-center justify-end gap-3 whitespace-nowrap">
                         <button
                           onClick={() => {
                             setEditingUser(u);
@@ -781,21 +839,21 @@ export function UsersPage() {
                             setEditError('');
                           }}
                           disabled={actionLoading.has(u.id)}
-                          className="text-xs text-[var(--muted)] hover:text-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          className="text-xs text-[var(--muted)] hover:text-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                         >
                           {isOrgAdmin ? 'Edit Role/Branch' : 'Edit Role'}
                         </button>
                         <button
                           onClick={() => resetPassword(u)}
                           disabled={actionLoading.has(u.id) || !u.isActive}
-                          className="text-xs text-[var(--muted)] hover:text-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          className="text-xs text-[var(--muted)] hover:text-[var(--accent)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                         >
                           {actionLoading.has(u.id) ? 'Working…' : 'Reset Password'}
                         </button>
                         <button
                           onClick={() => toggleActive(u)}
                           disabled={actionLoading.has(u.id)}
-                          className="text-xs text-[var(--muted)] hover:text-[var(--danger)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          className="text-xs text-[var(--muted)] hover:text-[var(--danger)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                         >
                           {u.isActive ? 'Deactivate' : 'Activate'}
                         </button>
@@ -803,7 +861,7 @@ export function UsersPage() {
                           <button
                             onClick={() => deleteUser(u)}
                             disabled={actionLoading.has(u.id)}
-                            className="text-xs text-[var(--danger)] hover:opacity-80 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="text-xs text-[var(--danger)] hover:opacity-80 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
                           >
                             Delete
                           </button>
@@ -825,7 +883,7 @@ export function UsersPage() {
         </div>
       ) : (
         <div className="card overflow-x-auto">
-          <table className="w-full text-sm min-w-[600px]">
+          <table className="w-full text-sm min-w-[900px]">
             <thead>
               <tr className="border-b border-[var(--border)] text-left">
                 <th className="px-4 py-3 text-xs text-[var(--muted)] uppercase tracking-wider">

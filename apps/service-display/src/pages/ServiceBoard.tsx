@@ -47,6 +47,44 @@ interface ServiceRequest {
   tableId: string;
 }
 
+type ServiceSnapshot = {
+  ts: number;
+  orders: Order[];
+  ordersHasMore: boolean;
+  ordersCursor: string | null;
+  waiterCalls: WaiterCall[];
+  serviceRequests: ServiceRequest[];
+  tables: any[];
+};
+
+function readServiceSnapshot(key: string): ServiceSnapshot | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ServiceSnapshot;
+    if (!parsed || typeof parsed.ts !== 'number') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeServiceSnapshot(key: string, snapshot: ServiceSnapshot): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(snapshot));
+  } catch {
+    void 0;
+  }
+}
+
+function serviceSnapshotKey(
+  user: { organizationId: string; branchId?: string | null } | null,
+): string | null {
+  if (!user?.organizationId) return null;
+  const scope = user.branchId ? `branch:${user.branchId}` : 'org';
+  return `cevop_service_snapshot:service:${user.organizationId}:${scope}`;
+}
+
 const ACTIVE_STATUSES = ['RECEIVED', 'PREPARING', 'READY'];
 const STATUS_COLOR: Record<string, string> = {
   RECEIVED: 'border-[var(--received)]',
@@ -90,8 +128,10 @@ function TimeElapsed({ createdAt, className }: { createdAt: string; className?: 
 }
 
 export function ServiceBoard() {
-  const { user, token, logout, silentRefresh } = useAuth();
+  const { user, token, logout, silentRefresh, pushStatus, enablePush } = useAuth();
   const { mode, setMode } = useTheme();
+  const [installAvailable, setInstallAvailable] = useState(false);
+  const [installHelpOpen, setInstallHelpOpen] = useState(false);
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
@@ -105,6 +145,7 @@ export function ServiceBoard() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [socketConnected, setSocketConnected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [offlineSnapshotTs, setOfflineSnapshotTs] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'orders' | 'calls' | 'tables'>('orders');
   const [tables, setTables] = useState<any[]>([]);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
@@ -132,6 +173,37 @@ export function ServiceBoard() {
   useEffect(() => {
     tokenRef.current = token;
   }, [token]);
+
+  const isStandalone =
+    typeof window !== 'undefined' &&
+    (window.matchMedia?.('(display-mode: standalone)')?.matches || (navigator as any)?.standalone);
+  const isIos =
+    typeof navigator !== 'undefined' &&
+    /iphone|ipad|ipod/i.test(navigator.userAgent) &&
+    !(window as any).MSStream;
+  const showInstallButton = !isStandalone && (installAvailable || isIos);
+
+  useEffect(() => {
+    const update = () => setInstallAvailable(!!(window as any).__cevopDeferredInstallPrompt);
+    update();
+    window.addEventListener('cevop-install-available', update as any);
+    return () => window.removeEventListener('cevop-install-available', update as any);
+  }, []);
+
+  const handleInstall = useCallback(async () => {
+    const deferred = (window as any).__cevopDeferredInstallPrompt;
+    if (deferred && typeof deferred.prompt === 'function') {
+      try {
+        await deferred.prompt();
+        await deferred.userChoice.catch(() => void 0);
+      } finally {
+        (window as any).__cevopDeferredInstallPrompt = null;
+        window.dispatchEvent(new Event('cevop-install-available'));
+      }
+      return;
+    }
+    if (isIos) setInstallHelpOpen(true);
+  }, [isIos]);
 
   const playAlert = useCallback(() => {
     try {
@@ -163,32 +235,104 @@ export function ServiceBoard() {
 
   const loadData = useCallback(async () => {
     if (!token) return;
-    const headers = { Authorization: `Bearer ${token}` };
-    const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
-    const [ordersRes, callsRes, serviceRes, tablesRes] = await Promise.all([
-      fetch(
-        `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&status=READY&limit=50${branchParam}`,
-        { headers },
-      ),
-      fetch(`${API_BASE}/api/waiter-calls?status=PENDING${branchParam}`, { headers }),
-      fetch(`${API_BASE}/api/service-requests?status=PENDING${branchParam}`, { headers }),
-      fetch(`${API_BASE}/api/tables?_=${Date.now()}`, { headers }),
-    ]);
-    const [ordersData, callsData, serviceData, tablesData] = await Promise.all([
-      ordersRes.json(),
-      callsRes.json(),
-      serviceRes.json(),
-      tablesRes.json(),
-    ]);
-    if (ordersData.success) {
-      setOrders(ordersData.data.filter((o: Order) => ACTIVE_STATUSES.includes(o.status)));
-      setOrdersHasMore(Boolean(ordersData.pagination?.hasMore));
-      setOrdersCursor(ordersData.pagination?.nextCursor ?? null);
+    const cacheKey = serviceSnapshotKey(user ?? null);
+    if (!navigator.onLine && cacheKey) {
+      const snap = readServiceSnapshot(cacheKey);
+      if (snap) {
+        setOrders(snap.orders);
+        setOrdersHasMore(snap.ordersHasMore);
+        setOrdersCursor(snap.ordersCursor);
+        setWaiterCalls(snap.waiterCalls);
+        setServiceRequests(snap.serviceRequests);
+        setTables(snap.tables);
+        setOfflineSnapshotTs(snap.ts);
+      }
+      return;
     }
-    if (callsData.success) setWaiterCalls(callsData.data);
-    if (serviceData.success) setServiceRequests(serviceData.data);
-    if (tablesData.success) setTables(tablesData.data);
-  }, [token, user]);
+
+    try {
+      const freshToken = (await silentRefresh()) ?? token;
+      if (!freshToken) return;
+      const headers = { Authorization: `Bearer ${freshToken}` };
+      const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
+      const [ordersRes, callsRes, serviceRes, tablesRes] = await Promise.all([
+        fetch(
+          `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&status=READY&limit=50${branchParam}`,
+          { headers },
+        ),
+        fetch(`${API_BASE}/api/waiter-calls?status=PENDING${branchParam}`, { headers }),
+        fetch(`${API_BASE}/api/service-requests?status=PENDING${branchParam}`, { headers }),
+        fetch(`${API_BASE}/api/tables?_=${Date.now()}`, { headers }),
+      ]);
+
+      if (!ordersRes.ok || !callsRes.ok || !serviceRes.ok || !tablesRes.ok) {
+        throw new Error('Network error');
+      }
+
+      const [ordersData, callsData, serviceData, tablesData] = await Promise.all([
+        ordersRes.json(),
+        callsRes.json(),
+        serviceRes.json(),
+        tablesRes.json(),
+      ]);
+
+      const nextOrders: Order[] = ordersData?.success
+        ? ordersData.data.filter((o: Order) => ACTIVE_STATUSES.includes(o.status))
+        : orders;
+      const nextOrdersHasMore = ordersData?.success
+        ? Boolean(ordersData.pagination?.hasMore)
+        : ordersHasMore;
+      const nextOrdersCursor = ordersData?.success
+        ? (ordersData.pagination?.nextCursor ?? null)
+        : ordersCursor;
+      const nextCalls: WaiterCall[] = callsData?.success ? callsData.data : waiterCalls;
+      const nextReqs: ServiceRequest[] = serviceData?.success ? serviceData.data : serviceRequests;
+      const nextTables: any[] = tablesData?.success ? tablesData.data : tables;
+
+      setOrders(nextOrders);
+      setOrdersHasMore(nextOrdersHasMore);
+      setOrdersCursor(nextOrdersCursor);
+      setWaiterCalls(nextCalls);
+      setServiceRequests(nextReqs);
+      setTables(nextTables);
+      setOfflineSnapshotTs(null);
+
+      if (cacheKey) {
+        writeServiceSnapshot(cacheKey, {
+          ts: Date.now(),
+          orders: nextOrders,
+          ordersHasMore: nextOrdersHasMore,
+          ordersCursor: nextOrdersCursor,
+          waiterCalls: nextCalls,
+          serviceRequests: nextReqs,
+          tables: nextTables,
+        });
+      }
+    } catch {
+      if (cacheKey) {
+        const snap = readServiceSnapshot(cacheKey);
+        if (snap) {
+          setOrders(snap.orders);
+          setOrdersHasMore(snap.ordersHasMore);
+          setOrdersCursor(snap.ordersCursor);
+          setWaiterCalls(snap.waiterCalls);
+          setServiceRequests(snap.serviceRequests);
+          setTables(snap.tables);
+          setOfflineSnapshotTs(snap.ts);
+        }
+      }
+    }
+  }, [
+    orders,
+    ordersCursor,
+    ordersHasMore,
+    serviceRequests,
+    silentRefresh,
+    tables,
+    token,
+    user,
+    waiterCalls,
+  ]);
 
   const loadDataRef = useRef(loadData);
   useEffect(() => {
@@ -377,6 +521,21 @@ export function ServiceBoard() {
     };
   }, []);
 
+  useEffect(() => {
+    if (isOnline) {
+      refreshNowRef.current().catch(() => void 0);
+    }
+  }, [isOnline]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      refreshNowRef.current().catch(() => void 0);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+
   async function updateOrderStatus(orderId: string, status: string) {
     if (updatingItems.has(orderId)) return;
     setUpdatingItems((prev) => new Set(prev).add(orderId));
@@ -507,6 +666,27 @@ export function ServiceBoard() {
     }
   }
 
+  async function markTableEmpty(tableId: string) {
+    if (updatingItems.has(tableId)) return;
+    setUpdatingItems((prev) => new Set(prev).add(tableId));
+    try {
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const res = await fetch(`${API_BASE}/api/tables/${tableId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ status: 'EMPTY' }),
+      });
+      if (!res.ok) await loadData();
+    } finally {
+      setUpdatingItems((prev) => {
+        const n = new Set(prev);
+        n.delete(tableId);
+        return n;
+      });
+    }
+  }
+
   useEffect(() => {
     if (!user) return;
     const t = setTimeout(() => {
@@ -625,12 +805,33 @@ export function ServiceBoard() {
 
   return (
     <div className="h-dvh flex flex-col bg-[var(--bg)] overflow-hidden">
+      {installHelpOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="text-sm font-bold tracking-wider text-[var(--text)]">
+              Install on iPhone
+            </div>
+            <div className="mt-2 text-xs text-[var(--muted)] leading-relaxed">
+              Tap Share, then Add to Home Screen. Open Cevop from the Home Screen to receive alerts
+              while the phone is asleep.
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setInstallHelpOpen(false)}
+                className="text-xs border border-[var(--border)] px-3 py-1.5 text-[var(--muted)] hover:text-[var(--text)]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <header className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-2">
         <div className="flex items-center gap-2 sm:gap-4 shrink-0 min-w-0">
-          <h1 className="text-base sm:text-2xl text-[var(--accent)] flex items-baseline gap-1.5 shrink-0">
-            <span className="brand-mark">CEVOP</span>
-            <span className="font-display hidden xs:inline">SERVICE</span>
+          <h1 className="text-base sm:text-2xl flex items-center gap-2 shrink-0">
+            <span role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-md" />
+            <span className="font-display hidden xs:inline text-[var(--accent)]">SERVICE</span>
           </h1>
           <div
             className={`flex items-center gap-1 sm:gap-1.5 text-[9px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 ${
@@ -663,6 +864,27 @@ export function ServiceBoard() {
           >
             {refreshing ? 'REFRESHING…' : 'REFRESH'}
           </button>
+          {pushStatus !== 'unsupported' && pushStatus !== 'on' && (
+            <button
+              onClick={() => enablePush().catch(() => void 0)}
+              disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
+              className="text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0 disabled:opacity-50"
+            >
+              {pushStatus === 'loading'
+                ? 'ENABLING…'
+                : pushStatus === 'blocked'
+                  ? 'ALERTS BLOCKED'
+                  : 'ENABLE ALERTS'}
+            </button>
+          )}
+          {showInstallButton && (
+            <button
+              onClick={() => handleInstall().catch(() => void 0)}
+              className="text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0"
+            >
+              INSTALL
+            </button>
+          )}
           <button
             onClick={() => setMode(nextThemeMode)}
             className={`w-7 h-7 sm:w-10 sm:h-10 rounded-full border flex items-center justify-center transition-colors text-[9px] sm:text-[10px] font-bold tracking-widest shrink-0 ${
@@ -685,6 +907,11 @@ export function ServiceBoard() {
           </button>
         </div>
       </header>
+      {(!isOnline || !socketConnected) && offlineSnapshotTs && (
+        <div className="px-3 sm:px-4 py-1 text-[10px] sm:text-xs text-[var(--muted)] border-b border-[var(--border)] bg-[var(--surface)]">
+          Showing last saved snapshot — {new Date(offlineSnapshotTs).toLocaleString()}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
@@ -1030,7 +1257,7 @@ export function ServiceBoard() {
                     {t.status}
                   </div>
                 </div>
-                {t.activeSessionId && (
+                {t.activeSessionId ? (
                   <button
                     onClick={() => clearTable(t.activeSessionId)}
                     disabled={updatingItems.has(t.activeSessionId)}
@@ -1038,7 +1265,15 @@ export function ServiceBoard() {
                   >
                     {updatingItems.has(t.activeSessionId) ? 'CLEARING...' : 'CLEAR TABLE'}
                   </button>
-                )}
+                ) : t.status === 'CLEANING' ? (
+                  <button
+                    onClick={() => markTableEmpty(t.id)}
+                    disabled={updatingItems.has(t.id)}
+                    className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50"
+                  >
+                    {updatingItems.has(t.id) ? 'UPDATING...' : 'MARK CLEAN'}
+                  </button>
+                ) : null}
               </div>
             ))}
           {tables.filter((t) => t.isActive).length === 0 && (

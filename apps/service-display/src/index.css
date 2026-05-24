@@ -10,6 +10,7 @@
   --surface2: #111111;
   --border: #1a1a1a;
   --accent: #00ffd5;
+  --brand: #00b3a6;
   --text: #ffffff;
   --muted: #52525b;
   --received: #00ffd5;
@@ -28,6 +29,7 @@
   --surface2: #f4f4f5;
   --border: #e4e4e7;
   --accent: #008f84;
+  --brand: #008f84;
   --text: #09090b;
   --muted: #71717a;
   --received: #008f84;
@@ -108,6 +110,37 @@ h6 {
   align-items: center;
   gap: 0.4em;
   line-height: 1;
+}
+
+.cevop-wordmark {
+  aspect-ratio: 2048 / 991;
+  display: inline-block;
+  background-color: var(--text);
+  -webkit-mask-image: url('/11_2048.png');
+  mask-image: url('/11_2048.png');
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+[data-theme='dark'] .cevop-wordmark {
+  background-color: var(--brand);
+}
+
+.cevop-wordmark-sm {
+  height: 12px;
+  opacity: 0.9;
+}
+
+.cevop-wordmark-md {
+  height: 18px;
+}
+
+.cevop-wordmark-lg {
+  height: 40px;
 }
 
 .text-texture {

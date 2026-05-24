@@ -9,7 +9,7 @@ import {
   requireBranchSelected,
   AuthRequest,
 } from '../middleware/auth';
-import { notifyServiceRequest } from '../services/notifications';
+import { notifyStaffWebPush, notifyServiceRequest } from '../services/notifications';
 import { io } from '../index';
 import { logger } from '../services/logger';
 import { findLeastLoadedWaiter } from '../services/waiterAssignment';
@@ -104,6 +104,16 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
         org.slackWebhook || undefined,
         org.plan,
       ).catch(() => {});
+
+    notifyStaffWebPush({
+      organizationId: table.organizationId,
+      branchId: actualBranchId,
+      roles: ['WAITER', 'SERVICE'],
+      title: 'Service Request',
+      body: `${finalRequest.table?.label || 'Table'} — ${finalRequest.serviceType}${finalRequest.notes ? ` — ${finalRequest.notes}` : ''}`,
+      url: '/',
+      tag: `service-request:${request.id}`,
+    }).catch(() => {});
 
     res.status(201).json({ success: true, data: request });
   } catch (err: unknown) {

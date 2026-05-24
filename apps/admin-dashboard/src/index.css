@@ -11,6 +11,7 @@
   --surface2: #161818;
   --border: #1a2020;
   --accent: #00b3a6;
+  --brand: #00b3a6;
   --accent-dim: rgba(0, 179, 166, 0.12);
   --text: #ffffff;
   --muted: #6b8080;
@@ -36,6 +37,7 @@
   --surface2: #f0f2f2;
   --border: #e2e8e8;
   --accent: #008f84;
+  --brand: #008f84;
   --accent-dim: rgba(0, 143, 132, 0.1);
   --text: #0a0c0c;
   --muted: #5a6b6b;
@@ -89,6 +91,37 @@
 [data-theme='light'] .border-yellow-800,
 [data-theme='light'] .border-amber-800 {
   border-color: color-mix(in srgb, var(--warning) 45%, var(--border)) !important;
+}
+
+.cevop-wordmark {
+  aspect-ratio: 2048 / 991;
+  display: inline-block;
+  background-color: var(--text);
+  -webkit-mask-image: url('/11_2048.png');
+  mask-image: url('/11_2048.png');
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+[data-theme='dark'] .cevop-wordmark {
+  background-color: var(--brand);
+}
+
+.cevop-wordmark-md {
+  height: 18px;
+}
+
+.cevop-wordmark-lg {
+  height: 40px;
+}
+
+.cevop-wordmark-sm {
+  height: 12px;
+  opacity: 0.9;
 }
 
 * {

@@ -192,9 +192,13 @@ export function DashboardPage() {
                     <td className="text-[var(--muted)] text-xs">
                       {new Date(l.createdAt).toLocaleString()}
                     </td>
-                    <td className="font-semibold text-[var(--accent)]">{l.action}</td>
+                    <td className="font-semibold text-[var(--accent)]">
+                      {l.action === 'IMPERSONATE_ORG' ? 'SUPPORT_ACCESS' : l.action}
+                    </td>
                     <td className="text-sm">
-                      {l.user?.email ? (
+                      {l.action === 'IMPERSONATE_ORG' ? (
+                        <span className="font-medium">Cevop Support</span>
+                      ) : l.user?.email ? (
                         <span className="font-medium">{l.user.email}</span>
                       ) : (
                         <span className="text-[var(--muted)]">—</span>

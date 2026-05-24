@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth, useApi, usePermission } from '../context/auth';
 import { useTheme } from '../context/theme';
+import { ToastViewport } from './Popup';
 
 interface IconProps {
   size?: number;
@@ -112,7 +113,8 @@ export function Shell() {
   }, [location.pathname]);
 
   return (
-    <div className="flex w-full h-dvh overflow-hidden relative bg-[var(--bg)]">
+    <div className="flex w-full h-dvh overflow-hidden relative">
+      <ToastViewport />
       {/* Mobile Backdrop */}
       {mobileMenuOpen && (
         <div
@@ -137,12 +139,15 @@ export function Shell() {
             {sidebarOpen ? (
               <IconChevronLeft size={16} />
             ) : (
-              <span className="brand-mark text-[var(--accent)]" />
+              <img src="/icon-192.png" alt="Cevop" className="w-5 h-5" draggable={false} />
             )}
           </button>
           {(sidebarOpen || mobileMenuOpen) && (
             <>
-              <span className="font-display text-base text-[var(--text)] tracking-wide">OPS</span>
+              <span className="flex items-center gap-2">
+                <img src="/icon-192.png" alt="Cevop" className="w-5 h-5" draggable={false} />
+                <span className="font-display text-base text-[var(--text)] tracking-wide">OPS</span>
+              </span>
               <span className="ml-auto text-[10px] border border-[var(--danger)] text-[var(--danger)] px-1.5 py-0.5 font-bold tracking-widest opacity-70">
                 INTERNAL
               </span>

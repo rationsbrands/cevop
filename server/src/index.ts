@@ -29,6 +29,7 @@ import { opsRouter } from './routes/ops';
 import { helpOptionsRouter } from './routes/helpOptions';
 import { waiterTasksRouter } from './routes/waiterTasks';
 import { plansRouter } from './routes/plans';
+import { pushRouter } from './routes/push';
 import { initSocketHandlers } from './sockets/handlers';
 import { errorHandler } from './middleware/errorHandler';
 import { planGuard } from './middleware/planGuard';
@@ -199,12 +200,28 @@ app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/forgot-password', authLimiter);
 app.use('/api/auth/signup', authLimiter);
 app.use('/api/auth/check-slug', apiLimiter);
+app.use('/api/menu/public', publicLimiter);
 app.use('/api/orders/public', publicLimiter);
+app.use('/api/tables/public', publicLimiter);
 app.use('/api/waiter-calls/public', publicLimiter);
 app.use('/api/service-requests/public', publicLimiter);
+app.use('/api/help-options/public', publicLimiter);
 app.use('/api/', apiLimiter);
 
 app.use('/api/plans', plansRouter);
+
+app.get('/api/public/config', (req, res) => {
+  const configured = (process.env.ADMIN_DASHBOARD_URL || '').trim();
+  const host = (req.headers.host || '').toLowerCase();
+  const inferred =
+    host.includes('localhost') || host.includes('127.0.0.1')
+      ? 'http://localhost:5175'
+      : 'https://app.cevop.com';
+  const raw = configured || inferred;
+  const adminDashboardUrl =
+    raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw}`;
+  res.json({ success: true, data: { adminDashboardUrl } });
+});
 
 // Enforce organization plan status
 app.use('/api/', planGuard as express.RequestHandler);
@@ -230,6 +247,7 @@ app.use('/api/service-requests', serviceRequestsRouter);
 app.use('/api/help-options', helpOptionsRouter);
 app.use('/api/ops', opsRouter);
 app.use('/api/waiter-tasks', waiterTasksRouter);
+app.use('/api/push', pushRouter);
 
 // WebSocket
 initSocketHandlers(io);
@@ -306,6 +324,7 @@ app.use(errorHandler);
 
 const PORT = Number(process.env.PORT) || 4000;
 const server = httpServer;
+
 if (process.env.NODE_ENV !== 'test') {
   server.listen(PORT, '0.0.0.0', () => {
     logger.info(`🚀 API running on http://0.0.0.0:${PORT}`);

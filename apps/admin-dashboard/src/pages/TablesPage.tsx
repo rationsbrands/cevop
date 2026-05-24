@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useApi, useAuth } from '../context/auth';
+import { ConfirmDialog, showToast } from '../components/Popup';
 
 interface Table {
   id: string;
@@ -44,6 +45,46 @@ export function TablesPage() {
   const [qrPreviewTable, setQrPreviewTable] = useState<Table | null>(null);
   const [qrPreviewDataUrl, setQrPreviewDataUrl] = useState<string | null>(null);
   const [qrPreviewBusy, setQrPreviewBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmLabel, setConfirmLabel] = useState('Confirm');
+  const [confirmVariant, setConfirmVariant] = useState<'default' | 'danger'>('default');
+  const confirmActionRef = useRef<null | (() => Promise<void> | void)>(null);
+
+  function openConfirm(opts: {
+    title: string;
+    message?: string;
+    confirmLabel?: string;
+    variant?: 'default' | 'danger';
+    action: () => Promise<void> | void;
+  }) {
+    confirmActionRef.current = opts.action;
+    setConfirmTitle(opts.title);
+    setConfirmMessage(opts.message ?? '');
+    setConfirmLabel(opts.confirmLabel ?? 'Confirm');
+    setConfirmVariant(opts.variant ?? 'default');
+    setConfirmOpen(true);
+  }
+
+  async function onConfirm() {
+    if (confirmBusy) return;
+    const action = confirmActionRef.current;
+    if (!action) {
+      setConfirmOpen(false);
+      return;
+    }
+    setConfirmBusy(true);
+    try {
+      await action();
+      setConfirmOpen(false);
+    } catch (e: any) {
+      showToast(e?.message ? String(e.message) : 'Action failed', 'error');
+    } finally {
+      setConfirmBusy(false);
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,15 +138,23 @@ export function TablesPage() {
   }
 
   function copyLink(t: Table) {
-    const url = `${PWA_URL}/menu/${t.organizationId}/${t.id}`;
+    const orgSlug = user?.organization?.slug || t.organizationId;
+    const url = `${PWA_URL}/menu/${orgSlug}/${t.number}`;
     navigator.clipboard.writeText(url);
-    alert('Customer Link copied to clipboard!');
+    showToast('Customer link copied to clipboard!', 'success');
   }
 
   async function deactivate(id: string) {
-    if (!confirm('Deactivate this table? It will no longer be accessible by customers.')) return;
-    await api.delete(`/api/tables/${id}`);
-    load();
+    openConfirm({
+      title: 'Deactivate Table',
+      message: 'Deactivate this table? It will no longer be accessible by customers.',
+      confirmLabel: 'Deactivate',
+      variant: 'danger',
+      action: async () => {
+        await api.delete(`/api/tables/${id}`);
+        await load();
+      },
+    });
   }
 
   async function activate(id: string) {
@@ -114,9 +163,16 @@ export function TablesPage() {
   }
 
   async function deleteTable(id: string) {
-    if (!confirm('Permanently delete this table? This cannot be undone.')) return;
-    await api.delete(`/api/tables/${id}?permanent=true`);
-    load();
+    openConfirm({
+      title: 'Delete Table',
+      message: 'Permanently delete this table? This cannot be undone.',
+      confirmLabel: 'Delete',
+      variant: 'danger',
+      action: async () => {
+        await api.delete(`/api/tables/${id}?permanent=true`);
+        await load();
+      },
+    });
   }
 
   function downloadQR(entry: QREntry) {
@@ -223,9 +279,27 @@ export function TablesPage() {
   }
 
   async function clearTable(sessionId: string) {
-    if (!confirm('Clear this table?')) return;
-    await api.patch(`/api/sessions/${sessionId}/close`, { nextStatus: 'CLEANING' });
-    load();
+    openConfirm({
+      title: 'Clear Table',
+      message: 'Clear this table? It will move to CLEANING.',
+      confirmLabel: 'Clear',
+      action: async () => {
+        await api.patch(`/api/sessions/${sessionId}/close`, { nextStatus: 'CLEANING' });
+        await load();
+      },
+    });
+  }
+
+  async function markTableEmpty(tableId: string) {
+    openConfirm({
+      title: 'Mark Clean',
+      message: 'Mark this table as clean/empty?',
+      confirmLabel: 'Mark Clean',
+      action: async () => {
+        await api.patch(`/api/tables/${tableId}/status`, { status: 'EMPTY' });
+        await load();
+      },
+    });
   }
 
   if (loading)
@@ -247,6 +321,19 @@ export function TablesPage() {
 
   return (
     <div className="space-y-6 animate-in">
+      <ConfirmDialog
+        open={confirmOpen}
+        title={confirmTitle}
+        message={confirmMessage}
+        confirmLabel={confirmLabel}
+        variant={confirmVariant}
+        busy={confirmBusy}
+        onCancel={() => {
+          if (confirmBusy) return;
+          setConfirmOpen(false);
+        }}
+        onConfirm={() => void onConfirm()}
+      />
       <div className="flex items-center justify-between">
         <h1 className="font-display text-4xl">TABLES & QR</h1>
         <div className="flex gap-2">
@@ -385,6 +472,14 @@ export function TablesPage() {
                         onClick={() => clearTable(t.activeSessionId!)}
                       >
                         Clear Table
+                      </button>
+                    )}
+                    {t.status === 'CLEANING' && !t.activeSessionId && (
+                      <button
+                        className="btn btn-secondary btn-sm text-green-500"
+                        onClick={() => markTableEmpty(t.id)}
+                      >
+                        Mark Clean
                       </button>
                     )}
                     <button className="btn btn-danger btn-sm" onClick={() => deleteTable(t.id)}>

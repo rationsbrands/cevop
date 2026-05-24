@@ -3,6 +3,7 @@ import { z } from 'zod';
 import QRCode from 'qrcode';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
+import { io } from '../index';
 import {
   authenticate,
   requireRole,
@@ -12,6 +13,7 @@ import {
 } from '../middleware/auth';
 import { checkTableLimit } from '../middleware/checkLimits';
 import { getOrCreateSession } from '../services/tableSession';
+import { logger } from '../services/logger';
 
 export const tablesRouter = Router();
 
@@ -84,13 +86,17 @@ tablesRouter.get('/public/:orgId/:tableId', async (req: Request, res: Response) 
 // PUBLIC: Single QR
 tablesRouter.get('/:id/qr', async (req: Request, res: Response) => {
   try {
-    const table = await prisma.table.findUnique({ where: { id: req.params.id } });
+    const table = await prisma.table.findUnique({
+      where: { id: req.params.id },
+      include: { organization: { select: { slug: true } } },
+    });
     if (!table) {
       res.status(404).json({ success: false, error: 'Table not found' });
       return;
     }
 
-    const customerUrl = `${getCustomerPwaBaseUrl(req)}/menu/${table.organizationId}/${table.id}`;
+    const orgSlug = table.organization?.slug || table.organizationId;
+    const customerUrl = `${getCustomerPwaBaseUrl(req)}/menu/${orgSlug}/${table.number}`;
     const format = (req.query.format as string) || 'svg';
 
     if (format === 'png') {
@@ -198,6 +204,82 @@ tablesRouter.put(
   },
 );
 
+tablesRouter.patch(
+  '/:id/status',
+  requireRole(
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'SUPERADMIN',
+    'BRANCH_ADMIN',
+    'SERVICE',
+    'WAITER',
+  ),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const bodySchema = z.object({ status: z.literal('EMPTY') });
+      const { status } = bodySchema.parse(req.body);
+
+      const existing = await prisma.table.findFirst({
+        where: {
+          id: req.params.id,
+          organizationId: req.user!.organizationId,
+          branchId: req.branchScope!,
+        },
+        select: {
+          id: true,
+          organizationId: true,
+          branchId: true,
+          status: true,
+          activeSessionId: true,
+        },
+      });
+
+      if (!existing) {
+        res.status(404).json({ success: false, error: 'Table not found' });
+        return;
+      }
+
+      if (existing.activeSessionId) {
+        res
+          .status(400)
+          .json({ success: false, error: 'Cannot mark table empty while a session is active' });
+        return;
+      }
+
+      if (existing.status === status) {
+        res.json({ success: true, data: { id: existing.id, status: existing.status } });
+        return;
+      }
+
+      if (existing.status !== 'CLEANING') {
+        res.status(400).json({ success: false, error: 'Only CLEANING tables can be marked EMPTY' });
+        return;
+      }
+
+      await prisma.table.update({
+        where: { id: existing.id },
+        data: { status: 'EMPTY', activeSessionId: null } as any,
+      });
+
+      io.to(`${existing.organizationId}:${existing.branchId}`).emit('TABLE_STATUS_CHANGED', {
+        tableId: existing.id,
+        status: 'EMPTY',
+        branchId: existing.branchId,
+      });
+
+      res.json({ success: true, data: { id: existing.id, status: 'EMPTY' } });
+    } catch (err: unknown) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+        return;
+      }
+      logger.error('PATCH /tables/:id/status error:', err);
+      res.status(500).json({ success: false, error: 'Failed to update table status' });
+    }
+  },
+);
+
 tablesRouter.delete(
   '/:id',
   requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
@@ -243,10 +325,15 @@ tablesRouter.get(
 
       const tables = await prisma.table.findMany({ where, orderBy: { number: 'asc' } });
       const baseUrl = getCustomerPwaBaseUrl(req);
+      const org = await prisma.organization.findUnique({
+        where: { id: req.user!.organizationId },
+        select: { slug: true },
+      });
+      const orgSlug = org?.slug || req.user!.organizationId;
 
       const qrCodes = await Promise.all(
         tables.map(async (table) => {
-          const url = `${baseUrl}/menu/${table.organizationId}/${table.id}`;
+          const url = `${baseUrl}/menu/${orgSlug}/${table.number}`;
           const dataUrl = await QRCode.toDataURL(url, { width: 300, margin: 2 });
           return {
             tableId: table.id,

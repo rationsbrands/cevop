@@ -9,7 +9,7 @@ import {
   requireBranchSelected,
   AuthRequest,
 } from '../middleware/auth';
-import { notifyNewOrder } from '../services/notifications';
+import { notifyNewOrder, notifyStaffWebPush } from '../services/notifications';
 import { io } from '../index';
 import { logger } from '../services/logger';
 import { findLeastLoadedWaiter } from '../services/waiterAssignment';
@@ -150,6 +150,16 @@ ordersRouter.post('/public', async (req: Request, res: Response) => {
     io.to(`order:${order.id}`).emit('ORDER_UPDATED', order);
 
     res.status(201).json({ success: true, data: order });
+
+    notifyStaffWebPush({
+      organizationId: actualOrgId as string,
+      branchId: actualBranchId,
+      roles: ['KITCHEN', 'SERVICE'],
+      title: 'New Order',
+      body: `${order.table?.label || 'Table'} — #${String(order.id).slice(-6).toUpperCase()}`,
+      url: '/',
+      tag: `order:${order.id}`,
+    }).catch(() => {});
 
     const org = (table as any).organization;
     if (org && org.notifyNewOrders) {
@@ -673,6 +683,16 @@ ordersRouter.patch(
             task: updated,
           });
         }
+
+        notifyStaffWebPush({
+          organizationId: req.user!.organizationId,
+          branchId: updated.branchId,
+          roles: ['WAITER', 'SERVICE'],
+          title: 'Order Ready',
+          body: `${finalOrder.table?.label || 'Table'} — #${String(finalOrder.id).slice(-6).toUpperCase()}`,
+          url: '/',
+          tag: `order-ready:${finalOrder.id}`,
+        }).catch(() => {});
       }
 
       io.to(`${req.user!.organizationId}:${finalOrder.branchId}`).emit('ORDER_UPDATED', finalOrder);

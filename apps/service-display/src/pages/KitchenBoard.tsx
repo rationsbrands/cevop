@@ -25,6 +25,41 @@ interface Order {
   tableId: string;
 }
 
+type KitchenSnapshot = {
+  ts: number;
+  orders: Order[];
+  ordersHasMore: boolean;
+  ordersCursor: string | null;
+};
+
+function readKitchenSnapshot(key: string): KitchenSnapshot | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as KitchenSnapshot;
+    if (!parsed || typeof parsed.ts !== 'number') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeKitchenSnapshot(key: string, snapshot: KitchenSnapshot): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(snapshot));
+  } catch {
+    void 0;
+  }
+}
+
+function kitchenSnapshotKey(
+  user: { organizationId: string; branchId?: string | null } | null,
+): string | null {
+  if (!user?.organizationId) return null;
+  const scope = user.branchId ? `branch:${user.branchId}` : 'org';
+  return `cevop_service_snapshot:kitchen:${user.organizationId}:${scope}`;
+}
+
 const KITCHEN_STATUSES = ['RECEIVED', 'PREPARING'];
 const NEXT_STATUS: Record<string, string> = {
   RECEIVED: 'PREPARING',
@@ -54,16 +89,51 @@ function TimeElapsed({ createdAt, className }: { createdAt: string; className?: 
 }
 
 export function KitchenBoard() {
-  const { user, token, logout, silentRefresh } = useAuth();
+  const { user, token, logout, silentRefresh, pushStatus, enablePush } = useAuth();
   useTheme();
+  const [installAvailable, setInstallAvailable] = useState(false);
+  const [installHelpOpen, setInstallHelpOpen] = useState(false);
+
+  const isStandalone =
+    typeof window !== 'undefined' &&
+    (window.matchMedia?.('(display-mode: standalone)')?.matches || (navigator as any)?.standalone);
+  const isIos =
+    typeof navigator !== 'undefined' &&
+    /iphone|ipad|ipod/i.test(navigator.userAgent) &&
+    !(window as any).MSStream;
+  const showInstallButton = !isStandalone && (installAvailable || isIos);
+
+  useEffect(() => {
+    const update = () => setInstallAvailable(!!(window as any).__cevopDeferredInstallPrompt);
+    update();
+    window.addEventListener('cevop-install-available', update as any);
+    return () => window.removeEventListener('cevop-install-available', update as any);
+  }, []);
+
+  const handleInstall = useCallback(async () => {
+    const deferred = (window as any).__cevopDeferredInstallPrompt;
+    if (deferred && typeof deferred.prompt === 'function') {
+      try {
+        await deferred.prompt();
+        await deferred.userChoice.catch(() => void 0);
+      } finally {
+        (window as any).__cevopDeferredInstallPrompt = null;
+        window.dispatchEvent(new Event('cevop-install-available'));
+      }
+      return;
+    }
+    if (isIos) setInstallHelpOpen(true);
+  }, [isIos]);
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [ordersHasMore, setOrdersHasMore] = useState(false);
   const [ordersCursor, setOrdersCursor] = useState<string | null>(null);
   const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [refreshing, setRefreshing] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [offlineSnapshotTs, setOfflineSnapshotTs] = useState<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
   const lastSyncAtRef = useRef(0);
@@ -101,19 +171,60 @@ export function KitchenBoard() {
 
   const loadData = useCallback(async () => {
     if (!token) return;
-    const headers = { Authorization: `Bearer ${token}` };
-    const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
-    const ordersRes = await fetch(
-      `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&limit=50${branchParam}`,
-      { headers },
-    );
-    const ordersData = await ordersRes.json();
-    if (ordersData.success) {
-      setOrders(ordersData.data);
-      setOrdersHasMore(Boolean(ordersData.pagination?.hasMore));
-      setOrdersCursor(ordersData.pagination?.nextCursor ?? null);
+    const cacheKey = kitchenSnapshotKey(user ?? null);
+    if (!navigator.onLine && cacheKey) {
+      const snap = readKitchenSnapshot(cacheKey);
+      if (snap) {
+        setOrders(snap.orders);
+        setOrdersHasMore(snap.ordersHasMore);
+        setOrdersCursor(snap.ordersCursor);
+        setOfflineSnapshotTs(snap.ts);
+      }
+      return;
     }
-  }, [token, user]);
+
+    try {
+      const freshToken = (await silentRefresh()) ?? token;
+      if (!freshToken) return;
+      const headers = { Authorization: `Bearer ${freshToken}` };
+      const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
+      const ordersRes = await fetch(
+        `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&limit=50${branchParam}`,
+        { headers },
+      );
+      if (!ordersRes.ok) throw new Error('Network error');
+      const ordersData = await ordersRes.json().catch(() => null);
+      if (!ordersData?.success) throw new Error('Bad response');
+
+      const nextOrders = ordersData.data;
+      const nextOrdersHasMore = Boolean(ordersData.pagination?.hasMore);
+      const nextOrdersCursor = ordersData.pagination?.nextCursor ?? null;
+
+      setOrders(nextOrders);
+      setOrdersHasMore(nextOrdersHasMore);
+      setOrdersCursor(nextOrdersCursor);
+      setOfflineSnapshotTs(null);
+
+      if (cacheKey) {
+        writeKitchenSnapshot(cacheKey, {
+          ts: Date.now(),
+          orders: nextOrders,
+          ordersHasMore: nextOrdersHasMore,
+          ordersCursor: nextOrdersCursor,
+        });
+      }
+    } catch {
+      if (cacheKey) {
+        const snap = readKitchenSnapshot(cacheKey);
+        if (snap) {
+          setOrders(snap.orders);
+          setOrdersHasMore(snap.ordersHasMore);
+          setOrdersCursor(snap.ordersCursor);
+          setOfflineSnapshotTs(snap.ts);
+        }
+      }
+    }
+  }, [silentRefresh, token, user]);
 
   const loadDataRef = useRef(loadData);
   useEffect(() => {
@@ -230,6 +341,29 @@ export function KitchenBoard() {
     };
   }, [user, playAlert, applyOrderUpdate]);
 
+  useEffect(() => {
+    const up = () => {
+      setIsOnline(true);
+      refreshNowRef.current().catch(() => void 0);
+    };
+    const down = () => setIsOnline(false);
+    window.addEventListener('online', up);
+    window.addEventListener('offline', down);
+    return () => {
+      window.removeEventListener('online', up);
+      window.removeEventListener('offline', down);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      refreshNowRef.current().catch(() => void 0);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+
   async function updateOrderStatus(orderId: string, status: string) {
     if (updatingItems.has(orderId)) return;
     setUpdatingItems((prev) => new Set(prev).add(orderId));
@@ -312,16 +446,36 @@ export function KitchenBoard() {
 
   return (
     <div className="h-dvh flex flex-col bg-black overflow-hidden text-white relative">
+      {installHelpOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm border border-gray-800 bg-[#0a0a0a] p-4">
+            <div className="text-sm font-bold tracking-wider text-white">Install on iPhone</div>
+            <div className="mt-2 text-xs text-gray-300 leading-relaxed">
+              Tap Share, then Add to Home Screen. Open Cevop from the Home Screen to receive alerts
+              while the phone is asleep.
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setInstallHelpOpen(false)}
+                className="text-xs border border-gray-800 px-3 py-1.5 text-gray-300 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="text-texture opacity-5" />
       <header className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-gray-800 bg-[#0a0a0a] shrink-0 gap-2 relative z-20">
         <div className="flex items-center gap-2 sm:gap-4 min-w-0 shrink">
-          <h1 className="text-sm sm:text-xl text-[var(--accent)] font-display truncate">
-            CEVOP KITCHEN
+          <h1 className="text-sm sm:text-xl text-[var(--accent)] font-display truncate flex items-center gap-2">
+            <span role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-md" />
+            <span className="opacity-80">KITCHEN</span>
           </h1>
           <div
             className={`px-1.5 sm:px-2 py-0.5 border text-[8px] sm:text-[10px] shrink-0 font-mono ${socketConnected ? 'border-green-500 text-green-500' : 'border-red-500 text-red-500'}`}
           >
-            {socketConnected ? 'LIVE' : 'OFFLINE'}
+            {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
@@ -335,6 +489,27 @@ export function KitchenBoard() {
           >
             {refreshing ? '...' : 'REFRESH'}
           </button>
+          {pushStatus !== 'unsupported' && pushStatus !== 'on' && (
+            <button
+              onClick={() => enablePush().catch(() => void 0)}
+              disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
+              className="text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
+            >
+              {pushStatus === 'loading'
+                ? '...'
+                : pushStatus === 'blocked'
+                  ? 'ALERTS BLOCKED'
+                  : 'ENABLE ALERTS'}
+            </button>
+          )}
+          {showInstallButton && (
+            <button
+              onClick={() => handleInstall().catch(() => void 0)}
+              className="text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display"
+            >
+              INSTALL
+            </button>
+          )}
           {ordersHasMore && (
             <button
               onClick={() => loadMoreOrders().catch(() => void 0)}
@@ -352,6 +527,11 @@ export function KitchenBoard() {
           </button>
         </div>
       </header>
+      {(!isOnline || !socketConnected) && offlineSnapshotTs && (
+        <div className="px-3 sm:px-4 py-1 text-[10px] sm:text-xs text-gray-400 border-b border-gray-800 bg-[#0a0a0a]">
+          Showing last saved snapshot — {new Date(offlineSnapshotTs).toLocaleString()}
+        </div>
+      )}
 
       <div className="flex-1 overflow-x-hidden overflow-y-auto grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-2 p-2 content-start">
         {orders.map((order) => (

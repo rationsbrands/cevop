@@ -10,6 +10,7 @@
   --surface2: #111111;
   --border: #1a1a1a;
   --accent: #00ffd5;
+  --brand: #00b3a6;
   --accent-dim: rgba(0, 255, 213, 0.1);
   --text: #ffffff;
   --text-secondary: #a1a1aa;
@@ -26,6 +27,7 @@
   --surface2: #f4f4f5;
   --border: #e4e4e7;
   --accent: #008f84;
+  --brand: #008f84;
   --accent-dim: rgba(0, 143, 132, 0.1);
   --text: #09090b;
   --text-secondary: #4b5563;
@@ -100,6 +102,37 @@ h6 {
   gap: 0.4em;
 }
 
+.cevop-wordmark {
+  aspect-ratio: 2048 / 991;
+  display: inline-block;
+  background-color: var(--text);
+  -webkit-mask-image: url('/11_2048.png');
+  mask-image: url('/11_2048.png');
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+[data-theme='dark'] .cevop-wordmark {
+  background-color: var(--brand);
+}
+
+.cevop-wordmark-sm {
+  height: 12px;
+  opacity: 0.9;
+}
+
+.cevop-wordmark-md {
+  height: 18px;
+}
+
+.cevop-wordmark-lg {
+  height: 40px;
+}
+
 .text-texture {
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
   background-size: 100px;
@@ -139,6 +172,26 @@ h6 {
 
 .btn-primary:active {
   transform: scale(0.96);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border-radius: 9999px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  font-family: inherit;
+  letter-spacing: -0.01em;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:active {
+  transform: scale(0.98);
 }
 
 .card {

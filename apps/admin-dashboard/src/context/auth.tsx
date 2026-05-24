@@ -9,10 +9,149 @@ import React, {
   useMemo,
 } from 'react';
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
+import { showToast } from '../components/Popup';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 const AUTH_HEADERS = { 'Content-Type': 'application/json', 'x-cevop-app': 'admin' };
 const SESSION_MARKER_KEY = `cevop_admin_has_session:${window.location.hostname}`;
+
+const OFFLINE_DB_NAME = 'cevop_admin_offline';
+const OFFLINE_DB_VERSION = 1;
+const OFFLINE_CACHE_STORE = 'cache';
+const OFFLINE_QUEUE_STORE = 'queue';
+
+type OfflineCacheEntry = { key: string; ts: number; value: any };
+type OfflineQueueEntry = {
+  id?: number;
+  ts: number;
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  url: string;
+  body: any;
+};
+
+function openOfflineDb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const req = indexedDB.open(OFFLINE_DB_NAME, OFFLINE_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(OFFLINE_CACHE_STORE)) {
+        db.createObjectStore(OFFLINE_CACHE_STORE, { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains(OFFLINE_QUEUE_STORE)) {
+        db.createObjectStore(OFFLINE_QUEUE_STORE, { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function getOfflineCache(key: string): Promise<any | null> {
+  const db = await openOfflineDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    const tx = db.transaction(OFFLINE_CACHE_STORE, 'readonly');
+    const store = tx.objectStore(OFFLINE_CACHE_STORE);
+    const req = store.get(key);
+    req.onsuccess = () => {
+      const row = req.result as OfflineCacheEntry | undefined;
+      resolve(row?.value ?? null);
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function setOfflineCache(key: string, value: any): Promise<void> {
+  const db = await openOfflineDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(OFFLINE_CACHE_STORE, 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+    tx.objectStore(OFFLINE_CACHE_STORE).put({
+      key,
+      ts: Date.now(),
+      value,
+    } satisfies OfflineCacheEntry);
+  });
+}
+
+async function enqueueOfflineMutation(entry: Omit<OfflineQueueEntry, 'id'>): Promise<void> {
+  const db = await openOfflineDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(OFFLINE_QUEUE_STORE, 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+    tx.objectStore(OFFLINE_QUEUE_STORE).add(entry);
+  });
+}
+
+async function listOfflineQueue(): Promise<OfflineQueueEntry[]> {
+  const db = await openOfflineDb();
+  if (!db) return [];
+  return new Promise((resolve) => {
+    const tx = db.transaction(OFFLINE_QUEUE_STORE, 'readonly');
+    const store = tx.objectStore(OFFLINE_QUEUE_STORE);
+    const req = store.getAll();
+    req.onsuccess = () => resolve((req.result as OfflineQueueEntry[]) ?? []);
+    req.onerror = () => resolve([]);
+  });
+}
+
+async function deleteOfflineQueueItem(id: number): Promise<void> {
+  const db = await openOfflineDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(OFFLINE_QUEUE_STORE, 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+    tx.objectStore(OFFLINE_QUEUE_STORE).delete(id);
+  });
+}
+
+async function flushOfflineQueue(
+  headers: Record<string, string>,
+): Promise<{ flushed: number; remaining: number }> {
+  const queued = await listOfflineQueue();
+  if (queued.length === 0) return { flushed: 0, remaining: 0 };
+
+  const sorted = [...queued].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  let flushed = 0;
+
+  for (const item of sorted) {
+    if (!navigator.onLine) break;
+    if (!item?.id) break;
+
+    try {
+      const res = await fetch(item.url, {
+        method: item.method,
+        headers,
+        credentials: 'include',
+        body: item.method === 'DELETE' ? undefined : JSON.stringify(item.body ?? {}),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.status === 402 && (json as any)?.upgradeRequired) {
+        showToast(
+          `Limit reached:\n${(json as any)?.error || 'Upgrade required'}\n\nPlease contact Cevop support to upgrade your plan.`,
+          'error',
+        );
+      }
+      if (!res.ok || (json && typeof json === 'object' && (json as any).success === false)) {
+        break;
+      }
+
+      await deleteOfflineQueueItem(item.id);
+      flushed += 1;
+    } catch {
+      break;
+    }
+  }
+
+  const remaining = (await listOfflineQueue()).length;
+  return { flushed, remaining };
+}
 
 export interface OrgInfo {
   id: string;
@@ -155,11 +294,131 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [silentRefresh, token]);
 
   useEffect(() => {
+    if (!token) return;
+
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+    const onOnline = () => {
+      flushOfflineQueue(headers)
+        .then(({ flushed }) => {
+          if (flushed > 0) {
+            showToast(`Synced ${flushed} pending change${flushed === 1 ? '' : 's'}.`, 'success');
+          }
+        })
+        .catch(() => void 0);
+    };
+
+    if (navigator.onLine) onOnline();
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [token]);
+
+  const hydrateFromToken = useCallback(
+    async (activeToken: string) => {
+      setToken(activeToken);
+      scheduleRefresh(activeToken);
+
+      const meRes = await fetch(`${API_BASE}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      const { data: userData } = await meRes.json();
+      if (userData) {
+        const allowedRoles = [
+          'ORG_OWNER',
+          'ADMIN',
+          'ORG_MANAGER',
+          'ORG_FINANCE',
+          'ORG_AUDITOR',
+          'BRANCH_ADMIN',
+          'BRANCH_FINANCE',
+        ];
+        if (!allowedRoles.includes(userData.role)) {
+          setUser(null);
+          setToken(null);
+          setActiveBranchFilter(null);
+          return false;
+        }
+        setUser(userData);
+        if (userData.branch) setActiveBranchFilter(userData.branch);
+        return true;
+      }
+      setToken(null);
+      setUser(null);
+      setActiveBranchFilter(null);
+      return false;
+    },
+    [scheduleRefresh],
+  );
+
+  useEffect(() => {
+    function isAllowedOrigin(origin: string): boolean {
+      try {
+        const o = new URL(origin);
+        if (o.protocol === 'https:' && o.hostname.endsWith('.cevop.com')) return true;
+        if (o.hostname === 'cevop.com' && o.protocol === 'https:') return true;
+        if (o.hostname === 'localhost' || o.hostname === '127.0.0.1') return true;
+      } catch {
+        void 0;
+      }
+      return false;
+    }
+
+    async function onMessage(ev: MessageEvent) {
+      if (!isAllowedOrigin(ev.origin)) return;
+      if (ev.data?.type !== 'CEVOP_IMPERSONATE_TOKEN') return;
+      const incomingToken = ev.data?.token;
+      if (typeof incomingToken !== 'string' || incomingToken.length < 50) return;
+
+      try {
+        sessionStorage.setItem('impersonate_token', incomingToken);
+      } catch {
+        void 0;
+      }
+
+      setLoading(true);
+      const ok = await hydrateFromToken(incomingToken).catch(() => false);
+      setLoading(false);
+
+      try {
+        (ev.source as WindowProxy | null)?.postMessage(
+          { type: 'CEVOP_IMPERSONATE_ACK' },
+          ev.origin,
+        );
+      } catch {
+        void 0;
+      }
+
+      if (ok && window.location.pathname === '/login') {
+        window.location.replace('/');
+      }
+    }
+
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [hydrateFromToken]);
+
+  useEffect(() => {
     // Attempt to restore session from httpOnly cookie, or from URL token (Impersonation)
     (async () => {
       try {
         const urlParams = new URLSearchParams(window.location.search);
+        const codeFromUrl = urlParams.get('code');
         let tokenFromUrl = urlParams.get('token');
+
+        if (codeFromUrl && !tokenFromUrl) {
+          const exchangeRes = await fetch(
+            `${API_BASE}/api/auth/impersonate/exchange?code=${encodeURIComponent(codeFromUrl)}`,
+            { headers: AUTH_HEADERS, credentials: 'include' },
+          );
+          if (exchangeRes.ok) {
+            const { data } = await exchangeRes.json();
+            const exchangedToken = typeof data?.token === 'string' ? data.token : null;
+            if (exchangedToken) {
+              tokenFromUrl = exchangedToken;
+              sessionStorage.setItem('impersonate_token', exchangedToken);
+            }
+          }
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
 
         if (tokenFromUrl) {
           // Save to sessionStorage to survive StrictMode double-mount and page refreshes
@@ -205,36 +464,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setLoading(false);
           return;
         }
-
-        setToken(activeToken);
-        scheduleRefresh(activeToken);
-
-        // Then fetch /me to get user details
-        const meRes = await fetch(`${API_BASE}/api/auth/me`, {
-          headers: { Authorization: `Bearer ${activeToken}` },
-        });
-        const { data: userData } = await meRes.json();
-        if (userData) {
-          const allowedRoles = [
-            'ORG_OWNER',
-            'ADMIN',
-            'ORG_MANAGER',
-            'ORG_FINANCE',
-            'ORG_AUDITOR',
-            'BRANCH_ADMIN',
-            'BRANCH_FINANCE',
-          ];
-          if (!allowedRoles.includes(userData.role)) {
-            setUser(null);
-            setToken(null);
-            setLoading(false);
-            return;
-          }
-          setUser(userData);
-          if (userData.branch) setActiveBranchFilter(userData.branch);
-        } else {
-          setToken(null);
-        }
+        await hydrateFromToken(activeToken);
       } catch {
         setToken(null);
       } finally {
@@ -244,7 +474,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     };
-  }, [scheduleRefresh]);
+  }, [hydrateFromToken]);
 
   async function login(
     email: string,
@@ -393,53 +623,82 @@ export function useApi() {
   const handleResponse = useCallback(async (res: Response) => {
     const data = await res.json();
     if (res.status === 402 && data.upgradeRequired) {
-      alert(`Limit Reached:\n${data.error}\n\nPlease contact Cevop support to upgrade your plan.`);
+      showToast(
+        `Limit reached:\n${data.error}\n\nPlease contact Cevop support to upgrade your plan.`,
+        'error',
+      );
     }
     return data;
   }, []);
 
+  const request = useCallback(
+    async (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, body?: any) => {
+      const cacheKey = `${method}:${url}`;
+      const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+
+      if (method === 'GET') {
+        if (offline) {
+          const cached = await getOfflineCache(cacheKey);
+          if (cached) return cached;
+          return { success: false, error: 'Offline' };
+        }
+        try {
+          const json = await fetch(url, { headers, credentials: 'include' }).then(handleResponse);
+          if (json && typeof json === 'object' && (json as any).success === true) {
+            setOfflineCache(cacheKey, json).catch(() => void 0);
+          }
+          return json;
+        } catch {
+          const cached = await getOfflineCache(cacheKey);
+          if (cached) return cached;
+          return { success: false, error: 'Network error' };
+        }
+      }
+
+      try {
+        const init: RequestInit = {
+          method,
+          headers,
+          credentials: 'include',
+        };
+        if (method !== 'DELETE') init.body = JSON.stringify(body ?? {});
+        const json = await fetch(url, init).then(handleResponse);
+        return json;
+      } catch {
+        try {
+          await enqueueOfflineMutation({
+            ts: Date.now(),
+            method: method as any,
+            url,
+            body: method === 'DELETE' ? null : (body ?? {}),
+          });
+          showToast('Saved offline. Will sync when you are back online.', 'info');
+          return { success: true, queued: true };
+        } catch {
+          return { success: false, error: 'Network error' };
+        }
+      }
+    },
+    [handleResponse, headers],
+  );
+
   const get = useCallback(
-    (path: string, params?: Record<string, string>) =>
-      fetch(buildUrl(path, params), { headers, credentials: 'include' }).then(handleResponse),
-    [buildUrl, handleResponse, headers],
+    (path: string, params?: Record<string, string>) => request('GET', buildUrl(path, params)),
+    [buildUrl, request],
   );
   const post = useCallback(
-    (path: string, body: unknown) =>
-      fetch(buildUrl(path), {
-        method: 'POST',
-        headers,
-        credentials: 'include',
-        body: JSON.stringify(body),
-      }).then(handleResponse),
-    [buildUrl, handleResponse, headers],
+    (path: string, body: unknown) => request('POST', buildUrl(path), body),
+    [buildUrl, request],
   );
   const put = useCallback(
-    (path: string, body: unknown) =>
-      fetch(buildUrl(path), {
-        method: 'PUT',
-        headers,
-        credentials: 'include',
-        body: JSON.stringify(body),
-      }).then(handleResponse),
-    [buildUrl, handleResponse, headers],
+    (path: string, body: unknown) => request('PUT', buildUrl(path), body),
+    [buildUrl, request],
   );
   const patch = useCallback(
-    (path: string, body: unknown) =>
-      fetch(buildUrl(path), {
-        method: 'PATCH',
-        headers,
-        credentials: 'include',
-        body: JSON.stringify(body),
-      }).then(handleResponse),
-    [buildUrl, handleResponse, headers],
+    (path: string, body: unknown) => request('PATCH', buildUrl(path), body),
+    [buildUrl, request],
   );
-  const del = useCallback(
-    (path: string) =>
-      fetch(buildUrl(path), { method: 'DELETE', headers, credentials: 'include' }).then(
-        handleResponse,
-      ),
-    [buildUrl, handleResponse, headers],
-  );
+  const del = useCallback((path: string) => request('DELETE', buildUrl(path)), [buildUrl, request]);
 
   return useMemo(
     () => ({ effectiveBranchId, get, post, put, patch, delete: del }),

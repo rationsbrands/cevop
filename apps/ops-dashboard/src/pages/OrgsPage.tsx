@@ -22,8 +22,16 @@ export function OrgsPage() {
   const [meta, setMeta] = useState({ total: 0, pages: 1, page: 1 });
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [planStatus, setPlanStatus] = useState('');
+  const [view, setView] = useState<'active' | 'inactive' | 'all'>('active');
+  const [planStatusAll, setPlanStatusAll] = useState('');
   const [page, setPage] = useState(1);
+
+  const planStatus =
+    view === 'active'
+      ? 'active,trialing'
+      : view === 'inactive'
+        ? 'cancelled,suspended'
+        : planStatusAll;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,6 +69,35 @@ export function OrgsPage() {
 
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <button
+            onClick={() => {
+              setView('active');
+              setPage(1);
+            }}
+            className={`btn btn-sm ${view === 'active' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            Active
+          </button>
+          <button
+            onClick={() => {
+              setView('inactive');
+              setPage(1);
+            }}
+            className={`btn btn-sm ${view === 'inactive' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            Inactive
+          </button>
+          <button
+            onClick={() => {
+              setView('all');
+              setPage(1);
+            }}
+            className={`btn btn-sm ${view === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            All
+          </button>
+        </div>
         <label htmlFor="ops_orgs_search" className="sr-only">
           Search organisations
         </label>
@@ -77,30 +114,34 @@ export function OrgsPage() {
           className="w-full sm:w-64 text-sm"
           autoComplete="off"
         />
-        <label htmlFor="ops_orgs_plan_status" className="sr-only">
-          Plan status
-        </label>
-        <select
-          id="ops_orgs_plan_status"
-          name="planStatus"
-          value={planStatus}
-          onChange={(e) => {
-            setPlanStatus(e.target.value);
-            setPage(1);
-          }}
-          className="w-full sm:w-auto text-sm"
-          autoComplete="off"
-        >
-          <option value="">All Statuses</option>
-          <option value="trialing">Trialing</option>
-          <option value="active">Active</option>
-          <option value="suspended">Suspended</option>
-          <option value="cancelled">Cancelled</option>
-        </select>
+        {view === 'all' && (
+          <>
+            <label htmlFor="ops_orgs_plan_status" className="sr-only">
+              Plan status
+            </label>
+            <select
+              id="ops_orgs_plan_status"
+              name="planStatus"
+              value={planStatusAll}
+              onChange={(e) => {
+                setPlanStatusAll(e.target.value);
+                setPage(1);
+              }}
+              className="w-full sm:w-auto text-sm"
+              autoComplete="off"
+            >
+              <option value="">All Statuses</option>
+              <option value="trialing">Trialing</option>
+              <option value="active">Active</option>
+              <option value="suspended">Suspended</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </>
+        )}
         <button
           onClick={() => {
             setSearch('');
-            setPlanStatus('');
+            if (view === 'all') setPlanStatusAll('');
             setPage(1);
           }}
           className="btn btn-secondary btn-sm w-full sm:w-auto"

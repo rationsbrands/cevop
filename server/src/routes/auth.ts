@@ -93,6 +93,99 @@ function getClientIp(req: Request): string {
   );
 }
 
+function getImpersonationCodeStore(): Map<
+  string,
+  { token: string; expiresAt: number; orgId: string; opsUserId: string; createdAt: number }
+> {
+  const g = globalThis as any;
+  if (!g.__cevopImpersonationCodeStore) g.__cevopImpersonationCodeStore = new Map();
+  return g.__cevopImpersonationCodeStore;
+}
+
+authRouter.get('/impersonate/exchange', async (req: Request, res: Response) => {
+  try {
+    const schema = z.object({ code: z.string().min(10).max(256) });
+    const { code } = schema.parse(req.query);
+
+    const store = getImpersonationCodeStore();
+    const entry = store.get(code);
+    if (!entry) {
+      res.status(400).json({ success: false, error: 'Invalid or expired code' });
+      return;
+    }
+    store.delete(code);
+
+    if (Date.now() > entry.expiresAt) {
+      res.status(400).json({ success: false, error: 'Invalid or expired code' });
+      return;
+    }
+
+    res.json({ success: true, data: { token: entry.token } });
+  } catch {
+    res.status(400).json({ success: false, error: 'Invalid request' });
+  }
+});
+
+authRouter.get('/push/public-key', (req: Request, res: Response) => {
+  const publicKey = (process.env.WEB_PUSH_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY || '').trim();
+  if (!publicKey) {
+    res.status(404).json({ success: false, error: 'Web Push not configured' });
+    return;
+  }
+  res.json({ success: true, data: { publicKey } });
+});
+
+authRouter.post('/push/subscribe', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const schema = z.object({
+      subscription: z.any(),
+    });
+    const { subscription } = schema.parse(req.body);
+    const endpoint = typeof subscription?.endpoint === 'string' ? subscription.endpoint : '';
+    if (!endpoint) {
+      res.status(400).json({ success: false, error: 'Invalid subscription' });
+      return;
+    }
+
+    const app = ((req.headers[APP_HEADER] as string | undefined) || 'unknown').toLowerCase();
+    await (prisma as any).pushSubscription.upsert({
+      where: { endpoint },
+      create: {
+        userId: req.user!.userId,
+        organizationId: req.user!.organizationId,
+        branchId: req.user!.branchId ?? null,
+        app,
+        endpoint,
+        subscription,
+      },
+      update: {
+        userId: req.user!.userId,
+        organizationId: req.user!.organizationId,
+        branchId: req.user!.branchId ?? null,
+        app,
+        subscription,
+      },
+    });
+
+    res.json({ success: true });
+  } catch {
+    res.status(400).json({ success: false, error: 'Invalid request' });
+  }
+});
+
+authRouter.post('/push/unsubscribe', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const schema = z.object({ endpoint: z.string().min(1) });
+    const { endpoint } = schema.parse(req.body);
+    await (prisma as any).pushSubscription.deleteMany({
+      where: { endpoint, userId: req.user!.userId },
+    });
+    res.json({ success: true });
+  } catch {
+    res.status(400).json({ success: false, error: 'Invalid request' });
+  }
+});
+
 // ─── POST /auth/login ─────────────────────────────────────────────────────────
 // Email-only login — no org slug required. The system finds the user by email,
 // handles multi-org collisions gracefully, enforces account lockout.

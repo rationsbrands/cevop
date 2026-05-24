@@ -68,23 +68,24 @@ export function LoginPage() {
       <div className="hidden lg:flex flex-col justify-between p-10 border-r border-[var(--border)] bg-[var(--surface)]">
         <div className="space-y-3">
           <div className="flex items-center gap-3">
-            <div className="brand-mark text-4xl text-[var(--accent)] leading-none">CEVOP</div>
+            <div role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-lg" />
             <span className="text-[10px] border border-[var(--danger)] text-[var(--danger)] px-2 py-1 font-bold tracking-widest uppercase">
               Ops
             </span>
           </div>
           <p className="text-sm text-[var(--muted)] max-w-sm">Internal operations portal.</p>
         </div>
-        <div className="text-xs text-[var(--muted)] font-medium">
-          Powered by <span className="brand-mark text-[var(--text)]">CEVOP</span>
+        <div className="text-xs text-[var(--muted)] font-medium flex items-center gap-2">
+          <span>Powered by</span>
+          <div role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-sm" />
         </div>
       </div>
 
       <div className="flex items-center justify-center p-6">
         <div className="w-full max-w-md space-y-8 animate-in">
           <div className="space-y-2">
-            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">
-              CEVOP
+            <div className="lg:hidden">
+              <div role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-lg" />
             </div>
             <h1 className="font-display text-3xl text-[var(--text)]">Ops sign in</h1>
             <p className="text-sm text-[var(--muted)]">Cevop internal only.</p>

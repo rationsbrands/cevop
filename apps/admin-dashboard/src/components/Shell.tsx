@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth, useApi } from '../context/auth';
 import { useTheme } from '../context/theme';
 import { useSocket } from '../context/socket';
+import { ToastViewport } from './Popup';
 import {
   IconDashboard,
   IconMenu,
@@ -32,6 +33,8 @@ export function Shell() {
   const api = useApi();
   const navigate = useNavigate();
   const location = useLocation();
+  const [installAvailable, setInstallAvailable] = useState(false);
+  const [iosInstallOpen, setIosInstallOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     if (typeof window === 'undefined') return true;
     return window.innerWidth >= 1024;
@@ -74,6 +77,26 @@ export function Shell() {
     'SUPERADMIN',
   ].includes(role);
   const canViewOrders = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(role);
+
+  useEffect(() => {
+    const updateInstallState = () => {
+      try {
+        const ua = (navigator.userAgent || '').toLowerCase();
+        const isIos = /iphone|ipad|ipod/.test(ua) && !(window as any).MSStream;
+        const isStandalone =
+          window.matchMedia?.('(display-mode: standalone)')?.matches ||
+          (navigator as any).standalone === true;
+        const hasDeferred = !!window.__cevopDeferredInstallPrompt;
+        setInstallAvailable(!isStandalone && (hasDeferred || isIos));
+      } catch {
+        setInstallAvailable(false);
+      }
+    };
+    updateInstallState();
+    window.addEventListener('cevop-install-available', updateInstallState as EventListener);
+    return () =>
+      window.removeEventListener('cevop-install-available', updateInstallState as EventListener);
+  }, []);
 
   useEffect(() => {
     const onResize = () => {
@@ -140,8 +163,61 @@ export function Shell() {
     navigate('/login');
   }
 
+  async function handleInstall() {
+    try {
+      const ua = (navigator.userAgent || '').toLowerCase();
+      const isIos = /iphone|ipad|ipod/.test(ua) && !(window as any).MSStream;
+      const isStandalone =
+        window.matchMedia?.('(display-mode: standalone)')?.matches ||
+        (navigator as any).standalone === true;
+      if (isStandalone) return;
+
+      const deferred = window.__cevopDeferredInstallPrompt;
+      if (deferred?.prompt) {
+        try {
+          await deferred.prompt();
+          await deferred.userChoice.catch(() => void 0);
+        } finally {
+          window.__cevopDeferredInstallPrompt = null;
+          window.dispatchEvent(new Event('cevop-install-available'));
+        }
+        return;
+      }
+
+      if (isIos) {
+        setIosInstallOpen(true);
+      }
+    } catch {
+      void 0;
+    }
+  }
+
   return (
     <div className="flex w-full h-dvh overflow-hidden relative">
+      <ToastViewport />
+      {iosInstallOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setIosInstallOpen(false)}
+        >
+          <div
+            className="card w-full max-w-md p-6 space-y-4 animate-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="space-y-2">
+              <h3 className="font-display text-2xl text-[var(--text)]">Install Cevop Admin</h3>
+              <p className="text-sm text-[var(--muted)]">
+                On iPhone/iPad Safari: tap Share, then Add to Home Screen.
+              </p>
+            </div>
+            <div className="flex justify-end">
+              <button className="btn btn-secondary" onClick={() => setIosInstallOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Mobile Backdrop */}
       {mobileMenuOpen && (
         <div
@@ -169,12 +245,12 @@ export function Shell() {
             {sidebarOpen ? (
               <IconChevronLeft size={16} />
             ) : (
-              <span className="brand-mark text-[var(--accent)]" />
+              <img src="/icon-192.png" alt="Cevop" className="w-5 h-5" draggable={false} />
             )}
           </button>
           {(sidebarOpen || mobileMenuOpen) && (
-            <span className="brand-mark text-base text-[var(--text)] whitespace-nowrap tracking-wide">
-              CEVOP
+            <span className="flex items-center gap-2 whitespace-nowrap">
+              <span role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-md" />
             </span>
           )}
 
@@ -368,6 +444,11 @@ export function Shell() {
           </div>
 
           <div className="flex items-center gap-4 shrink-0">
+            {installAvailable && (
+              <button className="btn btn-secondary btn-sm" onClick={handleInstall}>
+                INSTALL
+              </button>
+            )}
             <div className="flex items-center gap-1.5">
               <div
                 className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`}

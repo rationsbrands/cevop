@@ -3,6 +3,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import {
+  API_BASE as CUSTOMER_API_BASE,
   fetchTableInfo,
   fetchMenu,
   submitOrder,
@@ -31,7 +32,6 @@ interface HelpOption {
   id: string;
   type: 'WAITER' | 'SERVICE' | 'BILL';
   label: string;
-  icon?: string;
 }
 interface CartItem {
   menuItem: MenuItem;
@@ -60,7 +60,6 @@ interface OrderPreview {
   items: OrderPreviewItem[];
 }
 
-const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 const ACTIVE_ORDER_STATUSES = new Set(['RECEIVED', 'PREPARING', 'READY']);
 
 function generateIdempotencyKey(): string {
@@ -119,6 +118,10 @@ export function MenuPage() {
   const categoryRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const customWaiterInputRef = useRef<HTMLInputElement | null>(null);
   const customServiceInputRef = useRef<HTMLInputElement | null>(null);
+  const cartModalRef = useRef<HTMLDivElement | null>(null);
+  const waiterModalRef = useRef<HTMLDivElement | null>(null);
+  const serviceModalRef = useRef<HTMLDivElement | null>(null);
+  const lastFocusRef = useRef<HTMLElement | null>(null);
   const pruneRunRef = useRef(0);
   const socketRef = useRef<Socket | null>(null);
   const joinedOrdersRef = useRef<Set<string>>(new Set());
@@ -145,17 +148,17 @@ export function MenuPage() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const closeWaiter = () => {
+  const closeWaiter = useCallback(() => {
     setWaiterModal(false);
     setWaiterReason('');
     setCustomWaiterReason('');
-  };
+  }, []);
 
-  const closeService = () => {
+  const closeService = useCallback(() => {
     setServiceModal(false);
     setServiceType('');
     setCustomServiceType('');
-  };
+  }, []);
 
   const selectWaiterReason = (label: string) => {
     setWaiterReason(label);
@@ -194,7 +197,7 @@ export function MenuPage() {
         notes: '',
       };
 
-      const res = await fetch(`${API_BASE}/api/service-requests/public`, {
+      const res = await fetch(`${CUSTOMER_API_BASE}/api/service-requests/public`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -354,6 +357,94 @@ export function MenuPage() {
   }, [serviceModal, serviceIsSpecial]);
 
   useEffect(() => {
+    const anyModalOpen = cartOpen || waiterModal || serviceModal;
+    if (!anyModalOpen) {
+      if (lastFocusRef.current) {
+        setTimeout(() => lastFocusRef.current?.focus(), 0);
+      }
+      lastFocusRef.current = null;
+      return;
+    }
+
+    if (!lastFocusRef.current) {
+      lastFocusRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+
+    const activeRoot = waiterModal
+      ? waiterModalRef.current
+      : serviceModal
+        ? serviceModalRef.current
+        : cartOpen
+          ? cartModalRef.current
+          : null;
+
+    const getFocusable = (root: HTMLElement | null) => {
+      if (!root) return [] as HTMLElement[];
+      const nodes = Array.from(
+        root.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      return nodes.filter((el) => {
+        const style = window.getComputedStyle(el);
+        return style.visibility !== 'hidden' && style.display !== 'none';
+      });
+    };
+
+    const focusFirst = () => {
+      const focusable = getFocusable(activeRoot);
+      if (focusable.length > 0) {
+        focusable[0].focus();
+        return;
+      }
+      activeRoot?.focus();
+    };
+
+    setTimeout(focusFirst, 0);
+
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (waiterModal) closeWaiter();
+        else if (serviceModal) closeService();
+        else if (cartOpen) setCartOpen(false);
+        return;
+      }
+
+      if (e.key !== 'Tab') return;
+      if (!activeRoot) return;
+
+      const focusable = getFocusable(activeRoot);
+      if (focusable.length === 0) {
+        e.preventDefault();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [cartOpen, waiterModal, serviceModal, closeWaiter, closeService]);
+
+  useEffect(() => {
     const refreshOrders = () => {
       try {
         const canonicalKey =
@@ -436,7 +527,7 @@ export function MenuPage() {
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      syncPendingOrders(API_BASE);
+      syncPendingOrders(CUSTOMER_API_BASE);
     };
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
@@ -462,7 +553,7 @@ export function MenuPage() {
         const table = await fetchTableInfo(orgId, tableId);
         const [menu, options] = await Promise.all([
           fetchMenu(orgId, table.branchId),
-          fetchHelpOptions(orgId, table.branchId),
+          fetchHelpOptions(table.organizationId, table.branchId),
         ]);
         setTableInfo(table);
         setCategories(menu);
@@ -680,15 +771,29 @@ export function MenuPage() {
     setSubmitting(true);
 
     const idempotencyKey = generateIdempotencyKey();
-    const orderPayload = {
-      organizationId: orgId,
-      tableId,
-      branchId: tableInfo?.branchId || undefined,
-      idempotencyKey,
-      items: cart.map((i) => ({ menuItemId: i.menuItem.id, quantity: i.quantity, notes: i.notes })),
-    };
 
     try {
+      let effectiveTableInfo = tableInfo;
+      if (!effectiveTableInfo) {
+        effectiveTableInfo = await fetchTableInfo(orgId, tableId);
+        setTableInfo(effectiveTableInfo);
+      }
+      if (!effectiveTableInfo) {
+        throw new Error('Table not found');
+      }
+
+      const orderPayload = {
+        organizationId: effectiveTableInfo.organizationId,
+        tableId: effectiveTableInfo.id,
+        branchId: effectiveTableInfo.branchId || undefined,
+        idempotencyKey,
+        items: cart.map((i) => ({
+          menuItemId: i.menuItem.id,
+          quantity: i.quantity,
+          notes: i.notes,
+        })),
+      };
+
       if (isOnline) {
         const { data } = await submitOrder(orderPayload);
         clearCart();
@@ -696,8 +801,8 @@ export function MenuPage() {
         // Save order info so customer can return to status page
         try {
           localStorage.setItem('lastOrderId', data.id);
-          localStorage.setItem('lastOrderOrgId', orgId || '');
-          localStorage.setItem('lastOrderTableId', tableId || '');
+          localStorage.setItem('lastOrderOrgId', effectiveTableInfo.organizationId);
+          localStorage.setItem('lastOrderTableId', effectiveTableInfo.id);
         } catch {
           void 0;
         }
@@ -752,17 +857,17 @@ export function MenuPage() {
       return;
     }
     try {
-      if (!tableInfo) {
-        try {
-          setTableInfo(await fetchTableInfo(orgId, tableId));
-        } catch {
-          void 0;
-        }
+      let effectiveTableInfo = tableInfo;
+      if (!effectiveTableInfo) {
+        effectiveTableInfo = await fetchTableInfo(orgId, tableId);
+        setTableInfo(effectiveTableInfo);
       }
+      if (!effectiveTableInfo) throw new Error('Table not found');
+
       await callWaiter({
-        organizationId: orgId,
-        tableId,
-        branchId: tableInfo?.branchId || undefined,
+        organizationId: effectiveTableInfo.organizationId,
+        tableId: effectiveTableInfo.id,
+        branchId: effectiveTableInfo.branchId || undefined,
         reason: waiterReasonToSend || undefined,
       });
       closeWaiter();
@@ -783,17 +888,17 @@ export function MenuPage() {
       return;
     }
     try {
-      if (!tableInfo) {
-        try {
-          setTableInfo(await fetchTableInfo(orgId, tableId));
-        } catch {
-          void 0;
-        }
+      let effectiveTableInfo = tableInfo;
+      if (!effectiveTableInfo) {
+        effectiveTableInfo = await fetchTableInfo(orgId, tableId);
+        setTableInfo(effectiveTableInfo);
       }
+      if (!effectiveTableInfo) throw new Error('Table not found');
+
       await requestService({
-        organizationId: orgId,
-        tableId,
-        branchId: tableInfo?.branchId || undefined,
+        organizationId: effectiveTableInfo.organizationId,
+        tableId: effectiveTableInfo.id,
+        branchId: effectiveTableInfo.branchId || undefined,
         serviceType: serviceTypeToSend,
       });
       closeService();
@@ -1110,9 +1215,9 @@ export function MenuPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <button
                 onClick={() => setWaiterModal(true)}
-                className="card p-4 text-left hover:border-[var(--accent)] transition-colors"
+                className="card p-4 text-left hover:border-[var(--accent)] transition-colors active:scale-[0.99]"
               >
-                <div className="w-8 h-8 border border-[var(--accent)] rounded-sm mx-auto mb-2 flex items-center justify-center">
+                <div className="w-10 h-10 border border-[var(--accent)]/40 rounded-xl mx-auto mb-3 flex items-center justify-center bg-[var(--accent-dim)] text-[var(--accent)]">
                   <svg
                     width="16"
                     height="16"
@@ -1130,9 +1235,9 @@ export function MenuPage() {
               </button>
               <button
                 onClick={() => setServiceModal(true)}
-                className="card p-4 text-left hover:border-[var(--accent)] transition-colors"
+                className="card p-4 text-left hover:border-[var(--accent)] transition-colors active:scale-[0.99]"
               >
-                <div className="w-8 h-8 border border-[var(--border)] rounded-sm mx-auto mb-2 flex items-center justify-center">
+                <div className="w-10 h-10 border border-[var(--border)] rounded-xl mx-auto mb-3 flex items-center justify-center bg-[var(--surface2)] text-[var(--text)]">
                   <svg
                     width="16"
                     height="16"
@@ -1155,10 +1260,22 @@ export function MenuPage() {
                   <button
                     key={opt.id}
                     onClick={() => handleHelpOptionClick(opt)}
-                    className="card p-4 text-left hover:border-[var(--accent)] transition-colors border-[var(--accent)]/30"
+                    className="card p-4 text-left hover:border-[var(--accent)] transition-colors border-[var(--accent)]/30 active:scale-[0.99]"
                   >
-                    <div className="w-8 h-8 border border-amber-500/50 rounded-sm mx-auto mb-2 flex items-center justify-center text-xl">
-                      {opt.icon || '💳'}
+                    <div className="w-10 h-10 border border-amber-500/40 rounded-xl mx-auto mb-3 flex items-center justify-center bg-amber-500/10 text-amber-400">
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <rect x="2" y="5" width="20" height="14" rx="2" ry="2" />
+                        <line x1="2" y1="10" x2="22" y2="10" />
+                      </svg>
                     </div>
                     <div className="font-semibold text-sm">{opt.label}</div>
                     <div className="text-[var(--muted)] text-xs mt-0.5">Instant request</div>
@@ -1168,8 +1285,9 @@ export function MenuPage() {
           </div>
         </div>
 
-        <p className="text-[10px] text-[var(--muted)] text-center font-bold tracking-widest opacity-50 uppercase mb-8">
-          Powered by <span className="brand-mark text-[var(--text)]">CEVOP</span>
+        <p className="text-[10px] text-[var(--muted)] text-center font-bold tracking-widest opacity-50 uppercase mb-8 flex items-center justify-center gap-2">
+          <span>Powered by</span>
+          <span role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-sm" />
         </p>
       </main>
 
@@ -1197,12 +1315,20 @@ export function MenuPage() {
         >
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
           <div
+            ref={cartModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="customer_cart_title"
+            tabIndex={-1}
             className="relative bg-[var(--surface)] border-t border-[var(--border)] max-h-[80dvh] flex flex-col animate-slide-up"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between p-4 border-b border-[var(--border)]">
-              <h2 className="font-display text-2xl">YOUR ORDER</h2>
+              <h2 id="customer_cart_title" className="font-display text-2xl">
+                YOUR ORDER
+              </h2>
               <button
+                type="button"
                 onClick={() => setCartOpen(false)}
                 className="text-[var(--muted)] text-xl hover:text-[var(--text)] p-1"
               >
@@ -1265,24 +1391,74 @@ export function MenuPage() {
 
       {/* Waiter Modal */}
       {waiterModal && (
-        <div className="fixed inset-0 z-50 flex items-end" onClick={closeWaiter}>
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center"
+          onClick={closeWaiter}
+        >
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
           <div
-            className="relative w-full bg-[var(--surface)] border-t border-[var(--border)] p-4 space-y-4 animate-slide-up safe-bottom"
+            ref={waiterModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="customer_waiter_title"
+            tabIndex={-1}
+            className="relative w-full sm:max-w-lg bg-[var(--surface)] border-t sm:border border-[var(--border)] p-4 sm:p-5 space-y-4 animate-slide-up safe-bottom sm:rounded-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="font-display text-2xl">CALL WAITER</h2>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 id="customer_waiter_title" className="font-display text-2xl leading-tight">
+                  Call Waiter
+                </h2>
+                <div className="text-xs text-[var(--muted)] mt-1">
+                  Pick what you need and we’ll notify staff.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeWaiter}
+                className="shrink-0 w-10 h-10 rounded-full border border-[var(--border)] bg-[var(--surface2)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--text)]"
+                aria-label="Close"
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {helpOptions
                 .filter((o) => o.type === 'WAITER')
                 .map((opt) => (
                   <button
                     key={opt.id}
                     onClick={() => selectWaiterReason(opt.label)}
-                    className={`py-2 px-3 text-sm border transition-all ${waiterReason === opt.label ? 'border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'}`}
+                    className={`group p-3 rounded-2xl border text-left transition-all active:scale-[0.99] ${
+                      waiterReason === opt.label
+                        ? 'border-[var(--accent)] bg-[var(--accent-dim)]'
+                        : 'border-[var(--border)] bg-[var(--surface2)] hover:border-[var(--accent)]'
+                    }`}
                   >
-                    {opt.icon && <span className="mr-2">{opt.icon}</span>}
-                    {opt.label}
+                    <div className="min-w-0 space-y-0.5">
+                      <div
+                        className={`text-sm font-semibold leading-snug break-words ${
+                          waiterReason === opt.label ? 'text-[var(--accent)]' : 'text-[var(--text)]'
+                        }`}
+                      >
+                        {opt.label}
+                      </div>
+                      <div className="text-[10px] text-[var(--muted)]">Tap to select</div>
+                    </div>
                   </button>
                 ))}
             </div>
@@ -1308,12 +1484,12 @@ export function MenuPage() {
                   onChange={(e) => setCustomWaiterReason(e.target.value)}
                   placeholder="Type what you need…"
                   autoComplete="off"
-                  className="w-full bg-[var(--surface2)] border border-[var(--border)] text-[var(--text)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  className="w-full bg-[var(--surface2)] border border-[var(--border)] text-[var(--text)] px-3 py-3 text-sm outline-none focus:border-[var(--accent)] rounded-2xl"
                 />
               </div>
             )}
-            <div className="flex gap-2">
-              <button onClick={closeWaiter} className="btn-secondary flex-1">
+            <div className="flex gap-2 pt-1">
+              <button onClick={closeWaiter} className="btn-secondary flex-1 py-3">
                 Cancel
               </button>
               <button
@@ -1321,7 +1497,7 @@ export function MenuPage() {
                 disabled={
                   !canSendWaiter || helpOptions.filter((o) => o.type === 'WAITER').length === 0
                 }
-                className="btn-primary flex-1 disabled:opacity-50"
+                className="btn-primary flex-1 py-3 disabled:opacity-50"
               >
                 Call Waiter
               </button>
@@ -1332,24 +1508,74 @@ export function MenuPage() {
 
       {/* Service Modal */}
       {serviceModal && (
-        <div className="fixed inset-0 z-50 flex items-end" onClick={closeService}>
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center"
+          onClick={closeService}
+        >
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
           <div
-            className="relative w-full bg-[var(--surface)] border-t border-[var(--border)] p-4 space-y-4 animate-slide-up safe-bottom"
+            ref={serviceModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="customer_service_title"
+            tabIndex={-1}
+            className="relative w-full sm:max-w-lg bg-[var(--surface)] border-t sm:border border-[var(--border)] p-4 sm:p-5 space-y-4 animate-slide-up safe-bottom sm:rounded-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="font-display text-2xl">REQUEST SERVICE</h2>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 id="customer_service_title" className="font-display text-2xl leading-tight">
+                  Request Service
+                </h2>
+                <div className="text-xs text-[var(--muted)] mt-1">
+                  Choose a request type and we’ll notify staff.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeService}
+                className="shrink-0 w-10 h-10 rounded-full border border-[var(--border)] bg-[var(--surface2)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--text)]"
+                aria-label="Close"
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {helpOptions
                 .filter((o) => o.type === 'SERVICE')
                 .map((opt) => (
                   <button
                     key={opt.id}
                     onClick={() => selectServiceType(opt.label)}
-                    className={`py-2 px-3 text-sm border transition-all ${serviceType === opt.label ? 'border-[var(--accent)] bg-[var(--accent-dim)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'}`}
+                    className={`group p-3 rounded-2xl border text-left transition-all active:scale-[0.99] ${
+                      serviceType === opt.label
+                        ? 'border-[var(--accent)] bg-[var(--accent-dim)]'
+                        : 'border-[var(--border)] bg-[var(--surface2)] hover:border-[var(--accent)]'
+                    }`}
                   >
-                    {opt.icon && <span className="mr-2">{opt.icon}</span>}
-                    {opt.label}
+                    <div className="min-w-0 space-y-0.5">
+                      <div
+                        className={`text-sm font-semibold leading-snug break-words ${
+                          serviceType === opt.label ? 'text-[var(--accent)]' : 'text-[var(--text)]'
+                        }`}
+                      >
+                        {opt.label}
+                      </div>
+                      <div className="text-[10px] text-[var(--muted)]">Tap to select</div>
+                    </div>
                   </button>
                 ))}
             </div>
@@ -1375,12 +1601,12 @@ export function MenuPage() {
                   onChange={(e) => setCustomServiceType(e.target.value)}
                   placeholder="Type what you need…"
                   autoComplete="off"
-                  className="w-full bg-[var(--surface2)] border border-[var(--border)] text-[var(--text)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+                  className="w-full bg-[var(--surface2)] border border-[var(--border)] text-[var(--text)] px-3 py-3 text-sm outline-none focus:border-[var(--accent)] rounded-2xl"
                 />
               </div>
             )}
-            <div className="flex gap-2">
-              <button onClick={closeService} className="btn-secondary flex-1">
+            <div className="flex gap-2 pt-1">
+              <button onClick={closeService} className="btn-secondary flex-1 py-3">
                 Cancel
               </button>
               <button
@@ -1388,7 +1614,7 @@ export function MenuPage() {
                 disabled={
                   !canSendService || helpOptions.filter((o) => o.type === 'SERVICE').length === 0
                 }
-                className="btn-primary flex-1 disabled:opacity-50"
+                className="btn-primary flex-1 py-3 disabled:opacity-50"
               >
                 Send Request
               </button>

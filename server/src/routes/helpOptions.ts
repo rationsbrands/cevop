@@ -14,7 +14,6 @@ export const helpOptionsRouter = Router();
 const helpOptionSchema = z.object({
   type: z.enum(['WAITER', 'SERVICE', 'BILL']),
   label: z.string().min(1).max(100),
-  icon: z.string().optional(),
   sortOrder: z.number().int().optional(),
   isActive: z.boolean().optional(),
 });
@@ -23,11 +22,17 @@ const helpOptionSchema = z.object({
 helpOptionsRouter.get('/public', async (req: Request, res: Response) => {
   try {
     const { organizationId, branchId } = req.query;
-    const orgId = organizationId as string;
+    const orgInput = organizationId as string;
 
-    if (!orgId) {
+    if (!orgInput) {
       return res.status(400).json({ success: false, error: 'Organization ID is required' });
     }
+
+    const org = await prisma.organization.findFirst({
+      where: { OR: [{ id: orgInput }, { slug: orgInput }] },
+      select: { id: true },
+    });
+    const orgId = org?.id ?? orgInput;
 
     const branches = await prisma.branch.findMany({
       where: { organizationId: orgId, isActive: true },
@@ -50,6 +55,14 @@ helpOptionsRouter.get('/public', async (req: Request, res: Response) => {
         isActive: true,
       },
       orderBy: { sortOrder: 'asc' },
+      select: {
+        id: true,
+        type: true,
+        label: true,
+        sortOrder: true,
+        isActive: true,
+        branchId: true,
+      },
     });
 
     res.json({ success: true, data: options });
@@ -72,6 +85,14 @@ helpOptionsRouter.get('/', async (req: AuthRequest, res: Response) => {
         branchId,
       },
       orderBy: { sortOrder: 'asc' },
+      select: {
+        id: true,
+        type: true,
+        label: true,
+        sortOrder: true,
+        isActive: true,
+        branchId: true,
+      },
     });
     res.json({ success: true, data: options });
   } catch {

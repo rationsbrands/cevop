@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useApi, useAuth } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
+import { ConfirmDialog, showToast } from '../components/Popup';
 
 interface Category {
   id: string;
@@ -49,6 +50,46 @@ export function MenuPage() {
   const [activeCat, setActiveCat] = useState<string>('');
   const [draggingCategoryId, setDraggingCategoryId] = useState<string | null>(null);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmLabel, setConfirmLabel] = useState('Confirm');
+  const [confirmVariant, setConfirmVariant] = useState<'default' | 'danger'>('default');
+  const confirmActionRef = useRef<null | (() => Promise<void> | void)>(null);
+
+  function openConfirm(opts: {
+    title: string;
+    message?: string;
+    confirmLabel?: string;
+    variant?: 'default' | 'danger';
+    action: () => Promise<void> | void;
+  }) {
+    confirmActionRef.current = opts.action;
+    setConfirmTitle(opts.title);
+    setConfirmMessage(opts.message ?? '');
+    setConfirmLabel(opts.confirmLabel ?? 'Confirm');
+    setConfirmVariant(opts.variant ?? 'default');
+    setConfirmOpen(true);
+  }
+
+  async function onConfirm() {
+    if (confirmBusy) return;
+    const action = confirmActionRef.current;
+    if (!action) {
+      setConfirmOpen(false);
+      return;
+    }
+    setConfirmBusy(true);
+    try {
+      await action();
+      setConfirmOpen(false);
+    } catch (e: any) {
+      showToast(e?.message ? String(e.message) : 'Action failed', 'error');
+    } finally {
+      setConfirmBusy(false);
+    }
+  }
 
   function moveById<T extends { id: string }>(list: T[], fromId: string, toId: string): T[] {
     const fromIndex = list.findIndex((x) => x.id === fromId);
@@ -186,9 +227,16 @@ export function MenuPage() {
   }
 
   async function deleteCat(id: string) {
-    if (!confirm('Delete this category and all its items?')) return;
-    await api.delete('/api/menu/categories/' + id);
-    load();
+    openConfirm({
+      title: 'Delete Category',
+      message: 'Delete this category and all its items?',
+      confirmLabel: 'Delete',
+      variant: 'danger',
+      action: async () => {
+        await api.delete('/api/menu/categories/' + id);
+        await load();
+      },
+    });
   }
 
   async function saveItem() {
@@ -219,18 +267,28 @@ export function MenuPage() {
     load();
   }
   async function deleteItem(id: string) {
-    if (!confirm('Delete this item?')) return;
-    await api.delete('/api/menu/items/' + id);
-    load();
+    openConfirm({
+      title: 'Delete Item',
+      message: 'Delete this item?',
+      confirmLabel: 'Delete',
+      variant: 'danger',
+      action: async () => {
+        await api.delete('/api/menu/items/' + id);
+        await load();
+      },
+    });
   }
 
   async function bulkToggleCategory(catId: string, isAvailable: boolean) {
-    if (
-      !confirm(`Mark all items in this category as ${isAvailable ? 'AVAILABLE' : 'UNAVAILABLE'}?`)
-    )
-      return;
-    await api.patch(`/api/menu/categories/${catId}/bulk-toggle`, { isAvailable });
-    load();
+    openConfirm({
+      title: 'Bulk Update',
+      message: `Mark all items in this category as ${isAvailable ? 'AVAILABLE' : 'UNAVAILABLE'}?`,
+      confirmLabel: 'Apply',
+      action: async () => {
+        await api.patch(`/api/menu/categories/${catId}/bulk-toggle`, { isAvailable });
+        await load();
+      },
+    });
   }
 
   const currentCat = categories.find((c) => c.id === activeCat);
@@ -254,6 +312,19 @@ export function MenuPage() {
 
   return (
     <div className="space-y-6 animate-in">
+      <ConfirmDialog
+        open={confirmOpen}
+        title={confirmTitle}
+        message={confirmMessage}
+        confirmLabel={confirmLabel}
+        variant={confirmVariant}
+        busy={confirmBusy}
+        onCancel={() => {
+          if (confirmBusy) return;
+          setConfirmOpen(false);
+        }}
+        onConfirm={() => void onConfirm()}
+      />
       <div className="flex items-center justify-between">
         <h1 className="font-display text-4xl">MENU</h1>
         <button className="btn btn-primary btn-sm" onClick={openAddCat}>

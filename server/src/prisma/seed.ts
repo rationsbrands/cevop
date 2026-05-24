@@ -919,18 +919,18 @@ async function main() {
   // ── HELP OPTIONS (Need Help / Service Request) ──────────────────────────────
   console.log('⚡ Seeding help options...');
   const helpOpts = [
-    { type: HelpOptionType.WAITER, label: 'Table assistance', icon: '🙋', sortOrder: 1 },
-    { type: HelpOptionType.WAITER, label: 'Question', icon: '❓', sortOrder: 2 },
-    { type: HelpOptionType.BILL, label: 'Request Bill', icon: '💳', sortOrder: 3 },
-    { type: HelpOptionType.WAITER, label: 'Refill drinks', icon: '🥤', sortOrder: 4 },
-    { type: HelpOptionType.WAITER, label: 'Another round', icon: '🍻', sortOrder: 5 },
-    { type: HelpOptionType.WAITER, label: 'Other', icon: '💬', sortOrder: 6 },
-    { type: HelpOptionType.SERVICE, label: 'Refill water', icon: '💧', sortOrder: 1 },
-    { type: HelpOptionType.SERVICE, label: 'More cutlery', icon: '🍴', sortOrder: 2 },
-    { type: HelpOptionType.SERVICE, label: 'Takeaway box', icon: '🥡', sortOrder: 3 },
-    { type: HelpOptionType.SERVICE, label: 'Baby chair', icon: '👶', sortOrder: 4 },
-    { type: HelpOptionType.SERVICE, label: 'Complaint', icon: '⚠️', sortOrder: 5 },
-    { type: HelpOptionType.SERVICE, label: 'Special request', icon: '✨', sortOrder: 6 },
+    { type: HelpOptionType.WAITER, label: 'Table assistance', sortOrder: 1 },
+    { type: HelpOptionType.WAITER, label: 'Question', sortOrder: 2 },
+    { type: HelpOptionType.BILL, label: 'Request Bill', sortOrder: 3 },
+    { type: HelpOptionType.WAITER, label: 'Refill drinks', sortOrder: 4 },
+    { type: HelpOptionType.WAITER, label: 'Another round', sortOrder: 5 },
+    { type: HelpOptionType.WAITER, label: 'Other', sortOrder: 6 },
+    { type: HelpOptionType.SERVICE, label: 'Refill water', sortOrder: 1 },
+    { type: HelpOptionType.SERVICE, label: 'More cutlery', sortOrder: 2 },
+    { type: HelpOptionType.SERVICE, label: 'Takeaway box', sortOrder: 3 },
+    { type: HelpOptionType.SERVICE, label: 'Baby chair', sortOrder: 4 },
+    { type: HelpOptionType.SERVICE, label: 'Complaint', sortOrder: 5 },
+    { type: HelpOptionType.SERVICE, label: 'Special request', sortOrder: 6 },
   ];
 
   for (const opt of helpOpts) {

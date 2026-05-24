@@ -7,6 +7,7 @@ export function AuditLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [meta, setMeta] = useState({ page: 1, total: 0, pages: 1 });
+  const [openLog, setOpenLog] = useState<any | null>(null);
 
   const [filterOrgId, setFilterOrgId] = useState('');
   const [orgQuery, setOrgQuery] = useState('');
@@ -78,6 +79,12 @@ export function AuditLogsPage() {
       if (orgBlurTimerRef.current) window.clearTimeout(orgBlurTimerRef.current);
     };
   }, []);
+
+  function getTitle(log: any): string {
+    const action = typeof log?.action === 'string' && log.action ? log.action : 'ACTION';
+    const entity = typeof log?.entity === 'string' && log.entity ? log.entity : 'Entity';
+    return `${action} • ${entity}`;
+  }
 
   if (!can('view_audit')) return <div className="text-red-400 p-8">Permission denied</div>;
 
@@ -177,64 +184,120 @@ export function AuditLogsPage() {
         />
       </div>
 
-      <div className="card overflow-x-auto">
+      {openLog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setOpenLog(null)}
+        >
+          <div
+            className="card w-full max-w-3xl p-6 space-y-4 animate-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="font-display text-2xl truncate">{getTitle(openLog)}</h2>
+                <div className="text-xs text-[var(--muted)] mt-1">
+                  {new Date(openLog.createdAt).toLocaleString()}
+                </div>
+              </div>
+              <button className="btn btn-secondary btn-sm" onClick={() => setOpenLog(null)}>
+                Close
+              </button>
+            </div>
+
+            <div className="grid gap-3">
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="card p-3">
+                  <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider font-bold">
+                    Tenant
+                  </div>
+                  <div className="text-sm text-[var(--text)] mt-1">
+                    {openLog.organization?.name ?? 'System'}
+                  </div>
+                  {openLog.organization?.slug && (
+                    <div className="text-xs text-[var(--muted)] font-mono">
+                      {openLog.organization.slug}
+                    </div>
+                  )}
+                </div>
+                <div className="card p-3">
+                  <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider font-bold">
+                    User
+                  </div>
+                  <div className="text-sm text-[var(--text)] mt-1">
+                    {openLog.user?.name ?? 'System / Anonymous'}
+                  </div>
+                  {openLog.user?.email && (
+                    <div className="text-xs text-[var(--muted)]">{openLog.user.email}</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="card p-3">
+                  <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider font-bold">
+                    Action
+                  </div>
+                  <div className="text-sm text-[var(--text)] mt-1 font-mono">
+                    {openLog.action ?? '—'}
+                  </div>
+                </div>
+                <div className="card p-3">
+                  <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider font-bold">
+                    Entity
+                  </div>
+                  <div className="text-sm text-[var(--text)] mt-1">{openLog.entity ?? '—'}</div>
+                  <div className="text-xs text-[var(--muted)] font-mono break-all">
+                    {openLog.entityId ?? '—'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="card p-3">
+                <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider font-bold">
+                  Details
+                </div>
+                <pre className="text-xs text-[var(--muted)] font-mono whitespace-pre-wrap break-words mt-2">
+                  {openLog.metadata ? JSON.stringify(openLog.metadata, null, 2) : '—'}
+                </pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
         {loading ? (
           <div className="p-8 text-center text-[var(--muted)]">Loading logs...</div>
         ) : logs.length === 0 ? (
           <div className="p-8 text-center text-[var(--muted)]">No logs found.</div>
         ) : (
-          <table className="min-w-[900px]">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Action</th>
-                <th>Tenant</th>
-                <th>User</th>
-                <th>Entity</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.map((log: any) => (
-                <tr key={log.id}>
-                  <td className="text-xs text-[var(--muted)] whitespace-nowrap">
-                    {new Date(log.createdAt).toLocaleString()}
-                  </td>
-                  <td>
-                    <span className="text-xs font-mono bg-[var(--background)] border border-[var(--border)] px-1.5 py-0.5 rounded">
-                      {log.action}
-                    </span>
-                  </td>
-                  <td>
-                    {log.organization ? (
-                      <div className="text-sm">
-                        <span className="font-medium">{log.organization.name}</span>
-                        <span className="text-[var(--muted)] text-xs ml-2">
-                          {log.organization.slug}
-                        </span>
-                      </div>
-                    ) : (
-                      <span className="text-[var(--muted)] text-xs">System</span>
-                    )}
-                  </td>
-                  <td>
-                    {log.user ? (
-                      <div className="text-sm">
-                        <span className="font-medium text-[var(--text)]">{log.user.name}</span>
-                        <span className="text-[var(--muted)] text-xs ml-2">{log.user.email}</span>
-                      </div>
-                    ) : (
-                      <span className="text-[var(--muted)] text-xs">System / Anonymous</span>
-                    )}
-                  </td>
-                  <td>
-                    <div className="text-xs text-[var(--muted)]">
-                      <span className="font-mono">{log.entity}</span>: {log.entityId}
+          <div className="divide-y divide-[var(--border)]">
+            {logs.map((log: any) => (
+              <button
+                key={log.id}
+                type="button"
+                className="w-full text-left px-4 py-4 hover:bg-[var(--surface2)] transition-colors"
+                onClick={() => setOpenLog(log)}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-[var(--text)] truncate">
+                      {getTitle(log)}
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <div className="text-xs text-[var(--muted)] mt-1 truncate">
+                      {log.organization?.name
+                        ? `${log.organization.name}${log.user?.email ? ` • ${log.user.email}` : ''}`
+                        : (log.user?.email ?? 'System')}
+                    </div>
+                  </div>
+                  <div className="text-xs text-[var(--muted)] whitespace-nowrap">
+                    {new Date(log.createdAt).toLocaleString()}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
         )}
       </div>
 

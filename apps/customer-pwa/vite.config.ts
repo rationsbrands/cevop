@@ -4,7 +4,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 const pwaPlugin: any = VitePWA({
   registerType: 'autoUpdate',
-  includeAssets: ['favicon.ico', 'logo.png'],
+  includeAssets: ['apple-touch-icon.png', 'icon-192.png', 'icon-512.png'],
   manifest: {
     name: 'Cevop Order',
     short_name: 'Cevop',
@@ -14,8 +14,8 @@ const pwaPlugin: any = VitePWA({
     display: 'standalone',
     orientation: 'portrait',
     icons: [
-      { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-      { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+      { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+      { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
     ],
   },
   workbox: {

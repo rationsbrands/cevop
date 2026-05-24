@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/auth';
 import { useTheme } from '../context/theme';
 
 export function LoginPage() {
-  const { login } = useAuth();
+  const { login, user } = useAuth();
   const navigate = useNavigate();
   const { mode, setMode } = useTheme();
   const [email, setEmail] = useState('');
@@ -19,6 +19,10 @@ export function LoginPage() {
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
   const nextThemeLabel = nextThemeMode === 'system' ? 'OS' : nextThemeMode === 'dark' ? 'D' : 'L';
+
+  useEffect(() => {
+    if (user) navigate('/', { replace: true });
+  }, [navigate, user]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -67,7 +71,7 @@ export function LoginPage() {
 
       <div className="hidden lg:flex flex-col justify-between p-10 border-r border-[var(--border)] bg-[var(--surface)]">
         <div className="space-y-3">
-          <div className="brand-mark text-4xl text-[var(--accent)] leading-none">CEVOP</div>
+          <div role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-lg" />
           <p className="text-sm text-[var(--muted)] max-w-sm">
             Modern restaurant operations for tables, staff and service.
           </p>
@@ -105,16 +109,17 @@ export function LoginPage() {
           </div>
         </div>
 
-        <div className="text-xs text-[var(--muted)] font-medium">
-          Powered by <span className="brand-mark text-[var(--text)]">CEVOP</span>
+        <div className="text-xs text-[var(--muted)] font-medium flex items-center gap-2">
+          <span>Powered by</span>
+          <div role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-sm" />
         </div>
       </div>
 
       <div className="flex items-center justify-center p-6">
         <div className="w-full max-w-md space-y-8 animate-in">
           <div className="space-y-2">
-            <div className="brand-mark text-5xl text-[var(--accent)] leading-none lg:hidden">
-              CEVOP
+            <div className="lg:hidden">
+              <div role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-lg" />
             </div>
             <h1 className="font-display text-3xl text-[var(--text)]">Sign in</h1>
             <p className="text-sm text-[var(--muted)]">Access your admin dashboard.</p>

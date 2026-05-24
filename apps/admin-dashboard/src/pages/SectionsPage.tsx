@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useApi } from '../context/auth';
+import { ConfirmDialog, showToast } from '../components/Popup';
 
 interface User {
   id: string;
@@ -41,6 +42,46 @@ export function SectionsPage() {
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmLabel, setConfirmLabel] = useState('Confirm');
+  const [confirmVariant, setConfirmVariant] = useState<'default' | 'danger'>('default');
+  const confirmActionRef = useRef<null | (() => Promise<void> | void)>(null);
+
+  function openConfirm(opts: {
+    title: string;
+    message?: string;
+    confirmLabel?: string;
+    variant?: 'default' | 'danger';
+    action: () => Promise<void> | void;
+  }) {
+    confirmActionRef.current = opts.action;
+    setConfirmTitle(opts.title);
+    setConfirmMessage(opts.message ?? '');
+    setConfirmLabel(opts.confirmLabel ?? 'Confirm');
+    setConfirmVariant(opts.variant ?? 'default');
+    setConfirmOpen(true);
+  }
+
+  async function onConfirm() {
+    if (confirmBusy) return;
+    const action = confirmActionRef.current;
+    if (!action) {
+      setConfirmOpen(false);
+      return;
+    }
+    setConfirmBusy(true);
+    try {
+      await action();
+      setConfirmOpen(false);
+    } catch (e: any) {
+      showToast(e?.message ? String(e.message) : 'Action failed', 'error');
+    } finally {
+      setConfirmBusy(false);
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -90,14 +131,17 @@ export function SectionsPage() {
   }
 
   async function deleteSection(id: string) {
-    if (
-      !confirm(
-        'Are you sure you want to delete this section? Tables assigned to it will become unassigned.',
-      )
-    )
-      return;
-    await api.delete(`/api/sections/${id}`);
-    load();
+    openConfirm({
+      title: 'Delete Section',
+      message:
+        'Are you sure you want to delete this section?\n\nTables assigned to it will become unassigned.',
+      confirmLabel: 'Delete',
+      variant: 'danger',
+      action: async () => {
+        await api.delete(`/api/sections/${id}`);
+        await load();
+      },
+    });
   }
 
   async function saveStaff() {
@@ -122,6 +166,19 @@ export function SectionsPage() {
 
   return (
     <div className="space-y-6">
+      <ConfirmDialog
+        open={confirmOpen}
+        title={confirmTitle}
+        message={confirmMessage}
+        confirmLabel={confirmLabel}
+        variant={confirmVariant}
+        busy={confirmBusy}
+        onCancel={() => {
+          if (confirmBusy) return;
+          setConfirmOpen(false);
+        }}
+        onConfirm={() => void onConfirm()}
+      />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Floor Sections</h1>

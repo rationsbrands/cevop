@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useApi, usePermission } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
+import { ConfirmDialog, showToast } from '../components/Popup';
 
 const PLAN_OPTS = ['free', 'trial', 'starter', 'growth', 'enterprise'];
 const STATUS_OPTS = ['trialing', 'active', 'suspended', 'cancelled'];
@@ -36,6 +37,52 @@ export function OrgDetailPage() {
   const [editNotes, setEditNotes] = useState('');
   const [editTrialEnd, setEditTrialEnd] = useState('');
 
+  const [impersonateOpen, setImpersonateOpen] = useState(false);
+  const [impersonateLoading, setImpersonateLoading] = useState(false);
+  const [impersonateError, setImpersonateError] = useState('');
+  const [impersonateUrl, setImpersonateUrl] = useState('');
+  const [impersonateExpiresAt, setImpersonateExpiresAt] = useState<number | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmLabel, setConfirmLabel] = useState('Confirm');
+  const [confirmVariant, setConfirmVariant] = useState<'default' | 'danger'>('default');
+  const confirmActionRef = useRef<null | (() => Promise<void> | void)>(null);
+
+  function openConfirm(opts: {
+    title: string;
+    message?: string;
+    confirmLabel?: string;
+    variant?: 'default' | 'danger';
+    action: () => Promise<void> | void;
+  }) {
+    confirmActionRef.current = opts.action;
+    setConfirmTitle(opts.title);
+    setConfirmMessage(opts.message ?? '');
+    setConfirmLabel(opts.confirmLabel ?? 'Confirm');
+    setConfirmVariant(opts.variant ?? 'default');
+    setConfirmOpen(true);
+  }
+
+  async function onConfirm() {
+    if (confirmBusy) return;
+    const action = confirmActionRef.current;
+    if (!action) {
+      setConfirmOpen(false);
+      return;
+    }
+    setConfirmBusy(true);
+    try {
+      await action();
+      setConfirmOpen(false);
+    } catch (e: any) {
+      showToast(e?.message ? String(e.message) : 'Action failed', 'error');
+    } finally {
+      setConfirmBusy(false);
+    }
+  }
+
   const load = useCallback(async () => {
     const res = await api.get(`/api/ops/orgs/${orgId}`);
     if (res.success) {
@@ -69,15 +116,7 @@ export function OrgDetailPage() {
     setSaving(false);
   }
 
-  async function quickAction(action: 'suspend' | 'activate' | 'delete') {
-    if (action === 'delete') {
-      if (
-        !confirm(
-          'Are you sure you want to schedule this organization for deletion in 30 days? This action will disable their access immediately.',
-        )
-      )
-        return;
-    }
+  async function runQuickAction(action: 'suspend' | 'activate' | 'delete') {
     setSaving(true);
     setSuccess('');
     setError('');
@@ -96,47 +135,118 @@ export function OrgDetailPage() {
     setSaving(false);
   }
 
-  async function impersonate() {
-    setSaving(true);
-    setSuccess('');
-    setError('');
-    const res = await api.post(`/api/ops/orgs/${orgId}/impersonate`, {});
-    if (res.success) {
-      const configuredAdminDashUrl = import.meta.env.VITE_ADMIN_DASHBOARD_URL as string | undefined;
-      const defaultAdminDashUrl = import.meta.env.PROD
-        ? 'https://admin.cevop.com'
-        : 'http://localhost:5175';
-      let adminDashUrl = (configuredAdminDashUrl || defaultAdminDashUrl).trim();
-      if (
-        import.meta.env.PROD &&
-        (adminDashUrl.includes('localhost') || adminDashUrl.includes('127.0.0.1'))
-      ) {
-        adminDashUrl = 'https://admin.cevop.com';
-      }
-      adminDashUrl = adminDashUrl.replace(/\/+$/, '');
-      const loginUrl = adminDashUrl.endsWith('/login') ? adminDashUrl : `${adminDashUrl}/login`;
-      window.open(`${loginUrl}?token=${res.data.token}`, '_blank');
-      setSuccess('Impersonation session started.');
-    } else {
-      setError(res.error || 'Failed to impersonate');
+  async function quickAction(action: 'suspend' | 'activate' | 'delete') {
+    if (action !== 'delete') {
+      await runQuickAction(action);
+      return;
     }
-    setSaving(false);
+
+    openConfirm({
+      title: 'Schedule Deletion',
+      message:
+        'Schedule this organization for deletion in 30 days?\n\nThis action will disable their access immediately.',
+      confirmLabel: 'Schedule Deletion',
+      variant: 'danger',
+      action: async () => {
+        await runQuickAction(action);
+      },
+    });
+  }
+
+  async function impersonate() {
+    setImpersonateOpen(true);
+    setImpersonateLoading(true);
+    setImpersonateError('');
+    setImpersonateUrl('');
+    setImpersonateExpiresAt(null);
+
+    const configuredAdminDashUrl = import.meta.env.VITE_ADMIN_DASHBOARD_URL as string | undefined;
+    const defaultAdminDashUrl = import.meta.env.PROD
+      ? 'https://app.cevop.com'
+      : `${window.location.protocol}//${window.location.hostname}:5175`;
+
+    function normaliseUrl(raw: string): string {
+      const v = raw.trim();
+      if (!v) return v;
+      if (v.startsWith('http://') || v.startsWith('https://')) return v;
+      return import.meta.env.PROD ? `https://${v}` : `http://${v}`;
+    }
+
+    function isAllowedAdminUrl(raw: string): boolean {
+      try {
+        const u = new URL(normaliseUrl(raw));
+        if (import.meta.env.PROD) {
+          if (u.protocol !== 'https:') return false;
+          if (u.hostname === 'cevop.com' || u.hostname.endsWith('.cevop.com')) return true;
+          return false;
+        }
+        if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') return true;
+        return false;
+      } catch {
+        return false;
+      }
+    }
+
+    let adminDashUrl = normaliseUrl((configuredAdminDashUrl || defaultAdminDashUrl).trim());
+    if (!isAllowedAdminUrl(adminDashUrl)) adminDashUrl = normaliseUrl(defaultAdminDashUrl);
+
+    try {
+      const cfgRes = await api.get('/api/public/config');
+      const runtimeUrl = cfgRes?.data?.adminDashboardUrl;
+      if (typeof runtimeUrl === 'string' && runtimeUrl.trim()) {
+        const candidate = normaliseUrl(runtimeUrl.trim());
+        if (isAllowedAdminUrl(candidate)) adminDashUrl = candidate;
+      }
+    } catch {
+      void 0;
+    }
+
+    adminDashUrl = adminDashUrl.replace(/\/+$/, '');
+    const baseLoginUrl = adminDashUrl.endsWith('/login') ? adminDashUrl : `${adminDashUrl}/login`;
+
+    const res = await api.post(`/api/ops/orgs/${orgId}/impersonate`, {});
+    if (!res.success) {
+      setImpersonateError(res.error || 'Failed to impersonate');
+      setImpersonateLoading(false);
+      return;
+    }
+
+    const code = res?.data?.code;
+    const expiresAt = typeof res?.data?.expiresAt === 'number' ? res.data.expiresAt : null;
+    if (typeof code !== 'string' || !code.trim()) {
+      setImpersonateError('Failed to start impersonation');
+      setImpersonateLoading(false);
+      return;
+    }
+
+    const u = new URL(baseLoginUrl);
+    u.searchParams.set('impersonate', '1');
+    u.searchParams.set('code', code);
+    setImpersonateUrl(u.toString());
+    setImpersonateExpiresAt(expiresAt);
+    setImpersonateLoading(false);
   }
 
   async function assignTrial() {
-    if (!confirm('Assign a 7-day Growth trial to this organisation?')) return;
-    const trialEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    const res = await api.patch(`/api/ops/orgs/${org.id}/plan`, {
-      plan: 'trial',
-      planStatus: 'trialing',
-      trialEndsAt,
+    openConfirm({
+      title: 'Assign Trial',
+      message: 'Assign a 7-day Growth trial to this organisation?',
+      confirmLabel: 'Assign Trial',
+      action: async () => {
+        const trialEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        const res = await api.patch(`/api/ops/orgs/${org.id}/plan`, {
+          plan: 'trial',
+          planStatus: 'trialing',
+          trialEndsAt,
+        });
+        if (res.success) {
+          setOrg((prev: any) => ({ ...prev, plan: 'trial', planStatus: 'trialing', trialEndsAt }));
+          setSuccess('7-day trial assigned');
+        } else {
+          setError(res.error || 'Failed to assign trial');
+        }
+      },
     });
-    if (res.success) {
-      setOrg((prev: any) => ({ ...prev, plan: 'trial', planStatus: 'trialing', trialEndsAt }));
-      setSuccess('7-day trial assigned');
-    } else {
-      setError(res.error || 'Failed to assign trial');
-    }
   }
 
   if (loading)
@@ -150,6 +260,74 @@ export function OrgDetailPage() {
 
   return (
     <div className="space-y-6 animate-in max-w-4xl">
+      <ConfirmDialog
+        open={confirmOpen}
+        title={confirmTitle}
+        message={confirmMessage}
+        confirmLabel={confirmLabel}
+        variant={confirmVariant}
+        busy={confirmBusy}
+        onCancel={() => {
+          if (confirmBusy) return;
+          setConfirmOpen(false);
+        }}
+        onConfirm={() => void onConfirm()}
+      />
+      {impersonateOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="card w-full max-w-lg p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="font-semibold text-lg text-[var(--text)]">Login as Admin</h2>
+                <p className="text-sm text-[var(--muted)] mt-1">
+                  This opens the admin dashboard with a short-lived access code.
+                </p>
+              </div>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  setImpersonateOpen(false);
+                  setImpersonateError('');
+                  setImpersonateUrl('');
+                  setImpersonateExpiresAt(null);
+                }}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {impersonateLoading && (
+                <div className="flex items-center gap-3">
+                  <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                  <span className="text-sm text-[var(--muted)]">Preparing login…</span>
+                </div>
+              )}
+
+              {!impersonateLoading && impersonateError && (
+                <div className="text-sm text-red-400">{impersonateError}</div>
+              )}
+
+              {!impersonateLoading && impersonateUrl && (
+                <>
+                  <button
+                    className="btn btn-primary w-full py-2 text-sm"
+                    onClick={() => window.location.assign(impersonateUrl)}
+                  >
+                    Continue to Admin
+                  </button>
+                  {impersonateExpiresAt && (
+                    <p className="text-xs text-[var(--muted)]">
+                      Expires at {new Date(impersonateExpiresAt).toLocaleTimeString()}.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Breadcrumb */}
       <Link
         to="/orgs"
@@ -217,7 +395,11 @@ export function OrgDetailPage() {
             </button>
           )}
           {can('impersonate') && (
-            <button onClick={impersonate} disabled={saving} className="btn btn-secondary btn-sm">
+            <button
+              onClick={impersonate}
+              disabled={saving || impersonateLoading}
+              className="btn btn-secondary btn-sm"
+            >
               Login as Admin ↗
             </button>
           )}

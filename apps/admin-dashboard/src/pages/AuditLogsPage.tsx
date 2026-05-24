@@ -8,6 +8,33 @@ export function AuditLogsPage() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [openLog, setOpenLog] = useState<any | null>(null);
+
+  function formatAction(action: string): string {
+    if (action === 'IMPERSONATE_ORG') return 'SUPPORT_ACCESS';
+    return action;
+  }
+
+  function formatActor(log: any): { name: string; email?: string } | null {
+    if (log?.action === 'IMPERSONATE_ORG') return { name: 'Cevop Support' };
+    if (log?.user?.name) return { name: log.user.name, email: log.user.email };
+    return null;
+  }
+
+  function redactMetadata(log: any): any {
+    if (log?.action !== 'IMPERSONATE_ORG') return log?.metadata ?? null;
+    const md = log?.metadata ?? null;
+    if (!md || typeof md !== 'object') return { accessLevel: 'READ_ONLY' };
+    const rest = { ...(md as Record<string, unknown>) };
+    delete (rest as any).opsUserId;
+    return { ...rest, accessLevel: 'READ_ONLY' };
+  }
+
+  function getTitle(log: any): string {
+    const action = formatAction(log?.action ?? '');
+    const entity = typeof log?.entity === 'string' && log.entity ? log.entity : 'Entity';
+    return `${action} • ${entity}`;
+  }
 
   const loadLogs = useCallback(
     async (p: number) => {
@@ -62,64 +89,104 @@ export function AuditLogsPage() {
         </button>
       </div>
 
-      <div className="card overflow-x-auto">
-        <table className="min-w-[800px]">
-          <thead>
-            <tr>
-              <th>Date / Time</th>
-              <th>User</th>
-              <th>Action</th>
-              <th>Entity</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && logs.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="text-center py-10">
-                  Loading...
-                </td>
-              </tr>
-            ) : logs.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="text-center py-10 text-[var(--muted)]">
-                  No audit logs found.
-                </td>
-              </tr>
-            ) : (
-              logs.map((log) => (
-                <tr key={log.id}>
-                  <td className="text-xs text-[var(--muted)] whitespace-nowrap">
+      {openLog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setOpenLog(null)}
+        >
+          <div
+            className="card w-full max-w-2xl p-6 space-y-4 animate-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="font-display text-2xl truncate">{getTitle(openLog)}</h2>
+                <div className="text-xs text-[var(--muted)] mt-1">
+                  {new Date(openLog.createdAt).toLocaleString()}
+                </div>
+              </div>
+              <button className="btn btn-secondary btn-sm" onClick={() => setOpenLog(null)}>
+                Close
+              </button>
+            </div>
+
+            <div className="grid gap-3">
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="card p-3">
+                  <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider font-bold">
+                    Actor
+                  </div>
+                  <div className="text-sm text-[var(--text)] mt-1">
+                    {formatActor(openLog)?.name ?? 'System / Unknown'}
+                  </div>
+                  {formatActor(openLog)?.email && (
+                    <div className="text-xs text-[var(--muted)]">{formatActor(openLog)!.email}</div>
+                  )}
+                </div>
+                <div className="card p-3">
+                  <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider font-bold">
+                    Action
+                  </div>
+                  <div className="text-sm text-[var(--text)] mt-1 font-mono">
+                    {formatAction(openLog.action)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="card p-3">
+                <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider font-bold">
+                  Entity
+                </div>
+                <div className="text-sm text-[var(--text)] mt-1">{openLog.entity ?? '—'}</div>
+                <div className="text-xs text-[var(--muted)] font-mono break-all">
+                  {openLog.entityId ?? '—'}
+                </div>
+              </div>
+
+              <div className="card p-3">
+                <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider font-bold">
+                  Details
+                </div>
+                <pre className="text-xs text-[var(--muted)] font-mono whitespace-pre-wrap break-words mt-2">
+                  {redactMetadata(openLog) ? JSON.stringify(redactMetadata(openLog), null, 2) : '—'}
+                </pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        {loading && logs.length === 0 ? (
+          <div className="p-8 text-center text-[var(--muted)]">Loading...</div>
+        ) : logs.length === 0 ? (
+          <div className="p-8 text-center text-[var(--muted)]">No audit logs found.</div>
+        ) : (
+          <div className="divide-y divide-[var(--border)]">
+            {logs.map((log) => (
+              <button
+                key={log.id}
+                type="button"
+                className="w-full text-left px-4 py-4 hover:bg-[var(--surface2)] transition-colors"
+                onClick={() => setOpenLog(log)}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-[var(--text)] truncate">
+                      {getTitle(log)}
+                    </div>
+                    <div className="text-xs text-[var(--muted)] mt-1 truncate">
+                      {formatActor(log)?.name ?? 'System / Unknown'}
+                    </div>
+                  </div>
+                  <div className="text-xs text-[var(--muted)] whitespace-nowrap">
                     {new Date(log.createdAt).toLocaleString()}
-                  </td>
-                  <td className="font-medium">
-                    {log.user ? (
-                      <div>
-                        <div>{log.user.name}</div>
-                        <div className="text-[10px] text-[var(--muted)]">{log.user.email}</div>
-                      </div>
-                    ) : (
-                      <span className="text-[var(--muted)] italic">System / Unknown</span>
-                    )}
-                  </td>
-                  <td>
-                    <span className="badge border border-[var(--border)]">{log.action}</span>
-                  </td>
-                  <td className="text-sm">
-                    <span className="font-semibold text-[var(--text)]">{log.entity}</span>
-                    <span className="text-[var(--muted)] block text-xs">{log.entityId}</span>
-                  </td>
-                  <td
-                    className="text-xs font-mono text-[var(--muted)] max-w-xs truncate"
-                    title={log.metadata ? JSON.stringify(log.metadata) : ''}
-                  >
-                    {log.metadata ? JSON.stringify(log.metadata) : '—'}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {totalPages > 1 && (
