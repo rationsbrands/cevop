@@ -102,10 +102,20 @@ export function OrgDetailPage() {
     setError('');
     const res = await api.post(`/api/ops/orgs/${orgId}/impersonate`, {});
     if (res.success) {
-      const adminDashUrl =
-        import.meta.env.VITE_ADMIN_DASHBOARD_URL ||
-        (import.meta.env.PROD ? 'https://admin.cevop.com' : 'http://localhost:5175');
-      window.open(`${adminDashUrl}?token=${res.data.token}`, '_blank');
+      const configuredAdminDashUrl = import.meta.env.VITE_ADMIN_DASHBOARD_URL as string | undefined;
+      const defaultAdminDashUrl = import.meta.env.PROD
+        ? 'https://admin.cevop.com'
+        : 'http://localhost:5175';
+      let adminDashUrl = (configuredAdminDashUrl || defaultAdminDashUrl).trim();
+      if (
+        import.meta.env.PROD &&
+        (adminDashUrl.includes('localhost') || adminDashUrl.includes('127.0.0.1'))
+      ) {
+        adminDashUrl = 'https://admin.cevop.com';
+      }
+      adminDashUrl = adminDashUrl.replace(/\/+$/, '');
+      const loginUrl = adminDashUrl.endsWith('/login') ? adminDashUrl : `${adminDashUrl}/login`;
+      window.open(`${loginUrl}?token=${res.data.token}`, '_blank');
       setSuccess('Impersonation session started.');
     } else {
       setError(res.error || 'Failed to impersonate');
