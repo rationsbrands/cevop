@@ -326,8 +326,8 @@ const PORT = Number(process.env.PORT) || 4000;
 const server = httpServer;
 
 if (process.env.NODE_ENV !== 'test') {
-  server.listen(PORT, '0.0.0.0', () => {
-    logger.info(`🚀 API running on http://0.0.0.0:${PORT}`);
+  server.listen(PORT, '::', () => {
+    logger.info(`Server running on port ${PORT} (IPv4 + IPv6)`);
     logger.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     if (!process.env.UPSTASH_REDIS_REST_URL) {
       logger.warn(
