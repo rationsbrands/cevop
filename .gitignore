@@ -55,11 +55,12 @@ Thumbs.db
 
 *.credentials.md
 
+# Project specific
 cevop_for_claude.zip
 cevop-for-claude-*.zip
 cevop_for_claude-*.zip
 
-reproduce.js
+# Scripts and temporary tools
 migrate.js
 run_migration.*
 *.exp
