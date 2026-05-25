@@ -365,7 +365,7 @@ export function WaiterBoard() {
       if (isWaiter && !onShiftRef.current) return;
       playAlert();
       const normalised = normaliseTask(type, task);
-      setMyTasks((prev) => [normalised, ...prev.filter((t) => t.id !== normalised.id)]);
+      setMyTasks((prev) => [...prev.filter((t) => t.id !== normalised.id), normalised]);
       setUnassignedTasks((prev) => prev.filter((t) => t.id !== normalised.id));
     });
 
@@ -374,7 +374,7 @@ export function WaiterBoard() {
       if (isWaiter && !onShiftRef.current) return;
       playAlert();
       const normalised = normaliseTask(type, task);
-      setUnassignedTasks((prev) => [normalised, ...prev.filter((t) => t.id !== normalised.id)]);
+      setUnassignedTasks((prev) => [...prev.filter((t) => t.id !== normalised.id), normalised]);
     });
 
     // Another waiter claimed a task — remove from unassigned pool
@@ -388,7 +388,7 @@ export function WaiterBoard() {
           : task.serviceType
             ? 'SERVICE_REQUEST'
             : 'WAITER_CALL';
-        setMyTasks((prev) => [normaliseTask(type, task), ...prev.filter((t) => t.id !== task.id)]);
+        setMyTasks((prev) => [...prev.filter((t) => t.id !== task.id), normaliseTask(type, task)]);
       }
     });
 

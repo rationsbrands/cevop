@@ -143,7 +143,7 @@ export function KitchenBoard() {
       if (!KITCHEN_STATUSES.includes(order.status)) return prev.filter((o) => o.id !== order.id);
       const exists = prev.some((o) => o.id === order.id);
       if (exists) return prev.map((o) => (o.id === order.id ? order : o));
-      return [order, ...prev];
+      return [...prev, order];
     });
   }, []);
 
@@ -322,7 +322,7 @@ export function KitchenBoard() {
 
     socket.on('ORDER_CREATED', (order: Order) => {
       playAlert();
-      setOrders((prev) => [order, ...prev.filter((o) => o.id !== order.id)]);
+      setOrders((prev) => [...prev.filter((o) => o.id !== order.id), order]);
     });
 
     socket.on('ORDER_UPDATED', (order: Order) => applyOrderUpdate(order));

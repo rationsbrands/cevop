@@ -3,6 +3,132 @@ import { Link } from 'react-router-dom';
 import { useTheme } from '../context/theme';
 import { PasswordStrength } from '../components/PasswordStrength';
 
+// Eurozone country codes
+const EUROZONE = new Set([
+  'AT',
+  'BE',
+  'CY',
+  'EE',
+  'FI',
+  'FR',
+  'DE',
+  'GR',
+  'IE',
+  'IT',
+  'LV',
+  'LT',
+  'LU',
+  'MT',
+  'NL',
+  'PT',
+  'SK',
+  'SI',
+  'ES',
+]);
+
+// All African country codes except Nigeria (NG)
+const AFRICA_COUNTRIES = new Set([
+  'DZ',
+  'AO',
+  'BJ',
+  'BW',
+  'BF',
+  'BI',
+  'CM',
+  'CV',
+  'CF',
+  'TD',
+  'KM',
+  'CG',
+  'CD',
+  'CI',
+  'DJ',
+  'EG',
+  'GQ',
+  'ER',
+  'SZ',
+  'ET',
+  'GA',
+  'GM',
+  'GH',
+  'GN',
+  'GW',
+  'KE',
+  'LS',
+  'LR',
+  'LY',
+  'MG',
+  'MW',
+  'ML',
+  'MR',
+  'MU',
+  'MA',
+  'MZ',
+  'NA',
+  'NE',
+  'RW',
+  'ST',
+  'SN',
+  'SL',
+  'SO',
+  'ZA',
+  'SS',
+  'SD',
+  'TZ',
+  'TG',
+  'TN',
+  'UG',
+  'ZM',
+  'ZW',
+]);
+
+function getCurrencyFromCountry(country: string): string {
+  if (country === 'NG') return 'NGN';
+  if (country === 'GB') return 'GBP';
+  if (EUROZONE.has(country)) return 'EUR';
+  if (AFRICA_COUNTRIES.has(country)) return 'Africa';
+  return 'USD';
+}
+
+function getTimezoneFromCurrency(currency: string, country: string): string {
+  if (currency === 'GBP') return 'Europe/London';
+  if (currency === 'EUR') {
+    // Best-effort timezone for common Eurozone countries
+    const TZ_MAP: Record<string, string> = {
+      DE: 'Europe/Berlin',
+      FR: 'Europe/Paris',
+      IT: 'Europe/Rome',
+      ES: 'Europe/Madrid',
+      NL: 'Europe/Amsterdam',
+      BE: 'Europe/Brussels',
+      AT: 'Europe/Vienna',
+      PT: 'Europe/Lisbon',
+      FI: 'Europe/Helsinki',
+      GR: 'Europe/Athens',
+      IE: 'Europe/Dublin',
+    };
+    return TZ_MAP[country] ?? 'Europe/Paris';
+  }
+  if (currency === 'USD') return 'America/New_York';
+  if (currency === 'NGN') return 'Africa/Lagos';
+  // Africa tier countries — map common ones, default to Lagos
+  const AFRICA_TZ: Record<string, string> = {
+    GH: 'Africa/Accra',
+    KE: 'Africa/Nairobi',
+    ZA: 'Africa/Johannesburg',
+    TZ: 'Africa/Dar_es_Salaam',
+    UG: 'Africa/Kampala',
+    RW: 'Africa/Kigali',
+    ET: 'Africa/Addis_Ababa',
+    EG: 'Africa/Cairo',
+    MA: 'Africa/Casablanca',
+    SN: 'Africa/Dakar',
+    CI: 'Africa/Abidjan',
+    CM: 'Africa/Douala',
+  };
+  return AFRICA_TZ[country] ?? 'Africa/Lagos';
+}
+
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 const TIMEZONES = [
@@ -15,11 +141,13 @@ const TIMEZONES = [
 ];
 const CURRENCIES = [
   { value: 'NGN', label: 'NGN — Nigerian Naira (₦)' },
+  { value: 'GBP', label: 'GBP — British Pound (£)' },
+  { value: 'EUR', label: 'EUR — Euro (€)' },
+  { value: 'USD', label: 'USD — US Dollar ($)' },
+  { value: 'Africa', label: 'Africa — African Markets ($)' },
   { value: 'GHS', label: 'GHS — Ghanaian Cedi (₵)' },
   { value: 'KES', label: 'KES — Kenyan Shilling (KSh)' },
   { value: 'ZAR', label: 'ZAR — South African Rand (R)' },
-  { value: 'USD', label: 'USD — US Dollar ($)' },
-  { value: 'GBP', label: 'GBP — British Pound (£)' },
 ];
 
 function slugify(s: string) {
@@ -46,16 +174,24 @@ export function SignupPage() {
   const [currency, setCurrency] = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
     const urlCurrency = params.get('currency');
-    const valid = ['NGN', 'GBP', 'GHS', 'KES', 'ZAR', 'USD', 'EUR'];
-    return valid.includes(urlCurrency ?? '') ? urlCurrency! : 'NGN';
+    // All valid operational currencies
+    const valid = ['NGN', 'GBP', 'EUR', 'USD', 'Africa', 'GHS', 'KES', 'ZAR'];
+    // If currency came from the marketing site URL param, use it
+    if (valid.includes(urlCurrency ?? '')) return urlCurrency!;
+    // Otherwise default to NGN — IP detection happens async in useEffect below
+    return 'NGN';
   });
 
   const [timezone, setTimezone] = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
     const urlTimezone = params.get('timezone');
+    // If timezone came from the marketing site URL param, use it
     if (urlTimezone) return decodeURIComponent(urlTimezone);
-    const currencyParam = params.get('currency');
-    return currencyParam === 'GBP' ? 'Europe/London' : 'Africa/Lagos';
+    // Derive timezone from URL currency param if present
+    const urlCurrency = params.get('currency');
+    if (urlCurrency) return getTimezoneFromCurrency(urlCurrency, '');
+    // Otherwise default to Lagos — IP detection updates it async below
+    return 'Africa/Lagos';
   });
   const [contactPhone, setContactPhone] = useState('');
 
@@ -74,6 +210,43 @@ export function SignupPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [orgStepError, setOrgStepError] = useState('');
+
+  // Auto-detect currency and timezone from IP when no URL param is present
+  // Only runs when user navigates directly to the signup page
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    // Skip if currency already came from the marketing site
+    if (params.get('currency')) return;
+
+    let cancelled = false;
+
+    async function detect() {
+      try {
+        const res = await fetch('https://ipapi.co/json/', {
+          signal: (AbortSignal as any).timeout(4000), // 4 second timeout
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const country = (data.country_code ?? '').toUpperCase();
+        if (!country || cancelled) return;
+
+        const detectedCurrency = getCurrencyFromCountry(country);
+        const detectedTimezone = getTimezoneFromCurrency(detectedCurrency, country);
+
+        setCurrency(detectedCurrency);
+        setTimezone(detectedTimezone);
+      } catch {
+        // Detection failed — keep defaults (NGN / Africa/Lagos)
+        // This is a best-effort feature, never block the form
+      }
+    }
+
+    void detect();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []); // Runs once on mount only
 
   // Debounced slug check
   useEffect(() => {

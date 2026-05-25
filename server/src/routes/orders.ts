@@ -73,6 +73,7 @@ ordersRouter.post('/public', async (req: Request, res: Response) => {
               whatsappNumber: true,
               slackWebhook: true,
               notifyNewOrders: true,
+              currency: true,
             },
           },
         },
@@ -170,7 +171,10 @@ ordersRouter.post('/public', async (req: Request, res: Response) => {
           items: order.items.map((i: any) => ({ ...i, menuItem: i.menuItem })),
           table: order.table,
         },
-        org.id,
+        org.whatsappNumber,
+        org.slackWebhook,
+        org.plan,
+        org.currency ?? 'NGN',
       );
     }
   } catch (err: unknown) {

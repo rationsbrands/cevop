@@ -3,15 +3,23 @@ import { prisma } from './prisma';
 import webpush from 'web-push';
 // Removed shared types since we use structural types below
 
+const CURRENCY_FORMAT: Record<string, { symbol: string; locale: string }> = {
+  NGN: { symbol: '₦', locale: 'en-NG' },
+  GBP: { symbol: '£', locale: 'en-GB' },
+  EUR: { symbol: '€', locale: 'de-DE' },
+  USD: { symbol: '$', locale: 'en-US' },
+  Africa: { symbol: '$', locale: 'en-US' },
+  GHS: { symbol: '₵', locale: 'en-GH' },
+  KES: { symbol: 'KSh', locale: 'en-KE' },
+  ZAR: { symbol: 'R', locale: 'en-ZA' },
+};
+
 function fmtPrice(value: number | string, currency?: string): string {
   const amount = Number(value);
-  if (currency === 'GBP') {
-    return (
-      '£' + amount.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    );
-  }
+  const fmt = CURRENCY_FORMAT[currency ?? 'NGN'] ?? CURRENCY_FORMAT.NGN;
   return (
-    '₦' + amount.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    fmt.symbol +
+    amount.toLocaleString(fmt.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   );
 }
 
@@ -170,6 +178,7 @@ export async function notifyNewOrder(
   whatsappNumber?: string,
   slackWebhook?: string,
   plan?: string,
+  currency?: string,
 ): Promise<void> {
   const { whatsapp, slack } = notificationsEnabled(plan);
   const tableLabel = order.table?.label || `Table ${order.tableId}`;
@@ -179,7 +188,7 @@ export async function notifyNewOrder(
         `  • ${i.quantity}x ${i.menuItem?.name || i.menuItemId}${i.notes ? ` (${i.notes})` : ''}`,
     )
     .join('\n');
-  const msg = `🍽️ *NEW ORDER — ${tableLabel}*\n\n#${order.id.slice(-6).toUpperCase()}\n\n${itemsSummary}\n\nTotal: ${fmtPrice(Number(order.total))}`;
+  const msg = `🍽️ *NEW ORDER — ${tableLabel}*\n\n#${order.id.slice(-6).toUpperCase()}\n\n${itemsSummary}\n\nTotal: ${fmtPrice(Number(order.total), currency)}`;
   if (whatsapp && whatsappNumber) await sendWhatsApp(whatsappNumber, msg);
   if (slack && slackWebhook)
     await sendSlack(slackWebhook, `New order from ${tableLabel}`, [
@@ -188,7 +197,7 @@ export async function notifyNewOrder(
         type: 'section',
         fields: [
           { type: 'mrkdwn', text: `*Order:*\n#${order.id.slice(-6).toUpperCase()}` },
-          { type: 'mrkdwn', text: `*Total:*\n${fmtPrice(Number(order.total))}` },
+          { type: 'mrkdwn', text: `*Total:*\n${fmtPrice(Number(order.total), currency)}` },
         ],
       },
       { type: 'section', text: { type: 'mrkdwn', text: `*Items:*\n${itemsSummary}` } },

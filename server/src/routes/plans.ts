@@ -2,9 +2,8 @@ import { Router, Request, Response } from 'express';
 
 export const plansRouter = Router();
 
-// GET /api/plans — public pricing data for the marketing site
-// No authentication required
-plansRouter.get('/', async (_req: Request, res: Response) => {
+// GET /api/plans — public pricing data. No authentication required.
+plansRouter.get('/', (_req: Request, res: Response) => {
   res.json({
     success: true,
     data: {
@@ -13,15 +12,21 @@ plansRouter.get('/', async (_req: Request, res: Response) => {
           id: 'free',
           name: 'Free',
           description: 'Start exploring with no commitment.',
-          prices: { NGN: 0, GBP: 0 },
-          priceLabel: { NGN: 'Free forever', GBP: 'Free forever' },
-          limits: {
-            branches: 1,
-            tables: 5,
-            staff: 3,
-            whatsapp: false,
-            slack: false,
+          prices: {
+            NGN: { monthly: 0, annual: 0 },
+            GBP: { monthly: 0, annual: 0 },
+            EUR: { monthly: 0, annual: 0 },
+            USD: { monthly: 0, annual: 0 },
+            Africa: { monthly: 0, annual: 0 },
           },
+          priceLabel: {
+            NGN: 'Free forever',
+            GBP: 'Free forever',
+            EUR: 'Free forever',
+            USD: 'Free forever',
+            Africa: 'Free forever',
+          },
+          limits: { branches: 1, tables: 5, staff: 3, whatsapp: false, slack: false },
           features: [
             '1 branch',
             'Up to 5 tables',
@@ -29,7 +34,6 @@ plansRouter.get('/', async (_req: Request, res: Response) => {
             'QR menus & service display',
             'Waiter calls & service requests',
             'Live item availability updates',
-            'Basic order flow (RECEIVED to SERVED)',
             '7-day analytics',
             'No credit card required',
           ],
@@ -40,15 +44,21 @@ plansRouter.get('/', async (_req: Request, res: Response) => {
           id: 'starter',
           name: 'Starter',
           description: 'Everything a single location needs.',
-          prices: { NGN: 18000, GBP: 29 },
-          priceLabel: { NGN: '₦18,000/mo', GBP: '£29/mo' },
-          limits: {
-            branches: 1,
-            tables: 25,
-            staff: 10,
-            whatsapp: true,
-            slack: false,
+          prices: {
+            NGN: { monthly: 12000, annual: 120000 },
+            GBP: { monthly: 19, annual: 190 },
+            EUR: { monthly: 22, annual: 220 },
+            USD: { monthly: 25, annual: 250 },
+            Africa: { monthly: 10, annual: 100 },
           },
+          priceLabel: {
+            NGN: '₦12,000/mo',
+            GBP: '£19/mo',
+            EUR: '€22/mo',
+            USD: '$25/mo',
+            Africa: '$10/mo',
+          },
+          limits: { branches: 1, tables: 25, staff: 10, whatsapp: true, slack: false },
           features: [
             '1 branch',
             'Up to 25 tables',
@@ -66,15 +76,21 @@ plansRouter.get('/', async (_req: Request, res: Response) => {
           id: 'growth',
           name: 'Growth',
           description: 'For restaurants expanding to multiple sites.',
-          prices: { NGN: 45000, GBP: 79 },
-          priceLabel: { NGN: '₦45,000/mo', GBP: '£79/mo' },
-          limits: {
-            branches: 5,
-            tables: 100,
-            staff: null,
-            whatsapp: true,
-            slack: true,
+          prices: {
+            NGN: { monthly: 30000, annual: 300000 },
+            GBP: { monthly: 55, annual: 550 },
+            EUR: { monthly: 60, annual: 600 },
+            USD: { monthly: 65, annual: 650 },
+            Africa: { monthly: 25, annual: 250 },
           },
+          priceLabel: {
+            NGN: '₦30,000/mo',
+            GBP: '£55/mo',
+            EUR: '€60/mo',
+            USD: '$65/mo',
+            Africa: '$25/mo',
+          },
+          limits: { branches: 5, tables: 100, staff: null, whatsapp: true, slack: true },
           features: [
             'Up to 5 branches',
             'Up to 100 tables across all branches',
@@ -92,15 +108,21 @@ plansRouter.get('/', async (_req: Request, res: Response) => {
           id: 'enterprise',
           name: 'Enterprise',
           description: 'Custom deployment for large groups.',
-          prices: { NGN: null, GBP: null },
-          priceLabel: { NGN: 'Custom', GBP: 'Custom' },
-          limits: {
-            branches: null,
-            tables: null,
-            staff: null,
-            whatsapp: true,
-            slack: true,
+          prices: {
+            NGN: { monthly: null, annual: null },
+            GBP: { monthly: null, annual: null },
+            EUR: { monthly: null, annual: null },
+            USD: { monthly: null, annual: null },
+            Africa: { monthly: null, annual: null },
           },
+          priceLabel: {
+            NGN: 'Custom',
+            GBP: 'Custom',
+            EUR: 'Custom',
+            USD: 'Custom',
+            Africa: 'Custom',
+          },
+          limits: { branches: null, tables: null, staff: null, whatsapp: true, slack: true },
           features: [
             'Unlimited branches and tables',
             'Unlimited staff accounts',
