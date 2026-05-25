@@ -335,7 +335,16 @@ export function KitchenBoard() {
     };
     socket.on('SYNC_REQUIRED', handleSyncRequired);
 
+    // Keepalive ping every 25 seconds
+    // Prevents iOS and Android from killing idle WebSocket connections
+    const keepAlive = setInterval(() => {
+      if (socket.connected) {
+        socket.emit('ping');
+      }
+    }, 25000);
+
     return () => {
+      clearInterval(keepAlive);
       socket.off('SYNC_REQUIRED', handleSyncRequired);
       socket.disconnect();
     };
@@ -358,6 +367,14 @@ export function KitchenBoard() {
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
+
+      // Reconnect socket immediately if it dropped while screen was off
+      const socket = socketRef.current;
+      if (socket && !socket.connected) {
+        socket.connect();
+      }
+
+      // Reload data to catch anything missed
       refreshNowRef.current().catch(() => void 0);
     };
     document.addEventListener('visibilitychange', onVisible);

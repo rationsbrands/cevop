@@ -128,11 +128,7 @@ authRouter.get('/impersonate/exchange', async (req: Request, res: Response) => {
 
 authRouter.get('/push/public-key', (req: Request, res: Response) => {
   const publicKey = (process.env.WEB_PUSH_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY || '').trim();
-  if (!publicKey) {
-    res.status(404).json({ success: false, error: 'Web Push not configured' });
-    return;
-  }
-  res.json({ success: true, data: { publicKey } });
+  res.json({ success: true, data: { publicKey: publicKey || null } });
 });
 
 authRouter.post('/push/subscribe', authenticate, async (req: AuthRequest, res: Response) => {

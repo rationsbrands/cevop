@@ -3,10 +3,15 @@ import { prisma } from './prisma';
 import webpush from 'web-push';
 // Removed shared types since we use structural types below
 
-function fmtPrice(value: number | string): string {
+function fmtPrice(value: number | string, currency?: string): string {
+  const amount = Number(value);
+  if (currency === 'GBP') {
+    return (
+      '£' + amount.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    );
+  }
   return (
-    '₦' +
-    Number(value).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    '₦' + amount.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   );
 }
 

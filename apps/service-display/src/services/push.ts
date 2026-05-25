@@ -1,5 +1,3 @@
-const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || '';
-
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -13,16 +11,24 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 
 export async function subscribeToPush(token: string, apiBase: string): Promise<void> {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-  if (!VAPID_PUBLIC_KEY) return;
 
   try {
+    // Fetch public key from server
+    const keyRes = await fetch(`${apiBase}/api/auth/push/public-key`, {
+      headers: { Authorization: `Bearer ${token}`, 'x-cevop-app': 'service' },
+    });
+    if (!keyRes.ok) return;
+    const keyData = await keyRes.json();
+    const publicKey = keyData?.data?.publicKey;
+    if (!publicKey) return;
+
     const registration = await navigator.serviceWorker.ready;
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') return;
 
     const subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as any,
+      applicationServerKey: urlBase64ToUint8Array(publicKey) as any,
     });
 
     await fetch(`${apiBase}/api/push/subscribe`, {

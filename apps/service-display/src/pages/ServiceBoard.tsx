@@ -501,7 +501,16 @@ export function ServiceBoard() {
     };
     socket.on('SYNC_REQUIRED', handleSyncRequired);
 
+    // Keepalive ping every 25 seconds
+    // Prevents iOS and Android from killing idle WebSocket connections
+    const keepAlive = setInterval(() => {
+      if (socket.connected) {
+        socket.emit('ping');
+      }
+    }, 25000);
+
     return () => {
+      clearInterval(keepAlive);
       socket.off('WAITER_ONLINE', handleWaiterOnline);
       socket.off('WAITER_OFFLINE', handleWaiterOffline);
       socket.off('SYNC_REQUIRED', handleSyncRequired);
@@ -530,6 +539,15 @@ export function ServiceBoard() {
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
+
+      // Reconnect socket immediately if it dropped while screen was off
+      // Mobile browsers (especially iOS) aggressively kill connections
+      const socket = socketRef.current;
+      if (socket && !socket.connected) {
+        socket.connect();
+      }
+
+      // Reload data to catch anything missed while screen was off
       refreshNowRef.current().catch(() => void 0);
     };
     document.addEventListener('visibilitychange', onVisible);

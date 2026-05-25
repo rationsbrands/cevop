@@ -439,7 +439,16 @@ export function WaiterBoard() {
     };
     socket.on('SYNC_REQUIRED', handleSyncRequired);
 
+    // Keepalive ping every 25 seconds
+    // Prevents iOS and Android from killing idle WebSocket connections
+    const keepAlive = setInterval(() => {
+      if (socket.connected) {
+        socket.emit('ping');
+      }
+    }, 25000);
+
     return () => {
+      clearInterval(keepAlive);
       socket.off('SYNC_REQUIRED', handleSyncRequired);
       socket.disconnect();
     };
@@ -506,6 +515,13 @@ export function WaiterBoard() {
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
+
+      // Reconnect socket immediately if it dropped
+      const socket = socketRef.current;
+      if (socket && !socket.connected) {
+        socket.connect();
+      }
+
       refreshNowRef.current().catch(() => void 0);
     };
     document.addEventListener('visibilitychange', onVisible);
