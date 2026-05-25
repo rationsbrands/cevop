@@ -990,7 +990,7 @@ export function ServiceBoard() {
                     ({activeOrdersByStatus[status].length})
                   </span>
                 </div>
-                <div className="flex-1 overflow-y-visible lg:overflow-y-auto p-3 space-y-3">
+                <div className="flex-1 overflow-y-auto p-3 space-y-3">
                   {activeOrdersByStatus[status].length === 0 && (
                     <div className="text-center text-[var(--muted)] text-xs pt-8">— Empty —</div>
                   )}

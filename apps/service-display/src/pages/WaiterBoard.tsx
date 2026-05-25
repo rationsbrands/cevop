@@ -889,7 +889,7 @@ export function WaiterBoard() {
               </span>
               <span className="ml-2 text-[var(--muted)] text-xs">({myTasks.length})</span>
             </div>
-            <div className="flex-1 overflow-y-visible md:overflow-y-auto p-3 space-y-3">
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
               {isWaiter && !isOnShift && (
                 <div className="text-center text-[var(--muted)] text-xs pt-12">
                   <p>Start shift to begin receiving tasks</p>
@@ -921,7 +921,7 @@ export function WaiterBoard() {
               </span>
               <span className="ml-2 text-[var(--muted)] text-xs">({unassignedTasks.length})</span>
             </div>
-            <div className="flex-1 overflow-y-visible md:overflow-y-auto p-3 space-y-3">
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
               {isWaiter && !isOnShift && (
                 <div className="text-center text-[var(--muted)] text-xs pt-12">
                   <p>No tasks while off shift</p>
