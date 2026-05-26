@@ -188,7 +188,15 @@ invitesRouter.post(
 // GET /invites — list pending invites for this org
 invitesRouter.get(
   '/',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole(
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'SUPERADMIN',
+    'BRANCH_ADMIN',
+    'ORG_FINANCE',
+    'ORG_AUDITOR',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const where: Prisma.InviteTokenWhereInput = {

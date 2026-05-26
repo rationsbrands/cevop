@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../services/auth';
 import { useTheme } from '../context/theme';
+import { AutoFitText } from '../components/AutoFitText';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 
@@ -498,36 +499,31 @@ export function KitchenBoard() {
         </div>
       )}
       <div className="text-texture opacity-5" />
-      <header className="flex flex-col sm:flex-row items-center justify-between px-3 sm:px-4 py-2 border-b border-gray-800 bg-[#0a0a0a] shrink-0 gap-2 relative z-20">
-        <div className="flex items-center justify-between w-full sm:w-auto gap-2 sm:gap-4 min-w-0 shrink">
+      {/* Header */}
+      <header className="flex flex-col sm:flex-row items-center justify-between px-2 sm:px-4 py-2 border-b border-gray-800 bg-[#0a0a0a] shrink-0 gap-1.5 overflow-hidden relative z-20">
+        <div className="flex items-center justify-between w-full sm:w-auto gap-1.5 sm:gap-4 min-w-0 shrink">
           <h1 className="text-sm sm:text-xl text-[var(--accent)] font-display truncate flex items-center gap-2">
             <span role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-md" />
-            <span className="opacity-80">KITCHEN</span>
+            <span className="opacity-80 hidden xxs:inline">KITCHEN</span>
           </h1>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <div
               className={`px-1.5 sm:px-2 py-0.5 border text-[8px] sm:text-[10px] shrink-0 font-mono ${socketConnected ? 'border-green-500 text-green-500' : 'border-red-500 text-red-500'}`}
             >
               {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
             </div>
-            {/* Mobile-only Refresh button */}
-            <button
-              onClick={() => refreshNow().catch(() => void 0)}
-              disabled={refreshing}
-              className="sm:hidden text-[10px] text-gray-400 border border-gray-800 px-2 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
-            >
-              {refreshing ? '...' : '⟳'}
-            </button>
+            {/* Mobile-only Logout button */}
             <button
               onClick={logout}
-              className="sm:hidden text-[10px] text-gray-500 border border-gray-800 px-2 py-1 shrink-0 uppercase rounded-full font-bold font-display"
+              className="sm:hidden text-[9px] text-gray-500 border border-gray-800 px-2 py-1 shrink-0 uppercase rounded-full font-bold font-display"
             >
               OUT
             </button>
           </div>
         </div>
-        <div className="flex items-center justify-end w-full sm:w-auto gap-2 sm:gap-3 shrink-0">
-          <div className="flex flex-col items-end hidden md:flex">
+
+        <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-1 sm:gap-3 shrink-0">
+          <div className="flex flex-col items-end hidden lg:flex">
             <span className="text-gray-200 text-[10px] sm:text-xs font-bold truncate max-w-[150px]">
               {user?.name}
             </span>
@@ -536,73 +532,79 @@ export function KitchenBoard() {
               {user?.branch ? ` — ${user.branch.name}` : ''}
             </span>
           </div>
-          <div className="text-[10px] font-mono hidden lg:block">
-            {new Date().toLocaleTimeString()}
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => refreshNow().catch(() => void 0)}
+              disabled={refreshing}
+              className="text-[9px] sm:text-xs text-gray-400 border border-gray-800 px-2 sm:px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
+            >
+              {refreshing ? '...' : '⟳'}
+            </button>
+
+            {pushStatus !== 'unsupported' && pushStatus !== 'on' && (
+              <button
+                onClick={() => enablePush().catch(() => void 0)}
+                disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
+                className="text-[9px] sm:text-xs text-gray-400 border border-gray-800 px-2 sm:px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
+              >
+                {pushStatus === 'loading' ? '...' : pushStatus === 'blocked' ? 'BLOCKED' : 'ALERTS'}
+              </button>
+            )}
+
+            {showInstallButton && (
+              <button
+                onClick={() => handleInstall().catch(() => void 0)}
+                className="hidden xxs:block text-[9px] sm:text-xs text-gray-400 border border-gray-800 px-2 sm:px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display"
+              >
+                INSTALL
+              </button>
+            )}
+
+            {ordersHasMore && (
+              <button
+                onClick={() => loadMoreOrders().catch(() => void 0)}
+                disabled={ordersLoadingMore}
+                className="text-[9px] sm:text-xs text-gray-400 border border-gray-800 px-2 sm:px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
+              >
+                {ordersLoadingMore ? '...' : 'OLDER'}
+              </button>
+            )}
+
+            <button
+              onClick={logout}
+              className="hidden sm:block text-[9px] sm:text-xs text-gray-500 border border-gray-800 px-2 sm:px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display"
+            >
+              OUT
+            </button>
           </div>
-          <button
-            onClick={() => refreshNow().catch(() => void 0)}
-            disabled={refreshing}
-            className="hidden sm:block text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
-          >
-            {refreshing ? '...' : 'REFRESH'}
-          </button>
-          {pushStatus !== 'unsupported' && pushStatus !== 'on' && (
-            <button
-              onClick={() => enablePush().catch(() => void 0)}
-              disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
-              className="hidden xs:block text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
-            >
-              {pushStatus === 'loading' ? '...' : pushStatus === 'blocked' ? 'BLOCKED' : 'ALERTS'}
-            </button>
-          )}
-          {showInstallButton && (
-            <button
-              onClick={() => handleInstall().catch(() => void 0)}
-              className="hidden sm:block text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display"
-            >
-              INSTALL
-            </button>
-          )}
-          {ordersHasMore && (
-            <button
-              onClick={() => loadMoreOrders().catch(() => void 0)}
-              disabled={ordersLoadingMore}
-              className="text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
-            >
-              {ordersLoadingMore ? '...' : 'OLDER'}
-            </button>
-          )}
-          <button
-            onClick={logout}
-            className="hidden sm:block text-[10px] sm:text-xs text-gray-500 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display"
-          >
-            OUT
-          </button>
         </div>
       </header>
       {(!isOnline || !socketConnected) && offlineSnapshotTs && (
-        <div className="px-3 sm:px-4 py-1 text-[10px] sm:text-xs text-gray-400 border-b border-gray-800 bg-[#0a0a0a]">
+        <div className="px-2 sm:px-4 py-1 text-[10px] sm:text-xs text-gray-400 border-b border-gray-800 bg-[#0a0a0a]">
           Showing last saved snapshot — {new Date(offlineSnapshotTs).toLocaleString()}
         </div>
       )}
 
-      <div className="flex-1 overflow-x-hidden overflow-y-auto grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-2 p-2 content-start">
+      <div className="flex-1 overflow-x-hidden overflow-y-auto grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 p-2 content-start">
         {orders.map((order) => (
           <div
             key={order.id}
-            className={`border-2 p-3 space-y-3 bg-[#0a0a0a] flex flex-col justify-between overflow-hidden ${order.status === 'RECEIVED' ? 'border-blue-900' : 'border-yellow-900'}`}
+            className={`border-2 p-2.5 sm:p-3 space-y-2.5 sm:space-y-3 bg-[#0a0a0a] flex flex-col justify-between overflow-hidden ${order.status === 'RECEIVED' ? 'border-blue-900' : 'border-yellow-900'}`}
           >
-            <div className="space-y-3 min-w-0">
+            <div className="space-y-2.5 sm:space-y-3 min-w-0">
               <div className="flex justify-between items-start gap-2">
-                <div className="min-w-0">
-                  <div className="text-2xl font-black truncate">{order.table?.label || 'T?'}</div>
-                  <div className="text-[10px] text-gray-500 font-mono truncate">
+                <div className="min-w-0 flex-1">
+                  <AutoFitText className="font-black" maxFontSize="1.5rem" minFontSize="1.125rem">
+                    {order.table?.label || 'T?'}
+                  </AutoFitText>
+                  <div className="text-[9px] sm:text-[10px] text-gray-500 font-mono truncate">
                     {order.id.slice(-6).toUpperCase()}
                   </div>
                 </div>
                 <TimeElapsed
                   createdAt={order.createdAt}
-                  className="text-[10px] sm:text-xs font-bold text-gray-400 shrink-0"
+                  className="text-[9px] sm:text-xs font-bold text-gray-400 shrink-0 mt-1"
                 />
               </div>
 
@@ -613,15 +615,17 @@ export function KitchenBoard() {
                     className={`flex flex-col min-w-0 ${item.cancelledAt ? 'opacity-30 line-through' : ''}`}
                   >
                     <div className="flex justify-between items-start gap-2 overflow-hidden">
-                      <span className="text-base sm:text-lg font-bold leading-tight truncate">
-                        <span className="text-[var(--accent)] mr-2 shrink-0">{item.quantity}×</span>
+                      <span className="text-sm sm:text-base font-bold leading-tight">
+                        <span className="text-[var(--accent)] mr-1.5 shrink-0">
+                          {item.quantity}×
+                        </span>
                         {item.menuItem?.name}
                       </span>
                       {!item.cancelledAt && (
-                        <div className="flex gap-1 shrink-0 mt-1">
+                        <div className="flex gap-1 shrink-0 mt-0.5">
                           <button
                             onClick={() => toggleItemAvailability(item.menuItemId)}
-                            className="text-[8px] sm:text-[9px] border border-gray-700 px-1 text-gray-500 hover:text-red-500"
+                            className="text-[8px] sm:text-[9px] border border-gray-700 px-1 text-gray-500 hover:text-red-500 transition-colors"
                             title="86 item"
                           >
                             86
@@ -631,7 +635,7 @@ export function KitchenBoard() {
                               cancelOrderItem(order.id, item.id, item.menuItem?.name || '')
                             }
                             disabled={updatingItems.has(item.id)}
-                            className="text-[8px] sm:text-[9px] border border-gray-700 px-1 text-gray-500 hover:text-red-500 disabled:opacity-50"
+                            className="text-[8px] sm:text-[9px] border border-gray-700 px-1 text-gray-500 hover:text-red-500 disabled:opacity-50 transition-colors"
                             title="Cancel item"
                           >
                             {updatingItems.has(item.id) ? '...' : '✕'}
@@ -640,7 +644,7 @@ export function KitchenBoard() {
                       )}
                     </div>
                     {item.notes && (
-                      <div className="text-xs text-yellow-500 italic ml-4 sm:ml-6 leading-tight mt-1 break-words">
+                      <div className="text-[10px] sm:text-xs text-yellow-500 italic ml-4 sm:ml-5 leading-tight mt-0.5 break-words">
                         "{item.notes}"
                       </div>
                     )}
@@ -652,7 +656,7 @@ export function KitchenBoard() {
             <button
               onClick={() => updateOrderStatus(order.id, NEXT_STATUS[order.status])}
               disabled={updatingItems.has(order.id)}
-              className={`w-full py-3 sm:py-4 mt-2 font-black tracking-tighter text-lg sm:text-xl transition-all active:scale-95 ${order.status === 'RECEIVED' ? 'bg-blue-600' : 'bg-yellow-600'} text-black truncate`}
+              className={`w-full py-2.5 sm:py-3.5 mt-1 font-black tracking-tighter text-base sm:text-lg transition-all active:scale-95 ${order.status === 'RECEIVED' ? 'bg-blue-600' : 'bg-yellow-600'} text-black truncate rounded-sm`}
             >
               {updatingItems.has(order.id) ? '...' : NEXT_LABEL[order.status]}
             </button>

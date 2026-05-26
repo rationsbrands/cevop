@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../services/auth';
 import { useTheme } from '../context/theme';
+import { AutoFitText } from '../components/AutoFitText';
 import { formatPrice } from '../../../../shared/utils/currency';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
@@ -863,15 +864,17 @@ export function ServiceBoard() {
         </div>
       )}
       {/* Header */}
-      <header className="flex flex-col sm:flex-row items-center justify-between px-3 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-2">
-        <div className="flex items-center justify-between w-full sm:w-auto gap-2 sm:gap-4 shrink-0 min-w-0">
-          <h1 className="text-base sm:text-2xl flex items-center gap-2 shrink-0">
+      <header className="flex flex-col sm:flex-row items-center justify-between px-2 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-1.5 overflow-hidden relative z-20">
+        <div className="flex items-center justify-between w-full sm:w-auto gap-1.5 sm:gap-4 shrink-0 min-w-0">
+          <h1 className="text-sm sm:text-xl flex items-center gap-2 shrink-0">
             <span role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-md" />
-            <span className="font-display hidden xxs:inline text-[var(--accent)]">SERVICE</span>
+            <span className="font-display hidden xxs:inline text-[var(--accent)] uppercase">
+              SERVICE
+            </span>
           </h1>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <div
-              className={`flex items-center gap-1 sm:gap-1.5 text-[9px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 ${
+              className={`flex items-center gap-1 sm:gap-1.5 text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 font-mono ${
                 isOnline && socketConnected
                   ? 'border-[var(--ready)] text-[var(--ready)] bg-[var(--surface2)]'
                   : 'border-[var(--danger)] text-[var(--danger)] bg-[var(--surface2)]'
@@ -888,21 +891,21 @@ export function ServiceBoard() {
             <button
               onClick={() => refreshNow().catch(() => void 0)}
               disabled={refreshing}
-              className="sm:hidden text-[10px] text-[var(--muted)] border border-[var(--border)] px-2 py-1 transition-colors shrink-0 disabled:opacity-50"
+              className="sm:hidden text-[9px] text-[var(--muted)] border border-[var(--border)] px-2 py-1 transition-colors shrink-0 disabled:opacity-50 uppercase font-bold"
             >
               {refreshing ? '...' : '⟳'}
             </button>
             <button
               onClick={logout}
-              className="sm:hidden text-[10px] text-[var(--muted)] border border-[var(--border)] px-2 py-1 transition-colors shrink-0"
+              className="sm:hidden text-[9px] text-[var(--muted)] border border-[var(--border)] px-2 py-1 transition-colors shrink-0 uppercase font-bold"
             >
               OUT
             </button>
           </div>
         </div>
 
-        <div className="flex items-center justify-end w-full sm:w-auto gap-1.5 sm:gap-3 shrink-0">
-          <div className="flex flex-col items-end hidden md:flex">
+        <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-1 sm:gap-3 shrink-0">
+          <div className="flex flex-col items-end hidden lg:flex">
             <span className="text-[var(--text)] text-[10px] sm:text-xs font-bold truncate max-w-[150px]">
               {user?.name}
             </span>
@@ -911,431 +914,443 @@ export function ServiceBoard() {
               {user?.branch ? ` — ${user.branch.name}` : ''}
             </span>
           </div>
-          <div className="text-[var(--muted)] text-[10px] sm:text-xs font-mono hidden lg:block">
-            {new Date().toLocaleTimeString()}
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => refreshNow().catch(() => void 0)}
+              disabled={refreshing}
+              className="hidden sm:block text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 transition-colors shrink-0 disabled:opacity-50 uppercase font-bold rounded-full"
+            >
+              {refreshing ? '...' : 'REFRESH'}
+            </button>
+            {pushStatus !== 'unsupported' && pushStatus !== 'on' && (
+              <button
+                onClick={() => enablePush().catch(() => void 0)}
+                disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
+                className="hidden xs:block text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 transition-colors shrink-0 disabled:opacity-50 uppercase font-bold rounded-full"
+              >
+                {pushStatus === 'loading' ? '...' : pushStatus === 'blocked' ? 'BLOCKED' : 'ALERTS'}
+              </button>
+            )}
+            {showInstallButton && (
+              <button
+                onClick={() => handleInstall().catch(() => void 0)}
+                className="hidden sm:block text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 transition-colors shrink-0 uppercase font-bold rounded-full"
+              >
+                INSTALL
+              </button>
+            )}
+            <button
+              onClick={() => setMode(nextThemeMode)}
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-[var(--border)] flex items-center justify-center text-[9px] sm:text-[10px] font-black shrink-0 font-display transition-colors"
+              title={`Theme: ${themeLabel}`}
+            >
+              {themeLabel}
+            </button>
+            <button
+              onClick={logout}
+              className="hidden sm:block text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 transition-colors shrink-0 uppercase font-bold rounded-full"
+            >
+              OUT
+            </button>
           </div>
-          <button
-            onClick={() => refreshNow().catch(() => void 0)}
-            disabled={refreshing}
-            className="hidden sm:block text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0 disabled:opacity-50"
-          >
-            {refreshing ? 'REFRESHING…' : 'REFRESH'}
-          </button>
-          {pushStatus !== 'unsupported' && pushStatus !== 'on' && (
-            <button
-              onClick={() => enablePush().catch(() => void 0)}
-              disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
-              className="hidden xs:block text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0 disabled:opacity-50"
-            >
-              {pushStatus === 'loading' ? '...' : pushStatus === 'blocked' ? 'BLOCKED' : 'ALERTS'}
-            </button>
-          )}
-          {showInstallButton && (
-            <button
-              onClick={() => handleInstall().catch(() => void 0)}
-              className="hidden sm:block text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0"
-            >
-              INSTALL
-            </button>
-          )}
-          <button
-            onClick={() => setMode(nextThemeMode)}
-            className={`w-7 h-7 sm:w-10 sm:h-10 rounded-full border flex items-center justify-center transition-colors text-[9px] sm:text-[10px] font-bold tracking-widest shrink-0 ${
-              mode === 'system'
-                ? 'bg-[var(--surface2)] border-[var(--border)] text-[var(--text)] shadow-sm'
-                : mode === 'dark'
-                  ? 'bg-black border-[var(--border)] text-[var(--text)] shadow-sm'
-                  : 'bg-white border-[var(--border)] text-black shadow-sm'
-            }`}
-            title={`Theme: ${themeLabel} (click → ${nextThemeLabel})`}
-            aria-label={`Theme ${themeLabel}. Click to switch to ${nextThemeLabel}.`}
-          >
-            {themeLabel}
-          </button>
-          <button
-            onClick={logout}
-            className="hidden sm:block text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0"
-          >
-            LOGOUT
-          </button>
         </div>
       </header>
       {(!isOnline || !socketConnected) && offlineSnapshotTs && (
-        <div className="px-3 sm:px-4 py-1 text-[10px] sm:text-xs text-[var(--muted)] border-b border-[var(--border)] bg-[var(--surface)]">
+        <div className="px-2 sm:px-4 py-1 text-[10px] sm:text-xs text-[var(--muted)] border-b border-[var(--border)] bg-[var(--surface)]">
           Showing last saved snapshot — {new Date(offlineSnapshotTs).toLocaleString()}
         </div>
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
+      <div className="flex border-b border-[var(--border)] bg-[var(--surface)] shrink-0 overflow-x-auto no-scrollbar">
         <button
           onClick={() => setActiveTab('orders')}
-          className={`px-4 sm:px-6 py-2.5 text-xs sm:text-sm font-bold tracking-wider transition-all ${activeTab === 'orders' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
+          className={`px-4 sm:px-6 py-2.5 text-[10px] sm:text-xs font-bold tracking-wider transition-all whitespace-nowrap ${activeTab === 'orders' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
         >
           ORDERS ({orders.length})
         </button>
         <button
           onClick={() => setActiveTab('calls')}
-          className={`px-4 sm:px-6 py-2.5 text-xs sm:text-sm font-bold tracking-wider transition-all relative ${activeTab === 'calls' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
+          className={`px-4 sm:px-6 py-2.5 text-[10px] sm:text-xs font-bold tracking-wider transition-all relative whitespace-nowrap ${activeTab === 'calls' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
         >
           <span className="sm:hidden">CALLS</span>
           <span className="hidden sm:inline">CALLS & REQUESTS</span>
           {pendingCallsCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center font-bold">
+            <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[9px] w-3.5 h-3.5 rounded-full flex items-center justify-center font-bold">
               {pendingCallsCount}
             </span>
           )}
         </button>
         <button
           onClick={() => setActiveTab('tables')}
-          className={`px-4 sm:px-6 py-2.5 text-xs sm:text-sm font-bold tracking-wider transition-all ${activeTab === 'tables' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
+          className={`px-4 sm:px-6 py-2.5 text-[10px] sm:text-xs font-bold tracking-wider transition-all whitespace-nowrap ${activeTab === 'tables' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
         >
           TABLES
         </button>
       </div>
 
       {/* Content */}
-      {activeTab === 'orders' ? (
-        <div className="flex-1 overflow-hidden flex flex-col">
-          <div className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-2">
-            <div className="text-xs text-[var(--muted)]">
-              Loaded {orders.length} active orders{ordersHasMore ? ' · older available' : ''}
-            </div>
-            {ordersHasMore && (
-              <button
-                className="px-3 py-1.5 text-xs font-bold tracking-wider border border-[var(--border)] bg-[var(--surface2)] hover:brightness-110 disabled:opacity-50"
-                onClick={() => loadMoreOrders().catch(() => void 0)}
-                disabled={ordersLoadingMore}
-              >
-                {ordersLoadingMore ? 'Loading…' : 'Load Older'}
-              </button>
-            )}
-          </div>
-          <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0 divide-y lg:divide-y-0 lg:divide-x divide-[var(--border)] overflow-y-auto lg:overflow-hidden">
-            {(['RECEIVED', 'PREPARING', 'READY'] as const).map((status) => (
-              <div
-                key={status}
-                className="flex flex-col lg:overflow-hidden min-h-[400px] lg:min-h-0 border-b lg:border-b-0 border-[var(--border)]"
-              >
-                <div
-                  className={`px-3 py-2 border-b border-[var(--border)] shrink-0 ${STATUS_TEXT[status]} sticky top-0 bg-[var(--surface)] z-10`}
+      <div className="flex-1 overflow-hidden">
+        {activeTab === 'orders' && (
+          <div className="h-full overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-3 sm:px-4 py-1.5 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-2">
+              <div className="text-[10px] text-[var(--muted)] truncate">
+                {orders.length} active orders{ordersHasMore ? ' · older available' : ''}
+              </div>
+              {ordersHasMore && (
+                <button
+                  className="px-2 py-1 text-[10px] font-bold tracking-wider border border-[var(--border)] bg-[var(--surface2)] hover:brightness-110 disabled:opacity-50 rounded-sm"
+                  onClick={() => loadMoreOrders().catch(() => void 0)}
+                  disabled={ordersLoadingMore}
                 >
-                  <span className="font-bold text-xs tracking-widest">{status}</span>
-                  <span className="ml-2 text-[var(--muted)] text-xs">
-                    ({activeOrdersByStatus[status].length})
-                  </span>
-                </div>
-                <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                  {activeOrdersByStatus[status].length === 0 && (
-                    <div className="text-center text-[var(--muted)] text-xs pt-8">— Empty —</div>
-                  )}
-                  {activeOrdersByStatus[status].map((order) => (
-                    <div
-                      key={order.id}
-                      className={`border p-3 space-y-2 animate-slide-in ${STATUS_COLOR[order.status]}`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-bold text-sm text-[var(--text)]">
-                            {order.table?.label || `Table ${order.tableId.slice(-4)}`}
-                          </div>
-                          <div className="text-[var(--muted)] text-xs font-mono">
-                            {order.id.slice(-6).toUpperCase()}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <TimeElapsed createdAt={order.createdAt} className="text-xs font-bold" />
-                          <div className="text-[var(--muted)] text-xs">
-                            {formatPrice(order.total)}
-                          </div>
-                        </div>
+                  {ordersLoadingMore ? '...' : 'LOAD OLDER'}
+                </button>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto md:overflow-hidden grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-[var(--border)]">
+              {(['RECEIVED', 'PREPARING', 'READY'] as const).map((status) => (
+                <div key={status} className="flex flex-col min-h-[400px] md:min-h-0">
+                  <div
+                    className={`px-3 py-2 border-b border-[var(--border)] shrink-0 ${STATUS_TEXT[status]} sticky top-0 bg-[var(--surface)] z-10 flex justify-between items-center`}
+                  >
+                    <span className="font-bold text-[10px] tracking-widest uppercase">
+                      {status}
+                    </span>
+                    <span className="text-[var(--muted)] text-[10px] font-mono">
+                      ({activeOrdersByStatus[status].length})
+                    </span>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-2 sm:space-y-3">
+                    {activeOrdersByStatus[status].length === 0 && (
+                      <div className="text-center text-[var(--muted)] text-[10px] pt-12 uppercase tracking-widest opacity-50">
+                        — Empty —
                       </div>
-                      <div className="space-y-1 border-t border-[var(--border)] pt-2">
-                        {order.items.map((item) => (
-                          <React.Fragment key={item.id}>
-                            <div
-                              className={`flex items-start gap-2 text-xs ${item.cancelledAt ? 'opacity-40 line-through' : ''}`}
+                    )}
+                    {activeOrdersByStatus[status].map((order) => (
+                      <div
+                        key={order.id}
+                        className={`border p-2.5 sm:p-3 space-y-2.5 sm:space-y-3 animate-slide-in shadow-sm ${STATUS_COLOR[order.status]}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <AutoFitText
+                              className="font-bold"
+                              maxFontSize="1.125rem"
+                              minFontSize="0.875rem"
                             >
-                              <span className="font-bold text-[var(--accent)] shrink-0">
-                                {item.quantity}×
-                              </span>
-                              <div className="flex-1 min-w-0 flex items-center justify-between gap-1">
-                                <span className="text-[var(--text)] truncate">
-                                  {item.menuItem?.name || '—'}
+                              {order.table?.label || `T-${order.tableId.slice(-4)}`}
+                            </AutoFitText>
+                            <div className="text-[9px] text-[var(--muted)] font-mono truncate">
+                              {order.id.slice(-6).toUpperCase()}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0 mt-0.5">
+                            <TimeElapsed
+                              createdAt={order.createdAt}
+                              className="text-[10px] font-bold"
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-1.5 border-t border-[var(--border)] pt-2.5 overflow-hidden">
+                          {order.items.map((item) => (
+                            <React.Fragment key={item.id}>
+                              <div
+                                className={`flex items-start gap-2 ${item.cancelledAt ? 'opacity-40 line-through text-[10px]' : 'text-xs sm:text-sm'}`}
+                              >
+                                <span className="font-bold text-[var(--accent)] shrink-0">
+                                  {item.quantity}×
                                 </span>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  {/* Per-item 86 button — only shown to SERVICE role */}
-                                  {user?.role === 'SERVICE' && item.menuItemId && (
-                                    <button
-                                      onClick={() => toggleItemAvailability(item.menuItemId)}
-                                      title="Mark this item as unavailable (86'd)"
-                                      className="text-[9px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors ml-1 shrink-0"
-                                    >
-                                      86
-                                    </button>
-                                  )}
-                                  {!item.cancelledAt &&
-                                    order.status !== 'READY' &&
-                                    order.status !== 'SERVED' && (
+                                <div className="flex-1 min-w-0 flex items-center justify-between gap-1">
+                                  <span className="text-[var(--text)] font-medium leading-tight">
+                                    {item.menuItem?.name || '—'}
+                                  </span>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {user?.role === 'SERVICE' && item.menuItemId && (
                                       <button
-                                        onClick={() =>
-                                          cancelOrderItem(
-                                            order.id,
-                                            item.id,
-                                            item.menuItem?.name ?? 'Item',
-                                          )
-                                        }
-                                        className="text-[9px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors shrink-0 border border-transparent hover:border-[var(--danger)]/40 px-1 py-0.5"
-                                        title="Mark this item as unable to fulfil"
+                                        onClick={() => toggleItemAvailability(item.menuItemId)}
+                                        className="text-[8px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors ml-1 shrink-0"
                                       >
-                                        ✕ can't fulfil
+                                        86
                                       </button>
                                     )}
-                                  {item.cancelledAt && (
-                                    <span className="text-[9px] uppercase text-[var(--danger)]">
-                                      Cancelled
-                                    </span>
-                                  )}
+                                    {!item.cancelledAt &&
+                                      order.status !== 'READY' &&
+                                      order.status !== 'SERVED' && (
+                                        <button
+                                          onClick={() =>
+                                            cancelOrderItem(
+                                              order.id,
+                                              item.id,
+                                              item.menuItem?.name ?? 'Item',
+                                            )
+                                          }
+                                          className="text-[8px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors shrink-0"
+                                        >
+                                          ✕
+                                        </button>
+                                      )}
+                                  </div>
                                 </div>
                               </div>
+                              {item.notes && (
+                                <div className="text-[var(--muted)] italic text-[10px] pl-5 leading-tight">
+                                  "{item.notes}"
+                                </div>
+                              )}
+                            </React.Fragment>
+                          ))}
+                        </div>
+                        {status === 'READY' && onlineWaiters.length > 0 && (
+                          <div className="pt-2 border-t border-[var(--border)] space-y-2">
+                            <div className="text-[10px] text-[var(--muted)] flex justify-between">
+                              <span>Assigned:</span>
+                              <span className="text-[var(--text)] font-bold truncate max-w-[100px]">
+                                {order.assignedWaiter
+                                  ? onlineWaiters.find((w) => w.id === order.assignedWaiter)
+                                      ?.name || 'Waiter'
+                                  : '—'}
+                              </span>
                             </div>
-                            {item.notes && (
-                              <div className="text-[var(--muted)] italic text-[10px] pl-6">
-                                "{item.notes}"
-                              </div>
-                            )}
-                          </React.Fragment>
-                        ))}
-                      </div>
-                      {status === 'READY' && onlineWaiters.length > 0 && (
-                        <div className="pt-2 border-t border-[var(--border)] space-y-2">
-                          <div className="text-xs text-[var(--muted)]">
-                            Assigned:{' '}
-                            <span className="text-[var(--text)] font-medium">
-                              {order.assignedWaiter
-                                ? onlineWaiters.find((w) => w.id === order.assignedWaiter)?.name ||
-                                  'Waiter'
-                                : '—'}
-                            </span>
-                          </div>
-                          <div className="flex gap-2">
                             <select
                               id={`service_order_assign_${order.id}`}
-                              name="assignedWaiter"
-                              className="flex-1 text-xs"
+                              className="w-full text-[10px] py-1 bg-[var(--surface2)] border-[var(--border)]"
                               value={order.assignedWaiter ?? ''}
                               onChange={(e) =>
                                 assignOrder(order.id, e.target.value ? e.target.value : null)
                               }
                               disabled={assigningItems.has(order.id)}
-                              autoComplete="off"
-                              aria-label="Assign order to waiter"
                             >
                               <option value="">— Unassigned —</option>
                               {onlineWaiters.map((w) => (
                                 <option key={w.id} value={w.id}>
                                   {w.name}
-                                  {w.online ? ' (online)' : ''}
                                 </option>
                               ))}
                             </select>
                           </div>
-                        </div>
-                      )}
-                      {NEXT_STATUS[order.status] && (
-                        <button
-                          onClick={() => updateOrderStatus(order.id, NEXT_STATUS[order.status])}
-                          disabled={updatingItems.has(order.id)}
-                          className="w-full text-xs py-1.5 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black hover:border-[var(--accent)] transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {updatingItems.has(order.id) ? 'UPDATING...' : NEXT_LABEL[order.status]}
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : activeTab === 'calls' ? (
-        <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 md:grid-cols-2 gap-4 content-start">
-          {/* Waiter Calls */}
-          <div>
-            <h2 className="font-bold text-xs tracking-widest text-[var(--muted)] mb-3">
-              WAITER CALLS ({waiterCalls.length})
-            </h2>
-            <div className="space-y-3">
-              {waiterCalls.length === 0 && (
-                <div className="text-[var(--muted)] text-xs">No pending calls</div>
-              )}
-              {waiterCalls.map((call) => (
-                <div
-                  key={call.id}
-                  className="border border-[var(--preparing)] bg-[var(--surface2)] p-3 space-y-2 animate-slide-in"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-sm text-[var(--preparing)]">
-                      {call.table?.label || call.tableId}
-                    </span>
-                    <TimeElapsed
-                      createdAt={call.createdAt}
-                      className="text-[var(--muted)] text-xs"
-                    />
+                        )}
+                        {NEXT_STATUS[order.status] && (
+                          <button
+                            onClick={() => updateOrderStatus(order.id, NEXT_STATUS[order.status])}
+                            disabled={updatingItems.has(order.id)}
+                            className="w-full text-[10px] py-2 font-bold tracking-widest uppercase border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all rounded-sm active:scale-95"
+                          >
+                            {updatingItems.has(order.id) ? '...' : NEXT_LABEL[order.status]}
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                  {call.reason && <p className="text-xs text-[var(--text)]">"{call.reason}"</p>}
-                  {onlineWaiters.length > 0 && (
-                    <div className="flex items-center gap-2">
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'calls' && (
+          <div className="h-full overflow-y-auto p-2 sm:p-4 grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4 content-start">
+            {/* Waiter Calls */}
+            <div className="col-span-full">
+              <h2 className="font-bold text-[10px] tracking-widest text-[var(--muted)] mb-3 uppercase">
+                Waiter Calls ({waiterCalls.length})
+              </h2>
+              <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
+                {waiterCalls.length === 0 && (
+                  <div className="text-[var(--muted)] text-[10px] py-4 uppercase opacity-50 tracking-widest">
+                    No pending calls
+                  </div>
+                )}
+                {waiterCalls.map((call) => (
+                  <div
+                    key={call.id}
+                    className="border border-[var(--preparing)] bg-[var(--surface2)] p-3 space-y-2.5 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <AutoFitText
+                          className="font-bold text-[var(--preparing)]"
+                          maxFontSize="1.125rem"
+                          minFontSize="0.875rem"
+                        >
+                          {call.table?.label || call.tableId}
+                        </AutoFitText>
+                        <TimeElapsed
+                          createdAt={call.createdAt}
+                          className="text-[var(--muted)] text-[9px] font-bold"
+                        />
+                      </div>
+                    </div>
+                    {call.reason && (
+                      <p className="text-[11px] text-[var(--text)] italic leading-tight">
+                        "{call.reason}"
+                      </p>
+                    )}
+                    {onlineWaiters.length > 0 && (
                       <select
-                        id={`service_waiter_call_assign_${call.id}`}
-                        name="assignedTo"
-                        className="flex-1 text-xs"
+                        className="w-full text-[10px] py-1 bg-[var(--surface)] border-[var(--border)]"
                         value={call.assignedTo ?? ''}
                         onChange={(e) =>
                           assignWaiterCall(call.id, e.target.value ? e.target.value : null)
                         }
                         disabled={assigningItems.has(call.id)}
-                        autoComplete="off"
-                        aria-label="Assign waiter call to waiter"
                       >
                         <option value="">— Unassigned —</option>
                         {onlineWaiters.map((w) => (
                           <option key={w.id} value={w.id}>
                             {w.name}
-                            {w.online ? ' (online)' : ''}
                           </option>
                         ))}
                       </select>
-                    </div>
-                  )}
-                  <button
-                    onClick={() => acknowledgeWaiterCall(call.id)}
-                    disabled={updatingItems.has(call.id)}
-                    className="w-full text-xs py-1.5 font-bold border border-[var(--preparing)] hover:bg-[var(--preparing)] hover:text-black transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {updatingItems.has(call.id) ? 'RESOLVING...' : 'RESOLVE'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Service Requests */}
-          <div>
-            <h2 className="font-bold text-xs tracking-widest text-[var(--muted)] mb-3">
-              SERVICE REQUESTS ({serviceRequests.length})
-            </h2>
-            <div className="space-y-3">
-              {serviceRequests.length === 0 && (
-                <div className="text-[var(--muted)] text-xs">No pending requests</div>
-              )}
-              {serviceRequests.map((req) => (
-                <div
-                  key={req.id}
-                  className="border border-[var(--accent)] bg-[var(--surface2)] p-3 space-y-2 animate-slide-in"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-sm text-[var(--accent)]">
-                      {req.table?.label || req.tableId}
-                    </span>
-                    <TimeElapsed
-                      createdAt={req.createdAt}
-                      className="text-[var(--muted)] text-xs"
-                    />
+                    )}
+                    <button
+                      onClick={() => acknowledgeWaiterCall(call.id)}
+                      disabled={updatingItems.has(call.id)}
+                      className="w-full text-[10px] py-2 font-bold uppercase tracking-widest border border-[var(--preparing)] hover:bg-[var(--preparing)] hover:text-black transition-all rounded-sm active:scale-95"
+                    >
+                      {updatingItems.has(call.id) ? '...' : 'RESOLVE'}
+                    </button>
                   </div>
-                  <p className="text-xs text-[var(--text)] font-bold">{req.serviceType}</p>
-                  {req.notes && <p className="text-xs text-[var(--muted)]">"{req.notes}"</p>}
-                  {onlineWaiters.length > 0 && (
-                    <div className="flex items-center gap-2">
+                ))}
+              </div>
+            </div>
+
+            {/* Service Requests */}
+            <div className="col-span-full mt-4">
+              <h2 className="font-bold text-[10px] tracking-widest text-[var(--muted)] mb-3 uppercase">
+                Service Requests ({serviceRequests.length})
+              </h2>
+              <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
+                {serviceRequests.length === 0 && (
+                  <div className="text-[var(--muted)] text-[10px] py-4 uppercase opacity-50 tracking-widest">
+                    No pending requests
+                  </div>
+                )}
+                {serviceRequests.map((req) => (
+                  <div
+                    key={req.id}
+                    className="border border-[var(--accent)] bg-[var(--surface2)] p-3 space-y-2.5 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <AutoFitText
+                          className="font-bold text-[var(--accent)]"
+                          maxFontSize="1.125rem"
+                          minFontSize="0.875rem"
+                        >
+                          {req.table?.label || req.tableId}
+                        </AutoFitText>
+                        <TimeElapsed
+                          createdAt={req.createdAt}
+                          className="text-[var(--muted)] text-[9px] font-bold"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-[var(--text)] font-bold uppercase tracking-wide">
+                        {req.serviceType}
+                      </div>
+                      {req.notes && (
+                        <p className="text-[10px] text-[var(--muted)] italic leading-tight mt-0.5">
+                          "{req.notes}"
+                        </p>
+                      )}
+                    </div>
+                    {onlineWaiters.length > 0 && (
                       <select
-                        id={`service_request_assign_${req.id}`}
-                        name="assignedTo"
-                        className="flex-1 text-xs"
+                        className="w-full text-[10px] py-1 bg-[var(--surface)] border-[var(--border)]"
                         value={req.assignedTo ?? ''}
                         onChange={(e) =>
                           assignServiceRequest(req.id, e.target.value ? e.target.value : null)
                         }
                         disabled={assigningItems.has(req.id)}
-                        autoComplete="off"
-                        aria-label="Assign service request to waiter"
                       >
                         <option value="">— Unassigned —</option>
                         {onlineWaiters.map((w) => (
                           <option key={w.id} value={w.id}>
                             {w.name}
-                            {w.online ? ' (online)' : ''}
                           </option>
                         ))}
                       </select>
-                    </div>
-                  )}
-                  <button
-                    onClick={() => acknowledgeService(req.id)}
-                    disabled={updatingItems.has(req.id)}
-                    className="w-full text-xs py-1.5 font-bold border border-[var(--accent)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {updatingItems.has(req.id) ? 'RESOLVING...' : 'RESOLVE'}
-                  </button>
-                </div>
-              ))}
+                    )}
+                    <button
+                      onClick={() => acknowledgeService(req.id)}
+                      disabled={updatingItems.has(req.id)}
+                      className="w-full text-[10px] py-2 font-bold uppercase tracking-widest border border-[var(--accent)] hover:bg-[var(--accent)] hover:text-black transition-all rounded-sm active:scale-95"
+                    >
+                      {updatingItems.has(req.id) ? '...' : 'RESOLVE'}
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-      ) : (
-        <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 content-start">
-          {tables
-            .filter((t) => t.isActive)
-            .map((t) => (
-              <div
-                key={t.id}
-                className={`border p-3 space-y-3 flex flex-col justify-between ${
-                  t.status === 'EMPTY'
-                    ? 'border-[var(--border)] bg-[var(--surface2)]'
-                    : t.status === 'OCCUPIED'
-                      ? 'border-[var(--preparing)] bg-[var(--surface2)]'
-                      : 'border-[var(--accent)] bg-[var(--surface2)]'
-                }`}
-              >
-                <div>
-                  <div className="font-bold text-lg text-[var(--text)]">{t.label}</div>
-                  <div
-                    className={`text-xs font-bold tracking-widest uppercase mt-1 ${
-                      t.status === 'EMPTY'
-                        ? 'text-[var(--muted)]'
-                        : t.status === 'OCCUPIED'
-                          ? 'text-[var(--preparing)]'
-                          : 'text-[var(--accent)]'
-                    }`}
-                  >
-                    {t.status}
+        )}
+
+        {activeTab === 'tables' && (
+          <div className="h-full overflow-y-auto p-2 sm:p-4 grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2 sm:gap-4 content-start">
+            {tables
+              .filter((t) => t.isActive)
+              .map((t) => (
+                <div
+                  key={t.id}
+                  className={`border p-2.5 sm:p-3 flex flex-col justify-between gap-2.5 shadow-sm ${
+                    t.status === 'EMPTY'
+                      ? 'border-[var(--border)] bg-[var(--surface2)]'
+                      : t.status === 'OCCUPIED'
+                        ? 'border-yellow-600/50 bg-yellow-600/5'
+                        : 'border-[var(--accent)] bg-[var(--accent)]/5'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <AutoFitText
+                      className="font-bold"
+                      maxFontSize="1.125rem"
+                      minFontSize="0.875rem"
+                    >
+                      {t.label}
+                    </AutoFitText>
+                    <div
+                      className={`text-[9px] font-bold tracking-widest uppercase mt-0.5 ${
+                        t.status === 'EMPTY'
+                          ? 'text-[var(--muted)]'
+                          : t.status === 'OCCUPIED'
+                            ? 'text-yellow-500'
+                            : 'text-[var(--accent)]'
+                      }`}
+                    >
+                      {t.status}
+                    </div>
                   </div>
+                  {t.activeSessionId ? (
+                    <button
+                      onClick={() => clearTable(t.activeSessionId!)}
+                      disabled={updatingItems.has(t.activeSessionId)}
+                      className="w-full text-[9px] py-1.5 font-bold tracking-widest uppercase border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all rounded-sm active:scale-95"
+                    >
+                      {updatingItems.has(t.activeSessionId) ? '...' : 'CLEAR'}
+                    </button>
+                  ) : t.status === 'CLEANING' ? (
+                    <button
+                      onClick={() => markTableEmpty(t.id)}
+                      disabled={updatingItems.has(t.id)}
+                      className="w-full text-[9px] py-1.5 font-bold tracking-widest uppercase border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all rounded-sm active:scale-95"
+                    >
+                      {updatingItems.has(t.id) ? '...' : 'CLEAN'}
+                    </button>
+                  ) : (
+                    <div className="h-7" /> // Spacer
+                  )}
                 </div>
-                {t.activeSessionId ? (
-                  <button
-                    onClick={() => clearTable(t.activeSessionId)}
-                    disabled={updatingItems.has(t.activeSessionId)}
-                    className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50"
-                  >
-                    {updatingItems.has(t.activeSessionId) ? 'CLEARING...' : 'CLEAR TABLE'}
-                  </button>
-                ) : t.status === 'CLEANING' ? (
-                  <button
-                    onClick={() => markTableEmpty(t.id)}
-                    disabled={updatingItems.has(t.id)}
-                    className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50"
-                  >
-                    {updatingItems.has(t.id) ? 'UPDATING...' : 'MARK CLEAN'}
-                  </button>
-                ) : null}
+              ))}
+            {tables.filter((t) => t.isActive).length === 0 && (
+              <div className="col-span-full text-center text-[var(--muted)] text-[10px] py-12 uppercase tracking-widest opacity-50">
+                No tables found
               </div>
-            ))}
-          {tables.filter((t) => t.isActive).length === 0 && (
-            <div className="col-span-full text-center text-[var(--muted)] text-sm pt-8">
-              No tables found
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

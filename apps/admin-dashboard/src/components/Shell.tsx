@@ -60,7 +60,14 @@ export function Shell() {
   const hasBranchContext = isBranchScoped || !!activeBranchFilter;
   const canManageOrg = ['ORG_OWNER', 'ADMIN'].includes(role);
   const canManageOperations = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(role);
-  const canManageStaff = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(role);
+  const canManageStaff = [
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'BRANCH_ADMIN',
+    'ORG_FINANCE',
+    'ORG_AUDITOR',
+  ].includes(role);
   const canViewReports = [
     'ORG_OWNER',
     'ADMIN',

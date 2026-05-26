@@ -52,7 +52,15 @@ function generateSecureToken(): string {
 
 usersRouter.get(
   '/',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole(
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'SUPERADMIN',
+    'BRANCH_ADMIN',
+    'ORG_FINANCE',
+    'ORG_AUDITOR',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const where: Prisma.UserWhereInput = { organizationId: req.user!.organizationId };
