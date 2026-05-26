@@ -10,8 +10,10 @@ export type UserRole =
   | 'ORG_MANAGER'
   | 'ORG_FINANCE'
   | 'ORG_AUDITOR'
+  | 'HOST'
   | 'BRANCH_ADMIN'
   | 'BRANCH_FINANCE'
+  | 'CASHIER'
   | 'SERVICE'
   | 'WAITER'
   | 'KITCHEN';
@@ -178,6 +180,7 @@ export type AuthPayload = {
   role: string;
   opsRole?: OpsRole;
   plan?: string;
+  currency?: string;
   impersonating?: boolean;
 };
 

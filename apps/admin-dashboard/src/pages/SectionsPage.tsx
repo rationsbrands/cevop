@@ -40,6 +40,12 @@ export function SectionsPage() {
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
   const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>([]);
 
+  const [tableModalOpen, setTableModalOpen] = useState(false);
+  const [sectionTables, setSectionTables] = useState<any[]>([]);
+  const [unassignedTables, setUnassignedTables] = useState<any[]>([]);
+  const [selectedTableIds, setSelectedTableIds] = useState<string[]>([]);
+  const [tablesLoading, setTablesLoading] = useState(false);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -94,11 +100,7 @@ export function SectionsPage() {
 
     if (secRes.success) setSections(secRes.data);
     if (staffRes.success) {
-      setBranchStaff(
-        staffRes.data.filter(
-          (u: User) => ['WAITER', 'SERVICE', 'KITCHEN'].includes(u.role) && u.isActive,
-        ),
-      );
+      setBranchStaff(staffRes.data.filter((u: User) => u.role === 'WAITER' && u.isActive));
     }
 
     setLoading(false);
@@ -162,6 +164,43 @@ export function SectionsPage() {
     }
   }
 
+  async function openTableModal(sectionId: string) {
+    setActiveSectionId(sectionId);
+    setTableModalOpen(true);
+    setTablesLoading(true);
+    setError('');
+    try {
+      const res = await api.get(`/api/sections/${sectionId}/tables`);
+      if (res.success) {
+        setSectionTables(res.data.sectionTables);
+        setUnassignedTables(res.data.unassignedTables);
+        setSelectedTableIds(res.data.sectionTables.map((t: any) => t.id));
+      }
+    } catch {
+      void 0;
+    } finally {
+      setTablesLoading(false);
+    }
+  }
+
+  async function saveTables() {
+    if (!activeSectionId) return;
+    setSaving(true);
+    setError('');
+    try {
+      const res = await api.put(`/api/sections/${activeSectionId}/tables`, {
+        tableIds: selectedTableIds,
+      });
+      if (!res.success) throw new Error(res.error);
+      setTableModalOpen(false);
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (loading) return <div className="p-8 text-center text-gray-500">Loading sections...</div>;
 
   return (
@@ -191,7 +230,7 @@ export function SectionsPage() {
             setError('');
             setModalOpen(true);
           }}
-          className="btn-primary"
+          className="btn btn-primary btn-sm"
         >
           Add Section
         </button>
@@ -229,10 +268,15 @@ export function SectionsPage() {
               </div>
 
               <div className="text-sm text-gray-500 mb-4">
-                {section._count.tables} tables assigned
-                <span className="text-xs text-gray-400 block mt-0.5">
-                  Assign tables to this section from the Tables &amp; QR page.
-                </span>
+                <div className="flex items-center justify-between">
+                  <span>{section._count.tables} tables assigned</span>
+                  <button
+                    onClick={() => openTableModal(section.id)}
+                    className="text-xs text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 font-medium"
+                  >
+                    Manage Tables
+                  </button>
+                </div>
               </div>
 
               <div className="border-t border-gray-100 dark:border-gray-800 pt-3 mt-3">
@@ -332,11 +376,11 @@ export function SectionsPage() {
             </div>
 
             <div className="mt-6 flex justify-end gap-3">
-              <button className="btn-secondary" onClick={() => setModalOpen(false)}>
+              <button className="btn btn-secondary" onClick={() => setModalOpen(false)}>
                 Cancel
               </button>
               <button
-                className="btn-primary"
+                className="btn btn-primary btn-sm"
                 onClick={saveSection}
                 disabled={saving || !form.name.trim()}
               >
@@ -392,11 +436,89 @@ export function SectionsPage() {
             </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-800">
-              <button className="btn-secondary" onClick={() => setStaffModalOpen(false)}>
+              <button className="btn btn-secondary" onClick={() => setStaffModalOpen(false)}>
                 Cancel
               </button>
-              <button className="btn-primary" onClick={saveStaff} disabled={saving}>
+              <button className="btn btn-primary btn-sm" onClick={saveStaff} disabled={saving}>
                 {saving ? 'Saving...' : 'Apply Assignment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tableModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white dark:bg-gray-900 rounded-xl max-w-md w-full p-6 shadow-xl border border-gray-200 dark:border-gray-800">
+            <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">Assign Tables</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Select tables to assign to this section. Unassigned tables are listed below.
+            </p>
+            {error && (
+              <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-lg text-sm">{error}</div>
+            )}
+
+            {tablesLoading ? (
+              <div className="flex justify-center py-8">
+                <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : (
+              <div className="max-h-60 overflow-y-auto space-y-4 mb-6 p-1">
+                {[...sectionTables, ...unassignedTables].length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-4">
+                    No available tables in this branch.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    {[...sectionTables, ...unassignedTables]
+                      .sort((a, b) => a.number - b.number)
+                      .map((table) => (
+                        <label
+                          key={table.id}
+                          className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                            selectedTableIds.includes(table.id)
+                              ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-900/20'
+                              : 'border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 text-indigo-600 rounded border-gray-300"
+                            checked={selectedTableIds.includes(table.id)}
+                            onChange={(e) => {
+                              if (e.target.checked)
+                                setSelectedTableIds([...selectedTableIds, table.id]);
+                              else
+                                setSelectedTableIds(
+                                  selectedTableIds.filter((id) => id !== table.id),
+                                );
+                            }}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="font-bold text-sm text-gray-900 dark:text-white truncate">
+                              {table.label}
+                            </div>
+                            <div className="text-[10px] text-gray-500 uppercase">
+                              Table #{table.number}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-800">
+              <button className="btn btn-secondary" onClick={() => setTableModalOpen(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={saveTables}
+                disabled={saving || tablesLoading}
+              >
+                {saving ? 'Saving...' : 'Apply Tables'}
               </button>
             </div>
           </div>

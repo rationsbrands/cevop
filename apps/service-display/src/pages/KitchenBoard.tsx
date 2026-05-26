@@ -329,7 +329,8 @@ export function KitchenBoard() {
 
     const handleSyncRequired = () => {
       const now = Date.now();
-      if (now - lastSyncAtRef.current < 8000) return;
+      // Throttle syncs to prevent "refresh loops"
+      if (now - lastSyncAtRef.current < 5000) return;
       lastSyncAtRef.current = now;
       refreshNowRef.current().catch(() => void 0);
     };
@@ -380,6 +381,20 @@ export function KitchenBoard() {
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
+
+  // Background Heartbeat Sync
+  useEffect(() => {
+    if (!token) return;
+
+    // Periodic refresh every 60 seconds as a fallback for missed socket events
+    const interval = setInterval(() => {
+      if (navigator.onLine) {
+        refreshNowRef.current().catch(() => void 0);
+      }
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [token]);
 
   async function updateOrderStatus(orderId: string, status: string) {
     if (updatingItems.has(orderId)) return;
@@ -483,26 +498,51 @@ export function KitchenBoard() {
         </div>
       )}
       <div className="text-texture opacity-5" />
-      <header className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-gray-800 bg-[#0a0a0a] shrink-0 gap-2 relative z-20">
-        <div className="flex items-center gap-2 sm:gap-4 min-w-0 shrink">
+      <header className="flex flex-col sm:flex-row items-center justify-between px-3 sm:px-4 py-2 border-b border-gray-800 bg-[#0a0a0a] shrink-0 gap-2 relative z-20">
+        <div className="flex items-center justify-between w-full sm:w-auto gap-2 sm:gap-4 min-w-0 shrink">
           <h1 className="text-sm sm:text-xl text-[var(--accent)] font-display truncate flex items-center gap-2">
             <span role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-md" />
             <span className="opacity-80">KITCHEN</span>
           </h1>
-          <div
-            className={`px-1.5 sm:px-2 py-0.5 border text-[8px] sm:text-[10px] shrink-0 font-mono ${socketConnected ? 'border-green-500 text-green-500' : 'border-red-500 text-red-500'}`}
-          >
-            {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
+          <div className="flex items-center gap-2">
+            <div
+              className={`px-1.5 sm:px-2 py-0.5 border text-[8px] sm:text-[10px] shrink-0 font-mono ${socketConnected ? 'border-green-500 text-green-500' : 'border-red-500 text-red-500'}`}
+            >
+              {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
+            </div>
+            {/* Mobile-only Refresh button */}
+            <button
+              onClick={() => refreshNow().catch(() => void 0)}
+              disabled={refreshing}
+              className="sm:hidden text-[10px] text-gray-400 border border-gray-800 px-2 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
+            >
+              {refreshing ? '...' : '⟳'}
+            </button>
+            <button
+              onClick={logout}
+              className="sm:hidden text-[10px] text-gray-500 border border-gray-800 px-2 py-1 shrink-0 uppercase rounded-full font-bold font-display"
+            >
+              OUT
+            </button>
           </div>
         </div>
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          <div className="text-[10px] font-mono hidden xs:block">
+        <div className="flex items-center justify-end w-full sm:w-auto gap-2 sm:gap-3 shrink-0">
+          <div className="flex flex-col items-end hidden md:flex">
+            <span className="text-gray-200 text-[10px] sm:text-xs font-bold truncate max-w-[150px]">
+              {user?.name}
+            </span>
+            <span className="text-gray-500 text-[9px] sm:text-[10px] truncate max-w-[150px]">
+              {user?.organization?.name}
+              {user?.branch ? ` — ${user.branch.name}` : ''}
+            </span>
+          </div>
+          <div className="text-[10px] font-mono hidden lg:block">
             {new Date().toLocaleTimeString()}
           </div>
           <button
             onClick={() => refreshNow().catch(() => void 0)}
             disabled={refreshing}
-            className="text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
+            className="hidden sm:block text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
           >
             {refreshing ? '...' : 'REFRESH'}
           </button>
@@ -510,19 +550,15 @@ export function KitchenBoard() {
             <button
               onClick={() => enablePush().catch(() => void 0)}
               disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
-              className="text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
+              className="hidden xs:block text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display disabled:opacity-50"
             >
-              {pushStatus === 'loading'
-                ? '...'
-                : pushStatus === 'blocked'
-                  ? 'ALERTS BLOCKED'
-                  : 'ENABLE ALERTS'}
+              {pushStatus === 'loading' ? '...' : pushStatus === 'blocked' ? 'BLOCKED' : 'ALERTS'}
             </button>
           )}
           {showInstallButton && (
             <button
               onClick={() => handleInstall().catch(() => void 0)}
-              className="text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display"
+              className="hidden sm:block text-[10px] sm:text-xs text-gray-400 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display"
             >
               INSTALL
             </button>
@@ -538,7 +574,7 @@ export function KitchenBoard() {
           )}
           <button
             onClick={logout}
-            className="text-[10px] sm:text-xs text-gray-500 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display"
+            className="hidden sm:block text-[10px] sm:text-xs text-gray-500 border border-gray-800 px-3 py-1 shrink-0 uppercase rounded-full font-bold font-display"
           >
             OUT
           </button>

@@ -305,7 +305,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         const { data: userData } = await meRes.json();
         if (userData) {
-          const allowedRoles = ['SERVICE', 'WAITER', 'KITCHEN'];
+          const allowedRoles = ['SERVICE', 'WAITER', 'KITCHEN', 'HOST', 'CASHIER'];
           if (!allowedRoles.includes(userData.role) || !userData.branchId) {
             doLogout();
             return;
@@ -371,7 +371,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ) {
       throw new Error('This is an admin account. Please use the Admin Dashboard.');
     }
-    const allowedRoles = ['SERVICE', 'WAITER', 'KITCHEN'];
+    const allowedRoles = ['SERVICE', 'WAITER', 'KITCHEN', 'HOST', 'CASHIER'];
     if (!allowedRoles.includes(role)) {
       throw new Error('Access denied for this role');
     }

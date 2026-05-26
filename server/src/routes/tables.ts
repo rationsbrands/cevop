@@ -62,7 +62,7 @@ tablesRouter.get('/public/:orgId/:tableId', async (req: Request, res: Response) 
     }
 
     // Ensure session is started when customer scans QR and views table
-    await getOrCreateSession(table.id, table.organizationId, table.branchId!);
+    const sessionId = await getOrCreateSession(table.id, table.organizationId, table.branchId!);
 
     res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=60'); // 5 minutes
     res.json({
@@ -76,12 +76,150 @@ tablesRouter.get('/public/:orgId/:tableId', async (req: Request, res: Response) 
         organizationName: table.organization.name,
         organizationLogo: table.organization.logo,
         branchName: table.branch?.name ?? null,
+        activeSessionId: sessionId,
       },
     });
   } catch {
     res.status(500).json({ success: false, error: 'Failed to fetch table info' });
   }
 });
+
+// POST /api/tables/public/:orgId/:tableId/attach-waiter
+// Called when a logged-in staff member scans a table QR
+// Attaches them to the table session and returns session info
+tablesRouter.post(
+  '/public/:orgId/:tableId/attach-waiter',
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { orgId, tableId } = req.params;
+
+      // Only SERVICE, WAITER, KITCHEN, BRANCH_ADMIN, ADMIN, ORG_OWNER can attach
+      const staffRoles = [
+        'SERVICE',
+        'WAITER',
+        'KITCHEN',
+        'BRANCH_ADMIN',
+        'ADMIN',
+        'ORG_OWNER',
+        'SUPERADMIN',
+        'CASHIER',
+        'HOST',
+      ];
+      if (!staffRoles.includes(req.user!.role)) {
+        res.status(403).json({ success: false, error: 'Staff account required' });
+        return;
+      }
+
+      // Find the table
+      let table = await prisma.table.findFirst({
+        where: { id: tableId, organizationId: req.user!.organizationId, isActive: true },
+        select: {
+          id: true,
+          label: true,
+          number: true,
+          organizationId: true,
+          branchId: true,
+          activeSessionId: true,
+        },
+      });
+
+      if (!table) {
+        // Try by org slug
+        const org = await prisma.organization.findUnique({
+          where: { slug: orgId },
+          select: { id: true },
+        });
+        if (org) {
+          const num = parseInt(tableId.replace(/\D/g, ''), 10);
+          if (!isNaN(num)) {
+            table = await prisma.table.findFirst({
+              where: { organizationId: org.id, number: num, isActive: true },
+              select: {
+                id: true,
+                label: true,
+                number: true,
+                organizationId: true,
+                branchId: true,
+                activeSessionId: true,
+              },
+            });
+          }
+        }
+      }
+
+      if (!table) {
+        res.status(404).json({ success: false, error: 'Table not found' });
+        return;
+      }
+
+      // Verify table belongs to this staff member's org
+      if (table.organizationId !== req.user!.organizationId) {
+        res.status(403).json({ success: false, error: 'Access denied' });
+        return;
+      }
+
+      // Get or create a session for this table
+      const sessionId = await getOrCreateSession(table.id, table.organizationId, table.branchId!);
+      const force = req.body.force === true || req.query.force === 'true';
+
+      if (req.user!.role === 'WAITER' && sessionId) {
+        const { claimTableSession } = await import('../services/waiterAssignment');
+        const result = await claimTableSession(
+          req.user!.userId,
+          table.id,
+          sessionId,
+          table.branchId!,
+          {
+            force,
+          },
+        );
+
+        if (!result.success) {
+          res.status(400).json({
+            success: false,
+            error: result.error,
+            currentWaiter: result.currentWaiter,
+          });
+          return;
+        }
+
+        if (result.alreadyOwned) {
+          res.json({
+            success: true,
+            message: `You already have claim to ${table.label}`,
+            data: {
+              tableId: table.id,
+              tableLabel: table.label,
+              sessionId,
+            },
+          });
+          return;
+        }
+
+        logger.info('Waiter scanned QR and claimed table', {
+          waiterId: req.user!.userId,
+          tableId: table.id,
+          sessionId,
+          force,
+        });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          tableId: table.id,
+          tableLabel: table.label,
+          sessionId,
+          redirectTo: 'https://service.cevop.com',
+        },
+      });
+    } catch (err) {
+      logger.error('POST /tables/public/:orgId/:tableId/attach-waiter error', { err });
+      res.status(500).json({ success: false, error: 'Failed to attach' });
+    }
+  },
+);
 
 // PUBLIC: Single QR
 tablesRouter.get('/:id/qr', async (req: Request, res: Response) => {
@@ -142,7 +280,46 @@ tablesRouter.get('/', async (req: AuthRequest, res: Response) => {
         section: { select: { id: true, name: true, colour: true } },
       },
     });
-    res.json({ success: true, data: tables });
+
+    const [activeSessions, mySections] = await Promise.all([
+      prisma.tableSession.findMany({
+        where: {
+          organizationId: req.user!.organizationId,
+          branchId: req.branchScope!,
+          closedAt: null,
+        },
+        select: {
+          id: true,
+          tableId: true,
+          assignedWaiter: { select: { id: true, name: true, staffCode: true } },
+        },
+      }),
+      prisma.sectionStaff.findMany({
+        where: { userId: req.user!.userId },
+        select: { sectionId: true },
+      }),
+    ]);
+
+    const mySectionIds = new Set(mySections.map((s) => s.sectionId));
+
+    const data = tables.map((t) => {
+      const activeSession = activeSessions.find((s) => s.tableId === t.id);
+      const isClaimedByMe = activeSession?.assignedWaiter?.id === req.user!.userId;
+      const isInMySection = t.sectionId ? mySectionIds.has(t.sectionId) : false;
+
+      return {
+        ...t,
+        activeSession: activeSession
+          ? {
+              id: activeSession.id,
+              assignedWaiter: activeSession.assignedWaiter,
+            }
+          : null,
+        isMine: isClaimedByMe || isInMySection,
+      };
+    });
+
+    res.json({ success: true, data });
   } catch {
     res.status(500).json({ success: false, error: 'Failed to fetch tables' });
   }
@@ -157,7 +334,7 @@ const tableSchema = z.object({
 
 tablesRouter.post(
   '/',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN', 'HOST'),
   checkTableLimit,
   async (req: AuthRequest, res: Response) => {
     try {
@@ -180,7 +357,7 @@ tablesRouter.post(
 
 tablesRouter.put(
   '/:id',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN', 'HOST'),
   async (req: AuthRequest, res: Response) => {
     try {
       const data = tableSchema.partial().parse(req.body);
@@ -212,6 +389,7 @@ tablesRouter.patch(
     'ORG_MANAGER',
     'SUPERADMIN',
     'BRANCH_ADMIN',
+    'HOST',
     'SERVICE',
     'WAITER',
   ),
@@ -282,7 +460,7 @@ tablesRouter.patch(
 
 tablesRouter.delete(
   '/:id',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN', 'HOST'),
   async (req: AuthRequest, res: Response) => {
     try {
       const existing = await prisma.table.findFirst({
@@ -314,7 +492,7 @@ tablesRouter.delete(
 // Bulk QR
 tablesRouter.get(
   '/qr/bulk',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN', 'HOST'),
   async (req: AuthRequest, res: Response) => {
     try {
       const where: Prisma.TableWhereInput = {

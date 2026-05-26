@@ -115,7 +115,8 @@ opsRouter.get('/metrics', requireOpsPermission('view_metrics'), async (_req, res
 
     metricsCache = { data, expiresAt: nowCache + 60_000 };
     res.json({ success: true, data });
-  } catch {
+  } catch (err) {
+    logger.error('Ops Metrics error:', err);
     res.status(500).json({ success: false, error: 'Failed to fetch metrics' });
   }
 });
@@ -176,7 +177,8 @@ opsRouter.get(
           pages: Math.ceil(total / parseInt(limit)),
         },
       });
-    } catch {
+    } catch (err) {
+      logger.error('Ops Orgs list error:', err);
       res.status(500).json({ success: false, error: 'Failed to fetch organisations' });
     }
   },
@@ -250,8 +252,9 @@ opsRouter.get(
           },
         },
       });
-    } catch {
-      res.status(500).json({ success: false, error: 'Failed to fetch organisation' });
+    } catch (err) {
+      logger.error('Ops Org detail error:', err);
+      res.status(500).json({ success: false, error: 'Failed to fetch organisation detail' });
     }
   },
 );

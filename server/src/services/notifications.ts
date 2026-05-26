@@ -63,7 +63,10 @@ async function sendWebPushToEndpoints(
   await Promise.all(
     endpoints.map(async ({ endpoint, subscription }) => {
       try {
-        await webpush.sendNotification(subscription, body);
+        await webpush.sendNotification(subscription, body, {
+          urgency: 'high', // Critical for instant "Pocket Alerts"
+          TTL: 60 * 60, // 1 hour time-to-live
+        });
       } catch (err: any) {
         const statusCode = typeof err?.statusCode === 'number' ? err.statusCode : null;
         if (statusCode === 404 || statusCode === 410) {
@@ -179,6 +182,8 @@ export async function notifyNewOrder(
   slackWebhook?: string,
   plan?: string,
   currency?: string,
+  branchId?: string,
+  organizationId?: string,
 ): Promise<void> {
   const { whatsapp, slack } = notificationsEnabled(plan);
   const tableLabel = order.table?.label || `Table ${order.tableId}`;
@@ -189,6 +194,20 @@ export async function notifyNewOrder(
     )
     .join('\n');
   const msg = `🍽️ *NEW ORDER — ${tableLabel}*\n\n#${order.id.slice(-6).toUpperCase()}\n\n${itemsSummary}\n\nTotal: ${fmtPrice(Number(order.total), currency)}`;
+
+  // Web Push to all relevant staff
+  if (organizationId && branchId) {
+    await notifyStaffWebPush({
+      organizationId,
+      branchId,
+      roles: ['WAITER', 'SERVICE', 'KITCHEN'],
+      title: `New Order — ${tableLabel}`,
+      body: itemsSummary,
+      tag: `order-${order.id}`,
+      url: '/',
+    });
+  }
+
   if (whatsapp && whatsappNumber) await sendWhatsApp(whatsappNumber, msg);
   if (slack && slackWebhook)
     await sendSlack(slackWebhook, `New order from ${tableLabel}`, [
@@ -205,6 +224,7 @@ export async function notifyNewOrder(
 }
 
 type WaiterCallForNotification = {
+  id: string;
   tableId: string;
   reason?: string | null;
   table?: { label: string } | null;
@@ -215,15 +235,32 @@ export async function notifyWaiterCall(
   whatsappNumber?: string,
   slackWebhook?: string,
   plan?: string,
+  branchId?: string,
+  organizationId?: string,
 ): Promise<void> {
   const { whatsapp, slack } = notificationsEnabled(plan);
   const tableLabel = call.table?.label || `Table ${call.tableId}`;
   const msg = `🔔 *WAITER CALLED — ${tableLabel}*\nReason: ${call.reason || 'No reason given'}`;
+
+  // Web Push to all relevant staff
+  if (organizationId && branchId) {
+    await notifyStaffWebPush({
+      organizationId,
+      branchId,
+      roles: ['WAITER', 'SERVICE'],
+      title: `Waiter Call — ${tableLabel}`,
+      body: call.reason || 'Assistance requested',
+      tag: `waiter-call-${call.id}`,
+      url: '/',
+    });
+  }
+
   if (whatsapp && whatsappNumber) await sendWhatsApp(whatsappNumber, msg);
   if (slack && slackWebhook) await sendSlack(slackWebhook, `Waiter called from ${tableLabel}`);
 }
 
 type ServiceRequestForNotification = {
+  id: string;
   tableId: string;
   serviceType: string;
   notes?: string | null;
@@ -235,10 +272,26 @@ export async function notifyServiceRequest(
   whatsappNumber?: string,
   slackWebhook?: string,
   plan?: string,
+  branchId?: string,
+  organizationId?: string,
 ): Promise<void> {
   const { whatsapp, slack } = notificationsEnabled(plan);
   const tableLabel = req.table?.label || `Table ${req.tableId}`;
   const msg = `⚙️ *SERVICE REQUEST — ${tableLabel}*\nType: ${req.serviceType}\nNotes: ${req.notes || 'None'}`;
+
+  // Web Push to all relevant staff
+  if (organizationId && branchId) {
+    await notifyStaffWebPush({
+      organizationId,
+      branchId,
+      roles: ['WAITER', 'SERVICE'],
+      title: `Service Request — ${tableLabel}`,
+      body: `${req.serviceType}${req.notes ? `: ${req.notes}` : ''}`,
+      tag: `service-request-${req.id}`,
+      url: '/',
+    });
+  }
+
   if (whatsapp && whatsappNumber) await sendWhatsApp(whatsappNumber, msg);
   if (slack && slackWebhook) await sendSlack(slackWebhook, `Service request from ${tableLabel}`);
 }

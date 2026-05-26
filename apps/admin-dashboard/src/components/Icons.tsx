@@ -103,3 +103,12 @@ export const IconOrg = (p: IconProps) => (
 export const IconOverview = (p: IconProps) => (
   <Icon {...p} d={['M18 20V10', 'M12 20V4', 'M6 20v-6']} />
 );
+export const IconCashier = (p: IconProps) => (
+  <Icon
+    {...p}
+    d={[
+      'M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7z',
+      'M6 11h4M6 15h2M14 11h4M14 15h2',
+    ]}
+  />
+);

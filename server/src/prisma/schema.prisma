@@ -47,6 +47,7 @@ model Organization {
   tableSessions    TableSession[]
   sections         Section[]
   pushSubscriptions PushSubscription[]
+  payments         Payment[]
 
   @@map("organizations")
 }
@@ -59,9 +60,11 @@ model Branch {
   address         String?
   phone           String?
   isActive        Boolean          @default(true)
+  useOrgMenu      Boolean          @default(true)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   email           String?
+  maxTablesPerWaiter Int?
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   categories      Category[]
   helpOptions     HelpOption[]
@@ -74,6 +77,7 @@ model Branch {
   waiterCalls     WaiterCall[]
   tableSessions   TableSession[]
   sections        Section[]
+  payments        Payment[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -127,10 +131,15 @@ model User {
   waiterCallAssignments    WaiterCall[]     @relation("WaiterCallAssignments")
   serviceRequestAssignments ServiceRequest[] @relation("ServiceRequestAssignments")
   orderWaiterAssignments   Order[]          @relation("OrderWaiterAssignments")
+  sessionAssignments    TableSession[]   @relation("SessionWaiterAssignments")
   sectionAssignments  SectionStaff[]
   auditLogs           AuditLog[]
   refreshTokens       RefreshToken[]
   pushSubscriptions   PushSubscription[]
+  processedPayments   Payment[]        @relation("PaymentProcessor")
+  orderItemCancellations OrderItem[]   @relation("OrderItemCancellations")
+  resolvedWaiterCalls   WaiterCall[]     @relation("WaiterCallResolutions")
+  resolvedServiceRequests ServiceRequest[] @relation("ServiceRequestResolutions")
   branch              Branch?        @relation(fields: [branchId], references: [id])
   organization        Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -242,20 +251,57 @@ model TableSession {
   openedAt       DateTime  @default(now())
   closedAt       DateTime?
   closedBy       String?
+  assignedWaiterId String?
+  assignedWaiterAt DateTime?
+  claimedAt      DateTime?
   guestCount     Int?
   notes          String?
 
   organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   branch         Branch           @relation(fields: [branchId], references: [id])
   table          Table            @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  assignedWaiter User?            @relation("SessionWaiterAssignments", fields: [assignedWaiterId], references: [id], onDelete: SetNull)
   orders         Order[]
   waiterCalls    WaiterCall[]
   serviceRequests ServiceRequest[]
+  payments       Payment[]
 
   @@index([tableId, closedAt])
   @@index([branchId, closedAt])
   @@index([organizationId])
   @@map("table_sessions")
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+}
+
+model Payment {
+  id             String        @id @default(cuid())
+  sessionId      String
+  organizationId String
+  branchId       String
+  amount         Decimal       @db.Decimal(10, 2)
+  currency       String        @default("NGN")
+  method         PaymentMethod
+  reference      String?
+  note           String?
+  ordersTotal    Decimal       @db.Decimal(10, 2)
+  processedBy    String
+  processedAt    DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+
+  session        TableSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch        @relation(fields: [branchId], references: [id])
+  processor      User          @relation("PaymentProcessor", fields: [processedBy], references: [id])
+
+  @@index([sessionId])
+  @@index([branchId, processedAt])
+  @@index([organizationId])
+  @@map("payments")
 }
 
 model Section {
@@ -304,8 +350,8 @@ model Category {
   isActive       Boolean      @default(true)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
-  branchId       String
-  branch         Branch       @relation(fields: [branchId], references: [id])
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id])
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   menuItems      MenuItem[]
 
@@ -327,8 +373,8 @@ model MenuItem {
   sortOrder      Int          @default(0)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
-  branchId       String
-  branch         Branch       @relation(fields: [branchId], references: [id])
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id])
   category       Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   orderItems     OrderItem[]
@@ -385,6 +431,8 @@ model OrderItem {
   notes      String?
   cancelledAt   DateTime?
   cancelReason  String?
+  cancelledBy   String?
+  cancelledByUser User?   @relation("OrderItemCancellations", fields: [cancelledBy], references: [id], onDelete: SetNull)
   menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
   order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -403,6 +451,7 @@ model WaiterCall {
   branchId       String
   notes          String?
   resolvedBy     String?
+  resolvedByUser User?     @relation("WaiterCallResolutions", fields: [resolvedBy], references: [id], onDelete: SetNull)
   resolvedAt     DateTime?
   assignedTo   String?
   assignedAt   DateTime?
@@ -434,6 +483,7 @@ model ServiceRequest {
   branchId       String
   adminNotes     String?
   resolvedBy     String?
+  resolvedByUser User?     @relation("ServiceRequestResolutions", fields: [resolvedBy], references: [id], onDelete: SetNull)
   resolvedAt     DateTime?
   assignedTo   String?
   assignedAt   DateTime?
@@ -488,6 +538,8 @@ enum UserRole {
   SERVICE
   WAITER
   KITCHEN
+  CASHIER
+  HOST
   BRANCH_ADMIN
 }
 

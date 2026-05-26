@@ -13,7 +13,17 @@ waiterTasksRouter.use(authenticate, requireBranchAccess);
 // Used by WaiterBoard to populate My Tasks and Unassigned tabs
 waiterTasksRouter.get(
   '/',
-  requireRole('WAITER', 'ADMIN', 'ORG_OWNER', 'ORG_MANAGER', 'BRANCH_ADMIN', 'SUPERADMIN'),
+  requireRole(
+    'WAITER',
+    'ADMIN',
+    'ORG_OWNER',
+    'ORG_MANAGER',
+    'BRANCH_ADMIN',
+    'SUPERADMIN',
+    'SERVICE',
+    'HOST',
+    'CASHIER',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const userId = req.user!.userId;
@@ -23,6 +33,64 @@ waiterTasksRouter.get(
       const base = {
         organizationId: orgId,
         ...(branchScope ? { branchId: branchScope } : {}),
+      };
+
+      // Find active sessions owned by this waiter OR tables in their assigned sections
+      const [myActiveSessions, mySections] = await Promise.all([
+        prisma.tableSession.findMany({
+          where: {
+            organizationId: orgId,
+            branchId: branchScope!,
+            assignedWaiterId: userId,
+            closedAt: null,
+            table: { activeSessionId: { not: null } },
+          },
+          select: { tableId: true },
+        }),
+        prisma.sectionStaff.findMany({
+          where: { userId },
+          select: { sectionId: true },
+        }),
+      ]);
+
+      const sectionIds = mySections.map((s) => s.sectionId);
+
+      // Tables are "mine" if I'm assigned to the session OR if they are in my section
+      const myTablesFromSections = await prisma.table.findMany({
+        where: {
+          organizationId: orgId,
+          branchId: branchScope!,
+          sectionId: { in: sectionIds },
+          isActive: true,
+        },
+        select: { id: true },
+      });
+
+      const myTableIds = Array.from(
+        new Set([
+          ...myActiveSessions.map((s) => s.tableId),
+          ...myTablesFromSections.map((t) => t.id),
+        ]),
+      );
+
+      const isLockedToTables = myTableIds.length > 0;
+
+      const unassignedFilter: any = {
+        assignedTo: null,
+        status: 'PENDING',
+        session: { closedAt: null }, // Only show tasks for active sessions
+        ...(isLockedToTables
+          ? { tableId: { in: myTableIds } }
+          : { session: { assignedWaiterId: null } }),
+      };
+
+      const unassignedOrderFilter: any = {
+        assignedWaiter: null,
+        status: 'READY',
+        session: { closedAt: null }, // Only show tasks for active sessions
+        ...(isLockedToTables
+          ? { tableId: { in: myTableIds } }
+          : { session: { assignedWaiterId: null } }),
       };
 
       const tableSelect = {
@@ -45,27 +113,42 @@ waiterTasksRouter.get(
         unassignedReadyOrders,
       ] = await Promise.all([
         prisma.waiterCall.findMany({
-          where: { ...base, assignedTo: userId, status: { in: ['PENDING', 'ACKNOWLEDGED'] } },
+          where: {
+            ...base,
+            assignedTo: userId,
+            status: { in: ['PENDING', 'ACKNOWLEDGED'] },
+            session: { closedAt: null }, // Only show tasks for active sessions
+          },
           include: { table: tableSelect },
           orderBy: { createdAt: 'asc' },
         }),
         prisma.waiterCall.findMany({
-          where: { ...base, assignedTo: null, status: 'PENDING' },
+          where: { ...base, ...unassignedFilter },
           include: { table: tableSelect },
           orderBy: { createdAt: 'asc' },
         }),
         prisma.serviceRequest.findMany({
-          where: { ...base, assignedTo: userId, status: { in: ['PENDING', 'ACKNOWLEDGED'] } },
+          where: {
+            ...base,
+            assignedTo: userId,
+            status: { in: ['PENDING', 'ACKNOWLEDGED'] },
+            session: { closedAt: null }, // Only show tasks for active sessions
+          },
           include: { table: tableSelect },
           orderBy: { createdAt: 'asc' },
         }),
         prisma.serviceRequest.findMany({
-          where: { ...base, assignedTo: null, status: 'PENDING' },
+          where: { ...base, ...unassignedFilter },
           include: { table: tableSelect },
           orderBy: { createdAt: 'asc' },
         }),
         prisma.order.findMany({
-          where: { ...base, assignedWaiter: userId, status: 'READY' },
+          where: {
+            ...base,
+            assignedWaiter: userId,
+            status: 'READY',
+            session: { closedAt: null }, // Only show tasks for active sessions
+          },
           include: {
             table: tableSelect,
             items: { select: { quantity: true, menuItem: { select: { name: true } } } },
@@ -73,7 +156,7 @@ waiterTasksRouter.get(
           orderBy: { createdAt: 'asc' },
         }),
         prisma.order.findMany({
-          where: { ...base, assignedWaiter: null, status: 'READY' },
+          where: { ...base, ...unassignedOrderFilter },
           include: {
             table: tableSelect,
             items: { select: { quantity: true, menuItem: { select: { name: true } } } },
@@ -109,7 +192,16 @@ waiterTasksRouter.get(
 // Used by admin dashboard waiter availability strip
 waiterTasksRouter.get(
   '/online',
-  requireRole('ADMIN', 'ORG_OWNER', 'ORG_MANAGER', 'BRANCH_ADMIN', 'SUPERADMIN'),
+  requireRole(
+    'ADMIN',
+    'ORG_OWNER',
+    'ORG_MANAGER',
+    'BRANCH_ADMIN',
+    'SUPERADMIN',
+    'SERVICE',
+    'HOST',
+    'CASHIER',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const orgId = req.user!.organizationId;

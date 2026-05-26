@@ -2,6 +2,8 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../services/auth';
 import { useTheme } from '../context/theme';
+import { formatPrice } from '../../../../shared/utils/currency';
+import { WaiterPOS } from '../components/WaiterPOS';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 
@@ -91,10 +93,12 @@ function getServiceTypeColor(serviceType: string): string {
 }
 
 export function WaiterBoard() {
-  const { user, token, logout, silentRefresh, updateUser, pushStatus, enablePush } = useAuth();
+  const { user, token, logout, silentRefresh, updateUser, _pushStatus, _enablePush } =
+    useAuth() as any;
   const { mode, setMode } = useTheme();
   const [installAvailable, setInstallAvailable] = useState(false);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
+  const [showPOS, setShowPOS] = useState(false);
   const [activeTab, setActiveTab] = useState<'tasks' | 'tables'>('tasks');
   const [tables, setTables] = useState<any[]>([]);
   const tablesRef = useRef<any[]>([]);
@@ -108,6 +112,57 @@ export function WaiterBoard() {
   const [shiftBusy, setShiftBusy] = useState(false);
   const [shiftError, setShiftError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [billModal, setBillModal] = useState<{
+    sessionId: string;
+    tableLabel: string;
+    data: any | null;
+    loading: boolean;
+  } | null>(null);
+
+  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'CARD' | 'TRANSFER'>('CASH');
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  const [paymentError, setPaymentError] = useState('');
+
+  // Manual order entry
+  const [orderModal, setOrderModal] = useState<{
+    tableId: string;
+    tableLabel: string;
+    organizationId: string;
+    branchId: string;
+  } | null>(null);
+
+  const [menu, setMenu] = useState<{
+    categories: {
+      id: string;
+      name: string;
+      items: {
+        id: string;
+        name: string;
+        price: number;
+        description?: string;
+      }[];
+    }[];
+  }>({ categories: [] });
+
+  const [menuLoading, setMenuLoading] = useState(false);
+
+  const [cart, setCart] = useState<
+    Record<string, { name: string; price: number; quantity: number }>
+  >({});
+
+  const [orderNotes, setOrderNotes] = useState('');
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
+  const [orderError, setOrderError] = useState('');
+
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanResult, setScanResult] = useState<string | null>(null);
+  const [attachingTable, setAttachingTable] = useState(false);
+  const [handoverConfirm, setHandoverConfirm] = useState<{
+    orgId: string;
+    tableId: string;
+    waiterName: string;
+  } | null>(null);
+
   const socketRef = useRef<Socket | null>(null);
   const tokenRef = useRef(token);
   const onShiftRef = useRef<boolean>(!!user?.isOnShift);
@@ -243,25 +298,18 @@ export function WaiterBoard() {
       const freshToken = await silentRefresh();
       if (!freshToken) return;
       const h = { Authorization: `Bearer ${freshToken}` };
-      const bq = userBranchId ? `&branchId=${userBranchId}` : '';
+      const bq = userBranchId ? `?branchId=${userBranchId}` : '';
 
-      const [callsRes, serviceRes, ordersRes, tablesRes] = await Promise.all([
-        fetch(`${API_BASE}/api/waiter-calls?status=PENDING${bq}`, { headers: h }),
-        fetch(`${API_BASE}/api/service-requests?status=PENDING${bq}`, { headers: h }),
-        fetch(`${API_BASE}/api/orders?status=READY&limit=50${bq}`, { headers: h }),
-        fetch(`${API_BASE}/api/tables?_=${Date.now()}`, { headers: h }),
+      const [tasksRes, tablesRes] = await Promise.all([
+        fetch(`${API_BASE}/api/waiter-tasks${bq}`, { headers: h }),
+        fetch(`${API_BASE}/api/tables?_=${Date.now()}${bq}`, { headers: h }),
       ]);
 
-      if (!callsRes.ok || !serviceRes.ok || !ordersRes.ok || !tablesRes.ok) {
+      if (!tasksRes.ok || !tablesRes.ok) {
         throw new Error('Network error');
       }
 
-      const [callsData, serviceData, ordersData, tablesData] = await Promise.all([
-        callsRes.json(),
-        serviceRes.json(),
-        ordersRes.json(),
-        tablesRes.json(),
-      ]);
+      const [tasksData, tablesData] = await Promise.all([tasksRes.json(), tablesRes.json()]);
 
       const nextTables = tablesData?.success ? tablesData.data : tablesRef.current;
       if (tablesData?.success) {
@@ -270,16 +318,20 @@ export function WaiterBoard() {
       }
 
       const allTasks: TaskItem[] = [];
-      if (callsData?.success) {
-        callsData.data.forEach((c: any) => allTasks.push(normaliseTask('WAITER_CALL', c)));
-      }
-      if (serviceData?.success) {
-        serviceData.data.forEach((s: any) => allTasks.push(normaliseTask('SERVICE_REQUEST', s)));
-      }
-      if (ordersData?.success) {
-        ordersData.data
-          .filter((o: any) => o.status === 'READY')
-          .forEach((o: any) => allTasks.push(normaliseTask('ORDER_READY', o)));
+      if (tasksData?.success) {
+        const { mine, unassigned } = tasksData.data;
+
+        mine.waiterCalls.forEach((c: any) => allTasks.push(normaliseTask('WAITER_CALL', c)));
+        mine.serviceRequests.forEach((s: any) =>
+          allTasks.push(normaliseTask('SERVICE_REQUEST', s)),
+        );
+        mine.readyOrders.forEach((o: any) => allTasks.push(normaliseTask('ORDER_READY', o)));
+
+        unassigned.waiterCalls.forEach((c: any) => allTasks.push(normaliseTask('WAITER_CALL', c)));
+        unassigned.serviceRequests.forEach((s: any) =>
+          allTasks.push(normaliseTask('SERVICE_REQUEST', s)),
+        );
+        unassigned.readyOrders.forEach((o: any) => allTasks.push(normaliseTask('ORDER_READY', o)));
       }
 
       const uniqueTasks = Array.from(new Map(allTasks.map((t) => [t.id, t])).values());
@@ -313,6 +365,10 @@ export function WaiterBoard() {
     if (refreshing) return;
     setRefreshing(true);
     try {
+      // HARD RESET: Clear local state before fetching to ensure "stuck" items are removed
+      setMyTasks([]);
+      setUnassignedTasks([]);
+
       await silentRefresh();
       await loadTasksRef.current();
     } finally {
@@ -429,11 +485,15 @@ export function WaiterBoard() {
       setTables((prev) =>
         prev.map((t) => (t.id === tableId ? { ...t, activeSessionId: null } : t)),
       );
+      // DEFENSIVE: Wipe all tasks for this table immediately
+      setMyTasks((prev) => prev.filter((t) => t.originalData?.tableId !== tableId));
+      setUnassignedTasks((prev) => prev.filter((t) => t.originalData?.tableId !== tableId));
     });
 
     const handleSyncRequired = () => {
       const now = Date.now();
-      if (now - lastSyncAtRef.current < 8000) return;
+      // Throttle syncs to prevent "refresh loops"
+      if (now - lastSyncAtRef.current < 5000) return;
       lastSyncAtRef.current = now;
       refreshNowRef.current().catch(() => void 0);
     };
@@ -528,6 +588,195 @@ export function WaiterBoard() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
+  // Background Heartbeat Sync
+  useEffect(() => {
+    if (!token || !isOnShift) return;
+
+    // Periodic refresh every 60 seconds as a fallback for missed socket events
+    const interval = setInterval(() => {
+      if (navigator.onLine) {
+        refreshNowRef.current().catch(() => void 0);
+      }
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [token, isOnShift]);
+
+  async function fetchMenu(organizationId: string, branchId: string) {
+    setMenuLoading(true);
+    setMenu({ categories: [] });
+    try {
+      const url = new URL(`${API_BASE}/api/menu/public/${organizationId}`, window.location.origin);
+      url.searchParams.set('branchId', branchId);
+      const res = await fetch(url.toString());
+      const data = await res.json();
+      if (data.success) {
+        // data.data is an array of categories each with menuItems
+        setMenu({
+          categories: (data.data ?? [])
+            .map((cat: any) => ({
+              id: cat.id,
+              name: cat.name,
+              items: (cat.menuItems ?? [])
+                .filter((item: any) => item.isAvailable)
+                .map((item: any) => ({
+                  id: item.id,
+                  name: item.name,
+                  price: Number(item.price),
+                  description: item.description,
+                })),
+            }))
+            .filter((cat: any) => cat.items.length > 0),
+        });
+      }
+    } catch {
+      void 0;
+    } finally {
+      setMenuLoading(false);
+    }
+  }
+
+  function openOrderModal(table: { id: string; label: string }) {
+    if (!user?.organizationId || !user?.branchId) return;
+    setCart({});
+    setOrderNotes('');
+    setOrderError('');
+    setOrderModal({
+      tableId: table.id,
+      tableLabel: table.label,
+      organizationId: user.organizationId,
+      branchId: user.branchId,
+    });
+    void fetchMenu(user.organizationId, user.branchId);
+  }
+
+  function addToCart(item: { id: string; name: string; price: number }) {
+    setCart((prev) => ({
+      ...prev,
+      [item.id]: {
+        name: item.name,
+        price: item.price,
+        quantity: (prev[item.id]?.quantity ?? 0) + 1,
+      },
+    }));
+  }
+
+  function removeFromCart(itemId: string) {
+    setCart((prev) => {
+      const next = { ...prev };
+      if (next[itemId] && next[itemId].quantity > 1) {
+        next[itemId] = { ...next[itemId], quantity: next[itemId].quantity - 1 };
+      } else {
+        delete next[itemId];
+      }
+      return next;
+    });
+  }
+
+  const cartTotal = Object.values(cart).reduce((sum, item) => sum + item.price * item.quantity, 0);
+
+  const cartItemCount = Object.values(cart).reduce((sum, item) => sum + item.quantity, 0);
+
+  async function submitOrder() {
+    if (!orderModal) return;
+    if (cartItemCount === 0) {
+      setOrderError('Add at least one item');
+      return;
+    }
+    setOrderSubmitting(true);
+    setOrderError('');
+
+    try {
+      const freshToken = (await silentRefresh()) ?? token;
+      const idempotencyKey = `waiter-${user?.id}-${orderModal.tableId}-${Date.now()}`;
+
+      const body = {
+        organizationId: orderModal.organizationId,
+        tableId: orderModal.tableId,
+        branchId: orderModal.branchId,
+        idempotencyKey,
+        notes: orderNotes || undefined,
+        items: Object.entries(cart).map(([menuItemId, item]) => ({
+          menuItemId,
+          quantity: item.quantity,
+        })),
+      };
+
+      const res = await fetch(`${API_BASE}/api/orders/public`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Pass waiter auth so the order is tagged as staff-entered
+          Authorization: `Bearer ${freshToken}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setOrderModal(null);
+        setCart({});
+        setOrderNotes('');
+        // Refresh tasks to pick up the new order
+        refreshNowRef.current().catch(() => void 0);
+      } else {
+        setOrderError(data.error ?? 'Failed to place order');
+      }
+    } catch {
+      setOrderError('Network error. Please try again.');
+    } finally {
+      setOrderSubmitting(false);
+    }
+  }
+
+  async function attachToTableByQR(qrUrl: string, force = false) {
+    // Parse orgId and tableId from the scanned URL
+    // Expected format: `https://order.cevop.com/menu/:orgId/:tableId`
+    try {
+      const url = new URL(qrUrl);
+      const parts = url.pathname.split('/').filter(Boolean);
+      // parts = ['menu', orgId, tableId]
+      if (parts[0] !== 'menu' || parts.length < 3) {
+        return { success: false, error: 'Not a valid Cevop QR code' };
+      }
+      const [, orgId, tableId] = parts;
+
+      setAttachingTable(true);
+      const freshToken = (await silentRefresh()) ?? token;
+      const res = await fetch(
+        `${API_BASE}/api/tables/public/${orgId}/${tableId}/attach-waiter${force ? '?force=true' : ''}`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${freshToken}` },
+        },
+      );
+      const data = await res.json();
+      setAttachingTable(false);
+
+      if (data.success) {
+        // Refresh tasks to pick up the newly attached table
+        refreshNowRef.current().catch(() => void 0);
+        setHandoverConfirm(null);
+        if (data.message) {
+          // You might have a showToast helper or similar
+          alert(data.message);
+        }
+        return { success: true, tableLabel: data.data.tableLabel };
+      }
+
+      if (data.error === 'ALREADY_CLAIMED') {
+        setHandoverConfirm({ orgId, tableId, waiterName: data.currentWaiter });
+        return { success: false, error: 'ALREADY_CLAIMED' };
+      }
+
+      return { success: false, error: data.error ?? 'Failed to attach' };
+    } catch {
+      setAttachingTable(false);
+      return { success: false, error: 'Invalid QR code' };
+    }
+  }
+
   async function resolveTask(task: TaskItem) {
     if (updatingItems.has(task.id)) return;
     setUpdatingItems((prev) => new Set(prev).add(task.id));
@@ -564,6 +813,61 @@ export function WaiterBoard() {
         n.delete(task.id);
         return n;
       });
+    }
+  }
+
+  async function fetchBill(sessionId: string, tableLabel: string) {
+    setBillModal({ sessionId, tableLabel, data: null, loading: true });
+    setPaymentMethod('CASH');
+    setPaymentError('');
+    try {
+      const freshToken = (await silentRefresh()) ?? token;
+      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/bill`, {
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      const data = await res.json();
+      if (data.success) {
+        setBillModal({ sessionId, tableLabel, data: data.data, loading: false });
+      } else {
+        setBillModal(null);
+      }
+    } catch {
+      setBillModal(null);
+    }
+  }
+
+  async function submitPayment() {
+    if (!billModal?.data || paymentSubmitting) return;
+    setPaymentSubmitting(true);
+    setPaymentError('');
+
+    try {
+      const freshToken = (await silentRefresh()) ?? token;
+      const res = await fetch(`${API_BASE}/api/payments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${freshToken}`,
+        },
+        body: JSON.stringify({
+          sessionId: billModal.sessionId,
+          amount: billModal.data.balance,
+          method: paymentMethod,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setBillModal(null);
+        // Refresh everything to reflect closed table
+        refreshNowRef.current().catch(() => void 0);
+      } else {
+        setPaymentError(data.error || 'Failed to record payment');
+      }
+    } catch {
+      setPaymentError('Network error. Please try again.');
+    } finally {
+      setPaymentSubmitting(false);
     }
   }
 
@@ -638,6 +942,31 @@ export function WaiterBoard() {
       setUpdatingItems((prev) => {
         const n = new Set(prev);
         n.delete(tableId);
+        return n;
+      });
+    }
+  }
+
+  async function claimTable(sessionId: string) {
+    if (updatingItems.has(sessionId)) return;
+    setUpdatingItems((prev) => new Set(prev).add(sessionId));
+    try {
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/claim`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      if (res.ok) {
+        refreshNowRef.current().catch(() => void 0);
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to claim table');
+      }
+    } finally {
+      setUpdatingItems((prev) => {
+        const n = new Set(prev);
+        n.delete(sessionId);
         return n;
       });
     }
@@ -730,19 +1059,42 @@ export function WaiterBoard() {
           <p className="text-sm text-[var(--text)]">{task.details}</p>
         )}
         {task.notes && <p className="text-xs text-[var(--muted)] italic">"{task.notes}"</p>}
-        <button
-          onClick={action}
-          disabled={isUpdating}
-          className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black hover:border-[var(--accent)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isUpdating ? 'UPDATING...' : actionLabel}
-        </button>
+
+        {task.details === 'BILL_REQUEST' && task.originalData?.sessionId ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              fetchBill(task.originalData.sessionId, task.tableLabel);
+            }}
+            disabled={isUpdating}
+            className="w-full text-xs py-3 font-bold tracking-widest border border-amber-500/50 text-amber-500 hover:bg-amber-500/10 transition-all uppercase font-display mt-2"
+          >
+            {isUpdating ? 'UPDATING...' : 'View Bill'}
+          </button>
+        ) : (
+          <button
+            onClick={action}
+            disabled={isUpdating}
+            className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black hover:border-[var(--accent)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isUpdating ? 'UPDATING...' : actionLabel}
+          </button>
+        )}
       </div>
     );
   }
 
   return (
     <div className="h-dvh flex flex-col bg-[var(--bg)] overflow-hidden relative">
+      {showPOS && (
+        <WaiterPOS
+          onClose={() => setShowPOS(false)}
+          onOrderSuccess={() => {
+            setShowPOS(false);
+            refreshNow().catch(() => void 0);
+          }}
+        />
+      )}
       {installHelpOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-sm border border-[var(--border)] bg-[var(--surface)] p-4">
@@ -766,88 +1118,93 @@ export function WaiterBoard() {
       )}
       <div className="text-texture" />
       {/* Header */}
-      <header className="flex items-center justify-between px-2 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-1.5 overflow-hidden relative z-20">
-        <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 shrink">
+      <header className="flex flex-col sm:flex-row items-center justify-between px-2 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-1.5 overflow-hidden relative z-20">
+        <div className="flex items-center justify-between w-full sm:w-auto gap-1.5 sm:gap-3 min-w-0 shrink">
           <h1 className="text-sm sm:text-2xl flex items-center gap-2 shrink-0">
             <span role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-md" />
-            <span className="font-display hidden xs:inline text-[var(--accent)]">WAITER</span>
+            <span className="font-display hidden xxs:inline text-[var(--accent)]">WAITER</span>
           </h1>
-          <div
-            className={`flex items-center gap-1 sm:gap-1.5 text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 font-mono ${
-              isOnline && socketConnected
-                ? 'border-[var(--ready)] text-[var(--ready)]'
-                : 'border-[var(--danger)] text-[var(--danger)]'
-            }`}
-          >
-            <span
-              className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${
-                isOnline && socketConnected ? 'bg-[var(--ready)]' : 'bg-[var(--danger)]'
+          <div className="flex items-center gap-1.5">
+            <div
+              className={`flex items-center gap-1 sm:gap-1.5 text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 font-mono ${
+                isOnline && socketConnected
+                  ? 'border-[var(--ready)] text-[var(--ready)]'
+                  : 'border-[var(--danger)] text-[var(--danger)]'
               }`}
-            />
-            {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
+            >
+              <span
+                className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${
+                  isOnline && socketConnected ? 'bg-[var(--ready)]' : 'bg-[var(--danger)]'
+                }`}
+              />
+              {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
+            </div>
+            <button
+              onClick={logout}
+              className="sm:hidden text-[9px] text-[var(--muted)] border border-[var(--border)] px-2 py-1 rounded-full font-bold"
+            >
+              OUT
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-1 sm:gap-3 shrink-0 ml-auto">
-          {user?.staffCode && (
-            <span className="font-mono text-[9px] sm:text-[10px] border border-[var(--border)] px-1.5 py-0.5 text-[var(--muted)] hidden xxs:inline-block rounded-sm">
-              {user.staffCode}
+        <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-1 sm:gap-3 shrink-0">
+          <div className="flex flex-col items-end hidden lg:flex">
+            <span className="text-[var(--text)] text-[10px] sm:text-xs font-bold truncate max-w-[150px]">
+              {user?.name}
             </span>
-          )}
+            <span className="text-[var(--muted)] text-[9px] sm:text-[10px] truncate max-w-[150px]">
+              {user?.organization?.name}
+              {user?.branch ? ` — ${user.branch.name}` : ''}
+            </span>
+          </div>
+
           <button
-            onClick={() => refreshNow().catch(() => void 0)}
-            disabled={refreshing}
-            className="text-[9px] sm:text-xs border border-[var(--border)] px-2 sm:px-3 py-1 font-bold tracking-tight disabled:opacity-50 whitespace-nowrap rounded-full font-display text-[var(--muted)] hover:text-[var(--text)]"
+            onClick={() => setShowPOS(true)}
+            className="text-[9px] sm:text-xs bg-[var(--accent)] text-black px-2.5 sm:px-5 py-1.5 sm:py-2 font-bold tracking-tight rounded-full font-display hover:brightness-110 transition-all shadow-lg shadow-[var(--accent)]/10 flex items-center gap-1"
           >
-            {refreshing ? '...' : 'REFRESH'}
+            <span className="text-xs">+</span>
+            ORDER
           </button>
-          {pushStatus !== 'unsupported' && pushStatus !== 'on' && (
+
+          <div className="flex items-center gap-1">
             <button
-              onClick={() => enablePush().catch(() => void 0)}
-              disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
+              onClick={() => refreshNow().catch(() => void 0)}
+              disabled={refreshing}
               className="text-[9px] sm:text-xs border border-[var(--border)] px-2 sm:px-3 py-1 font-bold tracking-tight disabled:opacity-50 whitespace-nowrap rounded-full font-display text-[var(--muted)] hover:text-[var(--text)]"
             >
-              {pushStatus === 'loading'
-                ? '...'
-                : pushStatus === 'blocked'
-                  ? 'ALERTS BLOCKED'
-                  : 'ENABLE ALERTS'}
+              {refreshing ? '...' : '⟳'}
             </button>
-          )}
-          {showInstallButton && (
+
+            {isWaiter && (
+              <button
+                onClick={isOnShift ? endShift : startShift}
+                disabled={shiftBusy || !socketConnected}
+                className={`text-[9px] sm:text-xs border px-2 sm:px-3 py-1 font-bold tracking-tight disabled:opacity-50 whitespace-nowrap rounded-full font-display ${
+                  isOnShift
+                    ? 'border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white'
+                    : 'border-[var(--ready)] text-[var(--ready)] hover:bg-[var(--ready)] hover:text-black'
+                }`}
+              >
+                {shiftBusy ? '...' : isOnShift ? 'END' : 'START'}
+              </button>
+            )}
+
             <button
-              onClick={() => handleInstall().catch(() => void 0)}
-              className="text-[9px] sm:text-xs border border-[var(--border)] px-2 sm:px-3 py-1 font-bold tracking-tight whitespace-nowrap rounded-full font-display text-[var(--muted)] hover:text-[var(--text)]"
+              onClick={() => setMode(nextThemeMode)}
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-[var(--border)] flex items-center justify-center text-[9px] sm:text-[10px] font-black shrink-0 font-display"
+              title={`Theme: ${themeLabel}`}
             >
-              INSTALL
+              {themeLabel}
             </button>
-          )}
-          {isWaiter && (
+
             <button
-              onClick={isOnShift ? endShift : startShift}
-              disabled={shiftBusy || !socketConnected}
-              className={`text-[9px] sm:text-xs border px-2 sm:px-3 py-1 font-bold tracking-tight disabled:opacity-50 whitespace-nowrap rounded-full font-display ${
-                isOnShift
-                  ? 'border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white'
-                  : 'border-[var(--ready)] text-[var(--ready)] hover:bg-[var(--ready)] hover:text-black'
-              }`}
+              onClick={logout}
+              className="hidden sm:block text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 shrink-0 rounded-full font-bold font-display"
             >
-              {shiftBusy ? '...' : isOnShift ? 'END' : 'START'}
+              OUT
             </button>
-          )}
-          <button
-            onClick={() => setMode(nextThemeMode)}
-            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-[var(--border)] flex items-center justify-center text-[9px] sm:text-[10px] font-black shrink-0 font-display"
-            title={`Theme: ${themeLabel}`}
-          >
-            {themeLabel}
-          </button>
-          <button
-            onClick={logout}
-            className="text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 shrink-0 rounded-full font-bold font-display"
-          >
-            OUT
-          </button>
+          </div>
         </div>
       </header>
       {(!isOnline || !socketConnected) && offlineSnapshotTs && (
@@ -945,62 +1302,488 @@ export function WaiterBoard() {
           </div>
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 content-start">
-          {isWaiter && !isOnShift && (
-            <div className="col-span-full text-center text-[var(--muted)] text-sm pt-8">
-              Start shift to manage tables
+        <div className="flex-1 flex flex-col min-h-0">
+          {/* Tables tab header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
+            <p className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider">
+              Your Tables
+            </p>
+            <button
+              disabled={attachingTable}
+              onClick={() => setScannerOpen(true)}
+              className="text-[10px] sm:text-xs border border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] px-3 py-1.5 cursor-pointer transition-colors font-bold uppercase tracking-widest rounded-sm"
+            >
+              {attachingTable ? 'Attaching…' : 'Scan QR'}
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 content-start">
+            {isWaiter && !isOnShift && (
+              <div className="col-span-full text-center text-[var(--muted)] text-sm pt-8">
+                Start shift to manage tables
+              </div>
+            )}
+            {(!isWaiter || isOnShift) &&
+              tables
+                .filter((t) => t.isActive)
+                .map((t: any) => (
+                  <div
+                    key={t.id}
+                    className={`border p-3 space-y-3 flex flex-col justify-between transition-all ${
+                      t.isMine
+                        ? 'ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--bg)]'
+                        : ''
+                    } ${
+                      t.status === 'EMPTY'
+                        ? 'border-[var(--border)] bg-[var(--surface2)]'
+                        : t.status === 'OCCUPIED'
+                          ? 'border-[var(--preparing)] bg-[var(--surface2)]'
+                          : 'border-[var(--accent)] bg-[var(--surface2)]'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-1">
+                        <div className="font-bold text-lg text-[var(--text)] truncate">
+                          {t.label}
+                        </div>
+                        {t.isMine && (
+                          <span className="text-[10px] bg-[var(--accent)] text-black px-1.5 py-0.5 font-bold uppercase tracking-widest rounded-sm shrink-0">
+                            MINE
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        className={`text-[10px] font-bold tracking-widest uppercase mt-1 ${
+                          t.status === 'EMPTY'
+                            ? 'text-[var(--muted)]'
+                            : t.status === 'OCCUPIED'
+                              ? 'text-[var(--preparing)]'
+                              : 'text-[var(--accent)]'
+                        }`}
+                      >
+                        {t.status}
+                        {t.activeSession?.assignedWaiter && (
+                          <span className="ml-2 px-1.5 py-0.5 bg-[var(--surface3)] text-[var(--muted)] rounded-sm lowercase text-[9px] border border-[var(--border)]">
+                            👤{' '}
+                            {t.activeSession.assignedWaiter.name?.split(' ')[0] ||
+                              t.activeSession.assignedWaiter.staffCode}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {t.activeSessionId ? (
+                      <div className="space-y-2">
+                        {(!t.activeSession?.assignedWaiter ||
+                          t.activeSession?.assignedWaiter?.id !== user?.id) && (
+                          <button
+                            onClick={() => claimTable(t.activeSessionId!)}
+                            disabled={updatingItems.has(t.activeSessionId!)}
+                            className="w-full text-[10px] py-1.5 font-bold tracking-wider bg-[var(--accent)] text-black hover:brightness-110 transition-all uppercase"
+                          >
+                            {updatingItems.has(t.activeSessionId!) ? 'CLAIMING...' : 'Claim Table'}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => fetchBill(t.activeSessionId!, t.label)}
+                          className="w-full text-[10px] py-1.5 font-bold tracking-wider border border-amber-500/40 text-amber-500 hover:bg-amber-500/10 transition-all uppercase"
+                        >
+                          View Bill
+                        </button>
+                        <button
+                          onClick={() => clearTable(t.activeSessionId!)}
+                          disabled={updatingItems.has(t.activeSessionId!)}
+                          className="w-full text-[10px] py-1.5 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50 uppercase"
+                        >
+                          {updatingItems.has(t.activeSessionId!) ? 'CLEARING...' : 'CLEAR TABLE'}
+                        </button>
+                      </div>
+                    ) : t.status === 'CLEANING' ? (
+                      <button
+                        onClick={() => markTableEmpty(t.id)}
+                        disabled={updatingItems.has(t.id)}
+                        className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50"
+                      >
+                        {updatingItems.has(t.id) ? 'UPDATING...' : 'MARK CLEAN'}
+                      </button>
+                    ) : null}
+                    {t.status === 'OCCUPIED' && (
+                      <button
+                        onClick={() => openOrderModal({ id: t.id, label: t.label })}
+                        className="mt-2 w-full text-xs border border-[var(--accent)]/40 text-[var(--accent)] py-1.5 hover:bg-[var(--accent)]/10 transition-colors"
+                      >
+                        + Add Order
+                      </button>
+                    )}
+                    {t.status === 'EMPTY' && (
+                      <button
+                        onClick={() => openOrderModal({ id: t.id, label: t.label })}
+                        className="mt-2 w-full text-xs border border-[var(--border)] text-[var(--muted)] py-1.5 hover:border-[var(--accent)]/40 hover:text-[var(--accent)] transition-colors"
+                      >
+                        + Start Order
+                      </button>
+                    )}
+                  </div>
+                ))}
+            {(!isWaiter || isOnShift) && tables.filter((t) => t.isActive).length === 0 && (
+              <div className="col-span-full text-center text-[var(--muted)] text-sm pt-8">
+                No tables found
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {scannerOpen && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+          <div className="bg-[var(--surface)] border border-[var(--border)] p-5 w-full max-w-sm space-y-4 shadow-2xl relative">
+            <div className="flex items-center justify-between">
+              <p className="font-bold text-[var(--text)] font-display tracking-tight">
+                Attach to Table
+              </p>
+              <button
+                onClick={() => {
+                  setScannerOpen(false);
+                  setScanResult(null);
+                }}
+                className="text-[var(--muted)] text-lg hover:text-[var(--text)] transition-colors"
+              >
+                ×
+              </button>
             </div>
-          )}
-          {(!isWaiter || isOnShift) &&
-            tables
-              .filter((t) => t.isActive)
-              .map((t) => (
-                <div
-                  key={t.id}
-                  className={`border p-3 space-y-3 flex flex-col justify-between ${
-                    t.status === 'EMPTY'
-                      ? 'border-[var(--border)] bg-[var(--surface2)]'
-                      : t.status === 'OCCUPIED'
-                        ? 'border-[var(--preparing)] bg-[var(--surface2)]'
-                        : 'border-[var(--accent)] bg-[var(--surface2)]'
-                  }`}
-                >
-                  <div>
-                    <div className="font-bold text-lg text-[var(--text)]">{t.label}</div>
-                    <div
-                      className={`text-xs font-bold tracking-widest uppercase mt-1 ${
-                        t.status === 'EMPTY'
-                          ? 'text-[var(--muted)]'
-                          : t.status === 'OCCUPIED'
-                            ? 'text-[var(--preparing)]'
-                            : 'text-[var(--accent)]'
-                      }`}
-                    >
-                      {t.status}
+            <p className="text-xs text-[var(--muted)] leading-relaxed">
+              Scan the table QR with your camera app, then paste the link below.
+            </p>
+            <input
+              type="url"
+              className="w-full bg-[var(--surface2)] border border-[var(--border)] text-sm text-[var(--text)] px-3 py-2 placeholder-[var(--muted)] focus:border-[var(--accent)] outline-none transition-colors"
+              placeholder="https://order.cevop.com/menu/..."
+              value={scanResult ?? ''}
+              onChange={(e) => setScanResult(e.target.value)}
+              autoFocus
+            />
+            {attachingTable && (
+              <div className="flex justify-center">
+                <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+              </div>
+            )}
+            <button
+              className="w-full py-3 bg-[var(--accent)] text-black font-bold text-sm disabled:opacity-50 hover:bg-[var(--accent)]/90 transition-colors uppercase tracking-widest font-display"
+              disabled={!scanResult || attachingTable}
+              onClick={async () => {
+                if (!scanResult) return;
+                const result = await attachToTableByQR(scanResult);
+                if (result.success) {
+                  setScannerOpen(false);
+                  setScanResult(null);
+                }
+              }}
+            >
+              Attach to {scanResult ? 'Table' : '...'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {handoverConfirm && (
+        <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4">
+          <div className="bg-[var(--surface)] border border-[var(--border)] p-6 w-full max-w-sm space-y-5 shadow-2xl">
+            <div className="space-y-2">
+              <h3 className="font-display text-xl font-bold text-[var(--text)]">Table Occupied</h3>
+              <p className="text-sm text-[var(--muted)] leading-relaxed">
+                This table is currently assigned to{' '}
+                <span className="text-[var(--text)] font-bold">{handoverConfirm.waiterName}</span>.
+                Do you want to transfer this table to your name?
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setHandoverConfirm(null)}
+                className="py-3 border border-[var(--border)] text-[var(--muted)] font-bold text-xs uppercase tracking-widest hover:bg-[var(--surface2)] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={attachingTable}
+                onClick={async () => {
+                  if (!scanResult) return;
+                  const res = await attachToTableByQR(scanResult, true);
+                  if (res.success) {
+                    setScannerOpen(false);
+                    setScanResult(null);
+                  }
+                }}
+                className="py-3 bg-[var(--accent)] text-black font-bold text-xs uppercase tracking-widest hover:brightness-110 transition-colors disabled:opacity-50"
+              >
+                {attachingTable ? '...' : 'Transfer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {billModal && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+          <div className="bg-[var(--surface)] border border-[var(--border)] w-full max-w-sm max-h-[80vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-[var(--border)]">
+              <div>
+                <p className="font-bold text-[var(--text)]">{billModal.tableLabel}</p>
+                <p className="text-xs text-[var(--muted)]">Running Tab</p>
+              </div>
+              <button
+                onClick={() => setBillModal(null)}
+                className="text-[var(--muted)] hover:text-[var(--text)] text-lg"
+              >
+                ×
+              </button>
+            </div>
+
+            {billModal.loading ? (
+              <div className="flex justify-center py-8">
+                <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : billModal.data ? (
+              <div className="p-4 space-y-4">
+                {/* Orders */}
+                {billModal.data.orders.map((order: any, i: number) => (
+                  <div key={order.id}>
+                    <p className="text-[10px] text-[var(--muted)] uppercase tracking-wider mb-1">
+                      Round {i + 1} —{' '}
+                      {new Date(order.createdAt).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </p>
+                    {order.items.map((item: any) => (
+                      <div
+                        key={item.name + item.quantity}
+                        className="flex justify-between text-sm py-0.5"
+                      >
+                        <span className="text-[var(--muted)]">
+                          {item.quantity}× {item.name}
+                        </span>
+                        <span className="text-[var(--text)]">
+                          {formatPrice(item.lineTotal, billModal.data.currency)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+
+                {/* Divider */}
+                <div className="border-t border-[var(--border)] pt-3 space-y-4">
+                  <div className="flex justify-between font-bold">
+                    <span className="text-[var(--text)]">Total</span>
+                    <span className="text-[var(--accent)] text-lg">
+                      {formatPrice(billModal.data.grandTotal, billModal.data.currency)}
+                    </span>
+                  </div>
+
+                  {billModal.data.amountPaid > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-[var(--muted)]">Paid</span>
+                      <span className="text-[var(--success)]">
+                        {formatPrice(billModal.data.amountPaid, billModal.data.currency)}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between font-bold border-t border-[var(--border)] pt-2">
+                    <span className="text-[var(--text)]">Balance</span>
+                    <span className="text-[var(--accent)]">
+                      {formatPrice(billModal.data.balance, billModal.data.currency)}
+                    </span>
+                  </div>
+
+                  {billModal.data.balance > 0 && (
+                    <div className="space-y-3 pt-2">
+                      <p className="text-[10px] font-bold text-[var(--muted)] uppercase tracking-widest">
+                        Payment Method
+                      </p>
+                      <div className="grid grid-cols-3 gap-2">
+                        {(['CASH', 'TRANSFER', 'CARD'] as const).map((m) => (
+                          <button
+                            key={m}
+                            onClick={() => setPaymentMethod(m)}
+                            className={`py-2 text-[10px] font-bold border transition-all ${
+                              paymentMethod === m
+                                ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent)]/10'
+                                : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]/50'
+                            }`}
+                          >
+                            {m}
+                          </button>
+                        ))}
+                      </div>
+
+                      {paymentError && (
+                        <p className="text-[10px] text-[var(--danger)] font-bold">{paymentError}</p>
+                      )}
+
+                      <button
+                        onClick={submitPayment}
+                        disabled={paymentSubmitting}
+                        className="w-full bg-[var(--accent)] text-black font-bold py-3 text-xs tracking-widest uppercase hover:brightness-110 transition-all disabled:opacity-50"
+                      >
+                        {paymentSubmitting
+                          ? 'PROCESSING...'
+                          : `PAY ${formatPrice(billModal.data.balance, billModal.data.currency)}`}
+                      </button>
+                    </div>
+                  )}
+
+                  {!billModal.data.balance && (
+                    <p className="text-center text-[var(--success)] font-bold text-xs py-2">
+                      BILL FULLY PAID
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="text-center text-[var(--muted)] py-8 text-sm">Failed to load bill</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {orderModal && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 border-b border-[var(--border)] bg-[var(--surface)] flex-shrink-0">
+            <div>
+              <p className="font-bold text-[var(--text)]">{orderModal.tableLabel}</p>
+              <p className="text-xs text-[var(--muted)]">Add order manually</p>
+            </div>
+            <button
+              onClick={() => setOrderModal(null)}
+              className="text-[var(--muted)] hover:text-[var(--text)] text-lg px-2"
+            >
+              ×
+            </button>
+          </div>
+
+          {/* Body — scrollable menu */}
+          <div className="flex-1 overflow-y-auto bg-[var(--bg)]">
+            {menuLoading ? (
+              <div className="flex justify-center py-12">
+                <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : menu.categories.length === 0 ? (
+              <div className="text-center text-[var(--muted)] py-12 text-sm">
+                No menu items available
+              </div>
+            ) : (
+              <div className="p-4 space-y-6">
+                {menu.categories.map((cat) => (
+                  <div key={cat.id}>
+                    <p className="text-xs font-bold text-[var(--muted)] uppercase tracking-widest mb-2">
+                      {cat.name}
+                    </p>
+                    <div className="space-y-1">
+                      {cat.items.map((item) => {
+                        const inCart = cart[item.id];
+                        return (
+                          <div
+                            key={item.id}
+                            className="flex items-center justify-between py-2 border-b border-[var(--border)]/50"
+                          >
+                            <div className="flex-1 min-w-0 pr-3">
+                              <p className="text-sm font-medium text-[var(--text)] truncate">
+                                {item.name}
+                              </p>
+                              <p className="text-xs text-[var(--accent)]">
+                                {formatPrice(
+                                  item.price,
+                                  (user?.organization as any)?.currency || 'NGN',
+                                )}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {inCart ? (
+                                <>
+                                  <button
+                                    onClick={() => removeFromCart(item.id)}
+                                    className="w-7 h-7 border border-[var(--border)] text-[var(--muted)] hover:border-[var(--danger)] hover:text-[var(--danger)] flex items-center justify-center text-lg leading-none"
+                                  >
+                                    −
+                                  </button>
+                                  <span className="text-sm font-bold w-4 text-center text-[var(--text)]">
+                                    {inCart.quantity}
+                                  </span>
+                                  <button
+                                    onClick={() => addToCart(item)}
+                                    className="w-7 h-7 border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)]/10 flex items-center justify-center text-lg leading-none"
+                                  >
+                                    +
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => addToCart(item)}
+                                  className="w-7 h-7 border border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] flex items-center justify-center text-lg leading-none"
+                                >
+                                  +
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                  {t.activeSessionId ? (
-                    <button
-                      onClick={() => clearTable(t.activeSessionId)}
-                      disabled={updatingItems.has(t.activeSessionId)}
-                      className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50"
-                    >
-                      {updatingItems.has(t.activeSessionId) ? 'CLEARING...' : 'CLEAR TABLE'}
-                    </button>
-                  ) : t.status === 'CLEANING' ? (
-                    <button
-                      onClick={() => markTableEmpty(t.id)}
-                      disabled={updatingItems.has(t.id)}
-                      className="w-full text-xs py-2 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50"
-                    >
-                      {updatingItems.has(t.id) ? 'UPDATING...' : 'MARK CLEAN'}
-                    </button>
-                  ) : null}
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Footer — cart summary and submit */}
+          {cartItemCount > 0 && (
+            <div className="border-t border-[var(--border)] bg-[var(--surface)] p-4 flex-shrink-0 space-y-3">
+              {/* Cart summary */}
+              <div className="space-y-1 max-h-24 overflow-y-auto">
+                {Object.entries(cart).map(([, item]) => (
+                  <div key={item.name} className="flex justify-between text-xs text-[var(--muted)]">
+                    <span>
+                      {item.quantity}× {item.name}
+                    </span>
+                    <span>
+                      {formatPrice(
+                        item.price * item.quantity,
+                        (user?.organization as any)?.currency || 'NGN',
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Notes */}
+              <input
+                type="text"
+                className="bg-[var(--surface2)] border border-[var(--border)] text-sm text-[var(--text)] px-3 py-2 w-full placeholder-[var(--muted)]"
+                placeholder="Order notes (optional)"
+                value={orderNotes}
+                onChange={(e) => setOrderNotes(e.target.value)}
+              />
+
+              {orderError && <p className="text-xs text-[var(--danger)]">{orderError}</p>}
+
+              <div className="flex items-center gap-3">
+                <div>
+                  <p className="text-xs text-[var(--muted)]">Total</p>
+                  <p className="font-bold text-[var(--accent)]">
+                    {formatPrice(cartTotal, (user?.organization as any)?.currency || 'NGN')}
+                  </p>
                 </div>
-              ))}
-          {(!isWaiter || isOnShift) && tables.filter((t) => t.isActive).length === 0 && (
-            <div className="col-span-full text-center text-[var(--muted)] text-sm pt-8">
-              No tables found
+                <button
+                  className="flex-1 py-3 bg-[var(--accent)] text-black font-bold text-sm disabled:opacity-50"
+                  onClick={() => void submitOrder()}
+                  disabled={orderSubmitting}
+                >
+                  {orderSubmitting
+                    ? 'Placing…'
+                    : `Place Order — ${cartItemCount} item${cartItemCount !== 1 ? 's' : ''}`}
+                </button>
+              </div>
             </div>
           )}
         </div>

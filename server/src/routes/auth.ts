@@ -314,6 +314,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
       ...(matchedUser.role === 'SUPERADMIN' && (matchedUser as any).opsRole
         ? { opsRole: (matchedUser as any).opsRole as any }
         : {}),
+      currency: matchedUser.organization?.currency ?? 'NGN',
     };
     const accessToken = signAccess(accessPayload);
 
@@ -446,6 +447,7 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
       ...(stored.user.role === 'SUPERADMIN' && (stored.user as any).opsRole
         ? { opsRole: (stored.user as any).opsRole as any }
         : {}),
+      currency: stored.user.organization?.currency ?? 'NGN',
     });
 
     res.cookie(getRefreshCookieName(req), newRawRefresh, COOKIE_OPTIONS);
@@ -761,6 +763,7 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
       branchId: user.branchId ?? undefined,
       role: user.role,
       plan: user.organization?.plan ?? 'free',
+      currency: user.organization?.currency ?? 'NGN',
     };
     const accessToken = signAccess(accessPayload);
     const rawRefresh = generateSecureToken();

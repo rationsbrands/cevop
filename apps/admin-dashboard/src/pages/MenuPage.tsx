@@ -9,6 +9,7 @@ interface Category {
   description?: string;
   sortOrder: number;
   isActive: boolean;
+  branchId: string | null;
   menuItems: MenuItem[];
 }
 interface MenuItem {
@@ -19,6 +20,7 @@ interface MenuItem {
   isAvailable: boolean;
   sortOrder: number;
   categoryId: string;
+  branchId: string | null;
 }
 
 type ModalMode = 'add-cat' | 'edit-cat' | 'add-item' | 'edit-item' | null;
@@ -29,6 +31,8 @@ export function MenuPage() {
   const currency = user?.organization?.currency ?? 'NGN';
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [useOrgMenu, setUseOrgMenu] = useState<boolean>(true);
+  const [orgMenuSaving, setOrgMenuSaving] = useState(false);
   const [modal, setModal] = useState<ModalMode>(null);
   const [editTarget, setEditTarget] = useState<any>(null);
   const [catForm, setCatForm] = useState({
@@ -36,6 +40,7 @@ export function MenuPage() {
     description: '',
     sortOrder: 0,
     isActive: true,
+    scope: 'branch',
   });
   const [itemForm, setItemForm] = useState({
     name: '',
@@ -44,6 +49,7 @@ export function MenuPage() {
     categoryId: '',
     sortOrder: 0,
     isAvailable: true,
+    scope: 'branch',
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -101,20 +107,33 @@ export function MenuPage() {
     return next;
   }
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    if (!api.effectiveBranchId) {
-      setCategories([]);
-      setLoading(false);
-      return;
-    }
-    const res = await api.get('/api/menu');
-    if (res.success) {
-      setCategories(res.data);
-      if (res.data.length > 0) setActiveCat((prev) => prev || res.data[0].id);
-    }
-    setLoading(false);
-  }, [api]);
+  const load = useCallback(
+    async (cancelled = false) => {
+      setLoading(true);
+      if (!api.effectiveBranchId) {
+        if (!cancelled) {
+          setCategories([]);
+          setLoading(false);
+        }
+        return;
+      }
+      const [menuRes, branchRes] = await Promise.all([
+        api.get('/api/menu'),
+        api.get('/api/branches/' + api.effectiveBranchId),
+      ]);
+      if (!cancelled) {
+        if (menuRes.success) {
+          setCategories(menuRes.data);
+          if (menuRes.data.length > 0) setActiveCat((prev) => prev || menuRes.data[0].id);
+        }
+        if (branchRes.success) {
+          setUseOrgMenu(branchRes.data.useOrgMenu ?? true);
+        }
+        setLoading(false);
+      }
+    },
+    [api],
+  );
 
   const persistCategoryOrder = useCallback(
     async (nextCategories: Category[]) => {
@@ -126,7 +145,7 @@ export function MenuPage() {
         );
       } catch {
         setError('Failed to save category order');
-        load();
+        void load();
       }
     },
     [api, load],
@@ -146,20 +165,25 @@ export function MenuPage() {
         );
       } catch {
         setError('Failed to save item order');
-        load();
+        void load();
       }
     },
     [api, load],
   );
 
   useEffect(() => {
-    const t = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(t);
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) void load(cancelled).catch(() => void 0);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   function openAddCat() {
     const nextSort = categories.reduce((max, c) => Math.max(max, c.sortOrder ?? 0), 0) + 10;
-    setCatForm({ name: '', description: '', sortOrder: nextSort, isActive: true });
+    setCatForm({ name: '', description: '', sortOrder: nextSort, isActive: true, scope: 'branch' });
     setModal('add-cat');
     setError('');
   }
@@ -169,6 +193,7 @@ export function MenuPage() {
       description: cat.description || '',
       sortOrder: cat.sortOrder,
       isActive: cat.isActive,
+      scope: cat.branchId === null ? 'org' : 'branch',
     });
     setEditTarget(cat);
     setModal('edit-cat');
@@ -185,6 +210,7 @@ export function MenuPage() {
       categoryId: catId,
       sortOrder: nextSort,
       isAvailable: true,
+      scope: 'branch',
     });
     setModal('add-item');
     setError('');
@@ -197,6 +223,7 @@ export function MenuPage() {
       categoryId: item.categoryId,
       sortOrder: item.sortOrder,
       isAvailable: item.isAvailable,
+      scope: item.branchId === null ? 'org' : 'branch',
     });
     setEditTarget(item);
     setModal('edit-item');
@@ -212,7 +239,13 @@ export function MenuPage() {
     setSaving(true);
     setError('');
     try {
-      const body = { ...catForm, sortOrder: Number(catForm.sortOrder) };
+      const body = {
+        name: catForm.name,
+        description: catForm.description,
+        sortOrder: Number(catForm.sortOrder),
+        isActive: catForm.isActive,
+        branchId: catForm.scope === 'org' ? null : api.effectiveBranchId,
+      };
       const res =
         modal === 'add-cat'
           ? await api.post('/api/menu/categories', body)
@@ -244,9 +277,13 @@ export function MenuPage() {
     setError('');
     try {
       const body = {
-        ...itemForm,
+        name: itemForm.name,
+        description: itemForm.description,
+        categoryId: itemForm.categoryId,
+        isAvailable: itemForm.isAvailable,
         price: parseFloat(itemForm.price),
         sortOrder: Number(itemForm.sortOrder),
+        branchId: itemForm.scope === 'org' ? null : api.effectiveBranchId,
       };
       if (!body.price || isNaN(body.price)) throw new Error('Valid price required');
       const res =
@@ -310,6 +347,18 @@ export function MenuPage() {
       </div>
     );
 
+  const canManageOrgWide = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'].includes(
+    user?.role ?? '',
+  );
+  const canEditItem = (item: MenuItem): boolean => {
+    if (canManageOrgWide) return true;
+    return item.branchId !== null;
+  };
+  const canEditCategory = (cat: Category): boolean => {
+    if (canManageOrgWide) return true;
+    return cat.branchId !== null;
+  };
+
   return (
     <div className="space-y-6 animate-in">
       <ConfirmDialog
@@ -329,6 +378,49 @@ export function MenuPage() {
         <h1 className="font-display text-4xl">MENU</h1>
         <button className="btn btn-primary btn-sm" onClick={openAddCat}>
           + Add Category
+        </button>
+      </div>
+
+      {/* Branch menu mode banner */}
+      <div
+        className={`flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 border gap-4 ${
+          useOrgMenu
+            ? 'border-[var(--border)] bg-[var(--surface)]'
+            : 'border-[var(--accent)]/40 bg-[var(--accent)]/5'
+        }`}
+      >
+        <div>
+          <p className="text-sm font-bold text-[var(--text)]">
+            {useOrgMenu ? 'Using Organisation Menu' : 'Independent Branch Menu'}
+          </p>
+          <p className="text-xs text-[var(--muted)] mt-0.5">
+            {useOrgMenu
+              ? 'This branch shows org-wide items plus any branch-specific additions.'
+              : 'This branch has an independent menu. Org-wide items are not shown to customers here.'}
+          </p>
+        </div>
+        <button
+          className={`text-xs font-bold px-3 py-1.5 border transition-all shrink-0 ${
+            useOrgMenu
+              ? 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]'
+              : 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent)]/10'
+          }`}
+          disabled={orgMenuSaving}
+          onClick={async () => {
+            setOrgMenuSaving(true);
+            const next = !useOrgMenu;
+            const res = await api.put(`/api/branches/${api.effectiveBranchId}`, {
+              useOrgMenu: next,
+            });
+            if (res.success) setUseOrgMenu(next);
+            setOrgMenuSaving(false);
+          }}
+        >
+          {orgMenuSaving
+            ? 'Saving…'
+            : useOrgMenu
+              ? 'Switch to Independent Menu'
+              : 'Switch to Org Menu'}
         </button>
       </div>
       <div className="flex gap-4 flex-col lg:flex-row overflow-hidden">
@@ -396,9 +488,20 @@ export function MenuPage() {
                       {cat.isActive ? 'ON' : 'OFF'}
                     </span>
                   </div>
-                  <span className="text-xs text-[var(--muted)]">
-                    {cat.menuItems?.length ?? 0} items
-                  </span>
+                  <div className="flex items-center justify-between gap-2 mt-1">
+                    <span className="text-xs text-[var(--muted)]">
+                      {cat.menuItems?.length ?? 0} items
+                    </span>
+                    {cat.branchId === null ? (
+                      <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 border border-[var(--border)] text-[var(--muted)] shrink-0">
+                        Org-wide
+                      </span>
+                    ) : (
+                      <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 border border-[var(--accent)]/40 text-[var(--accent)] shrink-0">
+                        This Branch
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -417,18 +520,26 @@ export function MenuPage() {
                   )}
                 </div>
                 <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
-                  <button
-                    className="btn btn-secondary btn-sm shrink-0"
-                    onClick={() => openEditCat(currentCat)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="btn btn-danger btn-sm shrink-0"
-                    onClick={() => deleteCat(currentCat.id)}
-                  >
-                    Delete
-                  </button>
+                  {canEditCategory(currentCat) ? (
+                    <>
+                      <button
+                        className="btn btn-secondary btn-sm shrink-0"
+                        onClick={() => openEditCat(currentCat)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="btn btn-danger btn-sm shrink-0"
+                        onClick={() => deleteCat(currentCat.id)}
+                      >
+                        Delete
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-[10px] text-[var(--muted)] italic border border-[var(--border)] px-2 py-1 flex items-center">
+                      Managed by head office
+                    </span>
+                  )}
                   <button
                     className="btn btn-secondary btn-sm shrink-0"
                     onClick={() => bulkToggleCategory(currentCat.id, true)}
@@ -530,7 +641,20 @@ export function MenuPage() {
                             ≡
                           </button>
                         </td>
-                        <td className="font-medium">{item.name}</td>
+                        <td className="font-medium">
+                          <div className="flex items-center gap-2">
+                            <span>{item.name}</span>
+                            {item.branchId === null ? (
+                              <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 border border-[var(--border)] text-[var(--muted)] shrink-0">
+                                Org-wide
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 border border-[var(--accent)]/40 text-[var(--accent)] shrink-0">
+                                This Branch
+                              </span>
+                            )}
+                          </div>
+                        </td>
                         <td className="text-[var(--muted)] text-xs max-w-xs truncate">
                           {item.description || '—'}
                         </td>
@@ -549,20 +673,26 @@ export function MenuPage() {
                           </button>
                         </td>
                         <td>
-                          <div className="flex gap-1">
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => openEditItem(item)}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              className="btn btn-danger btn-sm"
-                              onClick={() => deleteItem(item.id)}
-                            >
-                              Del
-                            </button>
-                          </div>
+                          {canEditItem(item) ? (
+                            <div className="flex gap-1">
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => openEditItem(item)}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                className="btn btn-danger btn-sm"
+                                onClick={() => deleteItem(item.id)}
+                              >
+                                Del
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-[var(--muted)] italic">
+                              Managed by head office
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -627,6 +757,40 @@ export function MenuPage() {
                     Active
                   </label>
                 </div>
+                {canManageOrgWide && (
+                  <div>
+                    <label className="label">Scope</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCatForm((f) => ({ ...f, scope: 'branch' }))}
+                        className={`flex-1 py-2 text-sm border transition-all ${
+                          catForm.scope !== 'org'
+                            ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent)]/10'
+                            : 'border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface2)]'
+                        }`}
+                      >
+                        This Branch Only
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCatForm((f) => ({ ...f, scope: 'org' }))}
+                        className={`flex-1 py-2 text-sm border transition-all ${
+                          catForm.scope === 'org'
+                            ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent)]/10'
+                            : 'border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface2)]'
+                        }`}
+                      >
+                        All Branches (Org-wide)
+                      </button>
+                    </div>
+                    <p className="text-xs text-[var(--muted)] mt-1">
+                      {catForm.scope === 'org'
+                        ? 'This category will appear on all branches that use the org menu.'
+                        : 'This category will only appear on this branch.'}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
             {(modal === 'add-item' || modal === 'edit-item') && (
@@ -696,6 +860,40 @@ export function MenuPage() {
                     Available
                   </label>
                 </div>
+                {canManageOrgWide && (
+                  <div>
+                    <label className="label">Scope</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setItemForm((f) => ({ ...f, scope: 'branch' }))}
+                        className={`flex-1 py-2 text-sm border transition-all ${
+                          itemForm.scope !== 'org'
+                            ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent)]/10'
+                            : 'border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface2)]'
+                        }`}
+                      >
+                        This Branch Only
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setItemForm((f) => ({ ...f, scope: 'org' }))}
+                        className={`flex-1 py-2 text-sm border transition-all ${
+                          itemForm.scope === 'org'
+                            ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--accent)]/10'
+                            : 'border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface2)]'
+                        }`}
+                      >
+                        All Branches (Org-wide)
+                      </button>
+                    </div>
+                    <p className="text-xs text-[var(--muted)] mt-1">
+                      {itemForm.scope === 'org'
+                        ? 'This item will appear on all branches that use the org menu.'
+                        : 'This item will only appear on this branch.'}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
             {error && <p className="text-red-400 text-sm">{error}</p>}

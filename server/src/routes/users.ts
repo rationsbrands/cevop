@@ -19,7 +19,11 @@ async function generateStaffCode(branchId: string, role: string): Promise<string
           ? 'K'
           : role === 'BRANCH_ADMIN'
             ? 'M'
-            : 'T'; // T for team/other
+            : role === 'HOST'
+              ? 'H'
+              : role === 'CASHIER'
+                ? 'C'
+                : 'T'; // T for team/other
 
   // Find the highest existing code number for this branch + prefix
   const existing = await (prisma.user as any).findMany({
@@ -111,6 +115,8 @@ const createUserSchema = z.object({
     'SERVICE',
     'WAITER',
     'KITCHEN',
+    'HOST',
+    'CASHIER',
     'SUPERADMIN',
   ]),
   branchId: z.string().optional(),
@@ -185,7 +191,14 @@ usersRouter.post(
           return;
         }
       }
-      if ((role === 'WAITER' || role === 'SERVICE' || role === 'KITCHEN') && !finalBranchId) {
+      if (
+        (role === 'WAITER' ||
+          role === 'SERVICE' ||
+          role === 'KITCHEN' ||
+          role === 'HOST' ||
+          role === 'CASHIER') &&
+        !finalBranchId
+      ) {
         const branches = await prisma.branch.findMany({
           where: { organizationId: req.user!.organizationId, isActive: true },
           select: { id: true },
@@ -230,7 +243,10 @@ usersRouter.post(
 
       // Auto-generate staffCode for branch-scoped staff roles
       let staffCode: string | undefined;
-      if (finalBranchId && ['SERVICE', 'WAITER', 'KITCHEN', 'BRANCH_ADMIN'].includes(role)) {
+      if (
+        finalBranchId &&
+        ['SERVICE', 'WAITER', 'KITCHEN', 'BRANCH_ADMIN', 'HOST', 'CASHIER'].includes(role)
+      ) {
         staffCode = await generateStaffCode(finalBranchId, role).catch(() => undefined);
       }
 
@@ -289,6 +305,8 @@ usersRouter.patch(
             'SERVICE',
             'WAITER',
             'KITCHEN',
+            'HOST',
+            'CASHIER',
           ])
           .optional(),
         isActive: z.boolean().optional(),
@@ -389,7 +407,11 @@ usersRouter.patch(
         updateData.branchId = null;
       }
       if (
-        (nextRole === 'WAITER' || nextRole === 'SERVICE' || nextRole === 'KITCHEN') &&
+        (nextRole === 'WAITER' ||
+          nextRole === 'SERVICE' ||
+          nextRole === 'KITCHEN' ||
+          nextRole === 'HOST' ||
+          nextRole === 'CASHIER') &&
         !nextBranchId
       ) {
         const branches = await prisma.branch.findMany({

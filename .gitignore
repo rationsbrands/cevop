@@ -77,3 +77,4 @@ tmp/
 **/.tmp/
 .agents/
 .DS_Store
+apps/customer-pwa/dev-dist/

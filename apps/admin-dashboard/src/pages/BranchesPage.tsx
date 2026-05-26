@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useApi } from '../context/auth';
+import { ConfirmDialog, showToast } from '../components/Popup';
 
 interface Branch {
   id: string;
@@ -7,6 +8,7 @@ interface Branch {
   slug: string;
   address?: string;
   phone?: string;
+  maxTablesPerWaiter?: number | null;
   isActive: boolean;
   createdAt: string;
   _count?: { users: number; tables: number };
@@ -28,13 +30,24 @@ export function BranchesPage() {
 
   // Create branch form
   const [showCreate, setShowCreate] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: '', slug: '', address: '', phone: '' });
+  const [createForm, setCreateForm] = useState({
+    name: '',
+    slug: '',
+    address: '',
+    phone: '',
+    maxTablesPerWaiter: '',
+  });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
 
   // Edit branch form
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', address: '', phone: '' });
+  const [editForm, setEditForm] = useState({
+    name: '',
+    address: '',
+    phone: '',
+    maxTablesPerWaiter: '',
+  });
   const [saving, setSaving] = useState(false);
 
   // Create branch admin form
@@ -44,6 +57,34 @@ export function BranchesPage() {
   const [adminError, setAdminError] = useState('');
   const [adminSuccess, setAdminSuccess] = useState('');
   const [showAdminPassword, setShowAdminPassword] = useState(false);
+
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmActionRef, setConfirmActionRef] = useState<{
+    action: () => Promise<void> | void;
+  } | null>(null);
+
+  function openConfirm(title: string, message: string, action: () => Promise<void> | void) {
+    setConfirmTitle(title);
+    setConfirmMessage(message);
+    setConfirmActionRef({ action });
+    setConfirmOpen(true);
+  }
+
+  async function onConfirm() {
+    if (confirmBusy || !confirmActionRef) return;
+    setConfirmBusy(true);
+    try {
+      await confirmActionRef.action();
+      setConfirmOpen(false);
+    } catch (e: any) {
+      showToast(e?.message ? String(e.message) : 'Action failed', 'error');
+    } finally {
+      setConfirmBusy(false);
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,13 +108,19 @@ export function BranchesPage() {
     setCreating(true);
     setCreateError('');
     try {
-      const { success, error: err, data } = await api.post('/api/branches', createForm);
+      const payload = {
+        ...createForm,
+        maxTablesPerWaiter: createForm.maxTablesPerWaiter
+          ? parseInt(createForm.maxTablesPerWaiter, 10)
+          : null,
+      };
+      const { success, error: err, data } = await api.post('/api/branches', payload);
       if (!success) {
         setCreateError(err || 'Failed to create branch');
         return;
       }
       setBranches((prev) => [...prev, data]);
-      setCreateForm({ name: '', slug: '', address: '', phone: '' });
+      setCreateForm({ name: '', slug: '', address: '', phone: '', maxTablesPerWaiter: '' });
       setShowCreate(false);
     } catch {
       setCreateError('Failed to create branch');
@@ -85,7 +132,13 @@ export function BranchesPage() {
   async function handleEdit(id: string) {
     setSaving(true);
     try {
-      const { success, data } = await api.put(`/api/branches/${id}`, editForm);
+      const payload = {
+        ...editForm,
+        maxTablesPerWaiter: editForm.maxTablesPerWaiter
+          ? parseInt(editForm.maxTablesPerWaiter, 10)
+          : null,
+      };
+      const { success, data } = await api.put(`/api/branches/${id}`, payload);
       if (success) {
         setBranches((prev) => prev.map((b) => (b.id === id ? { ...b, ...data } : b)));
         setEditingId(null);
@@ -101,6 +154,18 @@ export function BranchesPage() {
     });
     if (success)
       setBranches((prev) => prev.map((b) => (b.id === branch.id ? { ...b, ...data } : b)));
+  }
+
+  function handleDelete(id: string) {
+    openConfirm(
+      'Permanent Delete',
+      'Are you sure you want to permanently delete this branch? All associated data, orders, and staff may be lost. This cannot be undone.',
+      async () => {
+        const res = await api.delete(`/api/branches/${id}`);
+        if (!res.success) throw new Error(res.error || 'Failed to delete branch');
+        setBranches((prev) => prev.filter((b) => b.id !== id));
+      },
+    );
   }
 
   async function handleCreateAdmin(e: React.FormEvent) {
@@ -135,6 +200,19 @@ export function BranchesPage() {
 
   return (
     <div className="space-y-6 max-w-4xl">
+      <ConfirmDialog
+        open={confirmOpen}
+        title={confirmTitle}
+        message={confirmMessage}
+        confirmLabel="Permanent Delete"
+        variant="danger"
+        busy={confirmBusy}
+        onCancel={() => {
+          if (!confirmBusy) setConfirmOpen(false);
+        }}
+        onConfirm={() => void onConfirm()}
+      />
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -228,6 +306,25 @@ export function BranchesPage() {
                   autoComplete="tel"
                 />
               </div>
+              <div>
+                <label
+                  htmlFor="branch_create_max_tables"
+                  className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                >
+                  Max Tables/Waiter
+                </label>
+                <input
+                  id="branch_create_max_tables"
+                  name="maxTablesPerWaiter"
+                  type="number"
+                  min="1"
+                  value={createForm.maxTablesPerWaiter}
+                  onChange={(e) =>
+                    setCreateForm((f) => ({ ...f, maxTablesPerWaiter: e.target.value }))
+                  }
+                  placeholder="e.g. 5 (Leave blank for unlimited)"
+                />
+              </div>
             </div>
             {createError && <p className="text-red-400 text-sm">{createError}</p>}
             <div className="flex gap-2">
@@ -265,7 +362,7 @@ export function BranchesPage() {
               {editingId === branch.id ? (
                 /* Edit form */
                 <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div>
                       <label
                         htmlFor={`branch_edit_name_${branch.id}`}
@@ -309,6 +406,25 @@ export function BranchesPage() {
                         value={editForm.phone}
                         onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
                         autoComplete="tel"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor={`branch_edit_max_tables_${branch.id}`}
+                        className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                      >
+                        Max Tables/Waiter
+                      </label>
+                      <input
+                        id={`branch_edit_max_tables_${branch.id}`}
+                        name="maxTablesPerWaiter"
+                        type="number"
+                        min="1"
+                        value={editForm.maxTablesPerWaiter}
+                        onChange={(e) =>
+                          setEditForm((f) => ({ ...f, maxTablesPerWaiter: e.target.value }))
+                        }
+                        placeholder="Unlimited"
                       />
                     </div>
                   </div>
@@ -362,6 +478,7 @@ export function BranchesPage() {
                           name: branch.name,
                           address: branch.address ?? '',
                           phone: branch.phone ?? '',
+                          maxTablesPerWaiter: branch.maxTablesPerWaiter?.toString() ?? '',
                         });
                       }}
                       className="flex-1 sm:flex-none text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2.5 py-1.5 transition-colors"
@@ -382,11 +499,17 @@ export function BranchesPage() {
                       onClick={() => toggleActive(branch)}
                       className={`flex-1 sm:flex-none text-xs border px-2.5 py-1.5 transition-colors ${
                         branch.isActive
-                          ? 'text-red-400 border-red-800 hover:bg-red-900/20'
+                          ? 'text-amber-400 border-amber-800 hover:bg-amber-900/20'
                           : 'text-green-400 border-green-800 hover:bg-green-900/20'
                       }`}
                     >
                       {branch.isActive ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button
+                      onClick={() => handleDelete(branch.id)}
+                      className="flex-1 sm:flex-none text-xs text-red-400 border border-red-800 hover:bg-red-900/20 px-2.5 py-1.5 transition-colors"
+                    >
+                      Delete
                     </button>
                   </div>
                 </div>

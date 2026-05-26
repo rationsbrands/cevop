@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth, useApi } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
@@ -70,54 +70,81 @@ function StatCard({ label, value, sub }: { label: string; value: string | number
 }
 
 export function DashboardPage() {
-  const { user, activeBranchFilter } = useAuth();
+  const { user } = useAuth();
   const api = useApi();
   const [summary, setSummary] = useState<Summary | null>(null);
   const [recentOrders, setRecentOrders] = useState<any[]>([]);
   const [orgDashboard, setOrgDashboard] = useState<OrgDashboardData | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
+  const load = useCallback(
+    async (isSilent = false, cancelled = false) => {
+      if (!isSilent) setLoading(true);
+      else setSyncing(true);
+
       try {
         const role = user?.role ?? '';
         const isAuditor = role === 'ORG_AUDITOR';
 
         if (isAuditor) {
           const logsRes = await api.get('/api/orgs/audit?limit=50');
-          if (logsRes.success) setAuditLogs(logsRes.data ?? []);
+          if (!cancelled && logsRes.success) setAuditLogs(logsRes.data ?? []);
           return;
         }
 
         if (!api.effectiveBranchId) {
           const orgRes = await api.get('/api/orders/analytics/org-dashboard');
-          if (orgRes.success) {
+          if (!cancelled && orgRes.success) {
             setOrgDashboard(orgRes.data);
             setSummary(orgRes.data?.summary ?? null);
             setRecentOrders(orgRes.data?.recentOrders ?? []);
-          } else {
-            setOrgDashboard(null);
-            setSummary(null);
-            setRecentOrders([]);
           }
           return;
         }
 
-        setOrgDashboard(null);
         const [sumRes, ordersRes] = await Promise.all([
           api.get('/api/orders/analytics/summary'),
           api.get('/api/orders?limit=10'),
         ]);
-        if (sumRes.success) setSummary(sumRes.data);
-        if (ordersRes.success) setRecentOrders(ordersRes.data);
+        if (!cancelled) {
+          if (sumRes.success) setSummary(sumRes.data);
+          if (ordersRes.success) setRecentOrders(ordersRes.data);
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setSyncing(false);
+        }
       }
-    }
-    load();
-  }, [activeBranchFilter, api, api.effectiveBranchId, user?.role]);
+    },
+    [api, user?.role],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) void load(false, cancelled).catch(() => void 0);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load]);
+
+  // Background Heartbeat Sync (Industry Standard)
+  useEffect(() => {
+    let cancelled = false;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible' && navigator.onLine && !cancelled) {
+        load(true, cancelled);
+      }
+    }, 60000); // Every 60 seconds
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [load]);
 
   const SC: Record<string, string> = {
     RECEIVED: 'text-blue-400',
@@ -143,7 +170,11 @@ export function DashboardPage() {
         ? 'FINANCE DASHBOARD'
         : role === 'ORG_MANAGER'
           ? 'OPERATIONS DASHBOARD'
-          : 'DASHBOARD';
+          : role === 'CASHIER'
+            ? 'CASHIER DASHBOARD'
+            : role === 'HOST'
+              ? 'HOST DASHBOARD'
+              : 'DASHBOARD';
 
   if (role === 'ORG_AUDITOR') {
     const today = new Date();
@@ -220,9 +251,31 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6 animate-in">
-      <div>
-        <h1 className="font-display text-4xl">{title}</h1>
-        <p className="text-[var(--muted)] text-sm mt-0.5">Welcome back, {user?.name}</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display text-4xl">{title}</h1>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-[var(--muted)] text-sm">Welcome back, {user?.name}</p>
+            {syncing && (
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] text-[10px] font-bold animate-pulse">
+                <span className="w-1 h-1 rounded-full bg-[var(--accent)]" />
+                SYNCING...
+              </span>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={() => load(true)}
+          disabled={syncing || loading}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[var(--surface2)] text-[var(--text)] text-xs font-bold hover:bg-[var(--surface3)] transition-all disabled:opacity-50 group"
+        >
+          <span
+            className={`transition-transform duration-500 ${syncing ? 'animate-spin' : 'group-hover:rotate-180'}`}
+          >
+            ⟳
+          </span>
+          REFRESH
+        </button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard label="Orders Today" value={summary?.todayOrders ?? 0} />
@@ -319,6 +372,56 @@ export function DashboardPage() {
               Review revenue and reports
             </div>
           </Link>
+        )}
+
+        {role === 'CASHIER' && !orgMode && (
+          <>
+            <Link to="/cashier" className="card p-4 hover:bg-[var(--surface2)] transition-colors">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Cashier
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                Manage payments and sessions
+              </div>
+            </Link>
+            <Link to="/orders" className="card p-4 hover:bg-[var(--surface2)] transition-colors">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Orders
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                View current orders
+              </div>
+            </Link>
+          </>
+        )}
+
+        {role === 'HOST' && !orgMode && (
+          <>
+            <Link to="/orders" className="card p-4 hover:bg-[var(--surface2)] transition-colors">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Orders
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                View and manage orders
+              </div>
+            </Link>
+            <Link to="/sections" className="card p-4 hover:bg-[var(--surface2)] transition-colors">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Sections
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                Floor plan and seating
+              </div>
+            </Link>
+            <Link to="/tables" className="card p-4 hover:bg-[var(--surface2)] transition-colors">
+              <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
+                Tables
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                QR codes and status
+              </div>
+            </Link>
+          </>
         )}
       </div>
       {orgMode && (orgDashboard?.branches?.length ?? 0) > 0 && (

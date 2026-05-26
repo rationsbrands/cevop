@@ -11,7 +11,18 @@ pushRouter.use(authenticate, requireBranchAccess);
 // POST /api/push/subscribe — save a push subscription
 pushRouter.post(
   '/subscribe',
-  requireRole('SERVICE', 'WAITER', 'KITCHEN', 'BRANCH_ADMIN', 'ADMIN', 'ORG_OWNER', 'SUPERADMIN'),
+  authenticate,
+  requireRole(
+    'SERVICE',
+    'WAITER',
+    'KITCHEN',
+    'BRANCH_ADMIN',
+    'ADMIN',
+    'ORG_OWNER',
+    'SUPERADMIN',
+    'HOST',
+    'CASHIER',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const { subscription, app } = z
@@ -63,7 +74,17 @@ pushRouter.post(
 // DELETE /api/push/unsubscribe — remove a push subscription
 pushRouter.delete(
   '/unsubscribe',
-  requireRole('SERVICE', 'WAITER', 'KITCHEN', 'BRANCH_ADMIN', 'ADMIN', 'ORG_OWNER', 'SUPERADMIN'),
+  requireRole(
+    'SERVICE',
+    'WAITER',
+    'KITCHEN',
+    'BRANCH_ADMIN',
+    'ADMIN',
+    'ORG_OWNER',
+    'SUPERADMIN',
+    'HOST',
+    'CASHIER',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const { endpoint } = z.object({ endpoint: z.string() }).parse(req.body);

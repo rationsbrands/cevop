@@ -92,6 +92,9 @@ const ReportsPage = React.lazy(() =>
 const AuditLogsPage = React.lazy(() =>
   import('./pages/AuditLogsPage').then((m) => ({ default: m.AuditLogsPage })),
 );
+const CashierPage = React.lazy(() =>
+  import('./pages/CashierPage').then((m) => ({ default: m.CashierPage })),
+);
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -182,8 +185,16 @@ function AppRoutes() {
           <Route
             path="orders"
             element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'HOST']}>
                 <OrdersPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/cashier"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER']}>
+                <CashierPage />
               </RequireRole>
             }
           />
@@ -198,7 +209,7 @@ function AppRoutes() {
           <Route
             path="tables"
             element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'HOST']}>
                 <TablesPage />
               </RequireRole>
             }
@@ -206,7 +217,7 @@ function AppRoutes() {
           <Route
             path="sections"
             element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'HOST']}>
                 <SectionsPage />
               </RequireRole>
             }

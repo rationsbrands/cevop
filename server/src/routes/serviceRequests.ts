@@ -53,6 +53,33 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
 
     // Ensure table session is open
     const sessionId = await getOrCreateSession(table.id, table.organizationId, actualBranchId);
+    if (!sessionId) {
+      res.status(400).json({ success: false, error: 'Could not create table session' });
+      return;
+    }
+
+    if (data.serviceType === 'BILL_REQUEST') {
+      const activeSession = await prisma.tableSession.findUnique({
+        where: { id: sessionId },
+        include: {
+          orders: {
+            where: { status: { not: 'CANCELLED' } },
+            select: { id: true, total: true },
+          },
+        },
+      });
+
+      // Relaxed check: just ensure there's at least one order in the session
+      const hasOrders = activeSession && activeSession.orders.length > 0;
+
+      if (!hasOrders) {
+        res.status(400).json({
+          success: false,
+          error: "You haven't made any orders yet. Please call a waiter if you need assistance.",
+        });
+        return;
+      }
+    }
 
     const request = await prisma.serviceRequest.create({
       data: {
@@ -81,6 +108,11 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
         include: { table: true, assignedUser: { select: { id: true, name: true } } },
       });
 
+      if (sessionId) {
+        const { claimTableSession } = await import('../services/waiterAssignment');
+        await claimTableSession(assignedWaiterId, table.id, sessionId, actualBranchId);
+      }
+
       // Notify the assigned waiter directly
       io.to(`waiter:${assignedWaiterId}`).emit('TASK_ASSIGNED', {
         type: 'SERVICE_REQUEST',
@@ -103,6 +135,8 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
         org.whatsappNumber || undefined,
         org.slackWebhook || undefined,
         org.plan,
+        actualBranchId,
+        table.organizationId,
       ).catch(() => {});
 
     notifyStaffWebPush({
@@ -173,6 +207,8 @@ serviceRequestsRouter.patch(
     'BRANCH_ADMIN',
     'WAITER',
     'SERVICE',
+    'CASHIER',
+    'HOST',
   ),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -219,6 +255,18 @@ serviceRequestsRouter.patch(
         include: { table: true, assignedUser: { select: { id: true, name: true } } },
       });
 
+      if (status === 'RESOLVED' && request.serviceType === 'BILL_REQUEST' && request.sessionId) {
+        // Clear and clean table, change status to empty.
+        // This is where the waiter confirms the table is paid and ready for new customers.
+        const { closeSession } = await import('../services/tableSession');
+        await closeSession(request.sessionId, req.user!.userId, 'EMPTY').catch((err) => {
+          logger.warn('Failed to close session during bill request resolution', {
+            err: err.message,
+            sessionId: request.sessionId,
+          });
+        });
+      }
+
       io.to(`${req.user!.organizationId}:${req.branchScope!}`).emit(
         'SERVICE_REQUEST_UPDATED',
         request,
@@ -259,14 +307,30 @@ serviceRequestsRouter.patch(
         status: 'PENDING',
       };
 
-      const result = await prisma.serviceRequest.updateMany({
-        where,
-        data: { assignedTo: req.user!.userId, assignedAt: new Date() },
-      });
-      if (result.count === 0) {
+      const requestToClaim = await prisma.serviceRequest.findFirst({ where });
+      if (!requestToClaim) {
         res.status(404).json({ success: false, error: 'Task not found or already assigned' });
         return;
       }
+
+      if (requestToClaim.sessionId) {
+        const { claimTableSession } = await import('../services/waiterAssignment');
+        const claimResult = await claimTableSession(
+          req.user!.userId,
+          requestToClaim.tableId,
+          requestToClaim.sessionId,
+          requestToClaim.branchId,
+        );
+        if (!claimResult.success && claimResult.error?.startsWith('LIMIT_REACHED')) {
+          res.status(400).json({ success: false, error: claimResult.error });
+          return;
+        }
+      }
+
+      await prisma.serviceRequest.updateMany({
+        where,
+        data: { assignedTo: req.user!.userId, assignedAt: new Date() },
+      });
 
       const updated = await prisma.serviceRequest.findFirst({
         where: {
@@ -279,6 +343,16 @@ serviceRequestsRouter.patch(
       if (!updated) {
         res.status(404).json({ success: false, error: 'Task not found' });
         return;
+      }
+
+      if (updated.sessionId && updated.tableId && updated.branchId) {
+        const { claimTableSession } = await import('../services/waiterAssignment');
+        await claimTableSession(
+          req.user!.userId,
+          updated.tableId,
+          updated.sessionId,
+          updated.branchId,
+        );
       }
 
       // Notify everyone this is now claimed
@@ -296,7 +370,16 @@ serviceRequestsRouter.patch(
 
 serviceRequestsRouter.patch(
   '/:id/assign',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'SUPERADMIN', 'SERVICE'),
+  requireRole(
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'BRANCH_ADMIN',
+    'SUPERADMIN',
+    'SERVICE',
+    'HOST',
+    'CASHIER',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const { waiterId } = z.object({ waiterId: z.string().nullable() }).parse(req.body);

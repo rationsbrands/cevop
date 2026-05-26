@@ -1,4 +1,4 @@
-import { Router, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../services/prisma';
 import {
@@ -13,7 +13,187 @@ import { logger } from '../services/logger';
 
 export const sessionsRouter = Router();
 
+// GET /api/sessions/public/:sessionId/bill — public, for customer PWA running tab
+sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response) => {
+  try {
+    const session = await prisma.tableSession.findUnique({
+      where: { id: req.params.sessionId },
+      select: {
+        id: true,
+        openedAt: true,
+        tableId: true,
+        assignedWaiter: { select: { staffCode: true, name: true } },
+        organizationId: true,
+        organization: { select: { currency: true } },
+        orders: {
+          where: { status: { not: 'CANCELLED' } },
+          orderBy: { createdAt: 'asc' },
+          select: {
+            id: true,
+            status: true,
+            total: true,
+            createdAt: true,
+            items: {
+              where: { cancelledAt: null },
+              select: {
+                id: true,
+                quantity: true,
+                unitPrice: true,
+                notes: true,
+                menuItem: { select: { name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      res.status(404).json({ success: false, error: 'Session not found' });
+      return;
+    }
+
+    const grandTotal = session.orders.reduce((sum, o) => sum + Number(o.total), 0);
+
+    res.json({
+      success: true,
+      data: {
+        sessionId: session.id,
+        openedAt: session.openedAt,
+        currency: session.organization.currency,
+        assignedWaiter: session.assignedWaiter,
+        orders: session.orders.map((o) => ({
+          id: o.id,
+          status: o.status,
+          total: Number(o.total),
+          createdAt: o.createdAt,
+          items: o.items.map((i) => ({
+            name: i.menuItem?.name ?? 'Item',
+            quantity: i.quantity,
+            unitPrice: Number(i.unitPrice),
+            notes: i.notes,
+            lineTotal: i.quantity * Number(i.unitPrice),
+          })),
+        })),
+        grandTotal,
+        orderCount: session.orders.length,
+      },
+    });
+  } catch (err) {
+    logger.error('GET /sessions/public/:sessionId/bill error', { err });
+    res.status(500).json({ success: false, error: 'Failed to fetch bill' });
+  }
+});
+
 sessionsRouter.use(authenticate, requireBranchAccess, requireBranchSelected);
+
+// GET /api/sessions/:id/bill — authenticated, for waiter board and cashier
+sessionsRouter.get(
+  '/:id/bill',
+  requireRole(
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'BRANCH_ADMIN',
+    'SERVICE',
+    'WAITER',
+    'KITCHEN',
+    'CASHIER',
+    'SUPERADMIN',
+    'HOST',
+  ),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const session = await prisma.tableSession.findFirst({
+        where: {
+          id: req.params.id,
+          organizationId: req.user!.organizationId,
+          ...(req.branchScope ? { branchId: req.branchScope } : {}),
+        },
+        select: {
+          id: true,
+          openedAt: true,
+          closedAt: true,
+          tableId: true,
+          assignedWaiter: { select: { staffCode: true, name: true } },
+          organization: { select: { currency: true } },
+          table: { select: { label: true, number: true } },
+          orders: {
+            where: { status: { not: 'CANCELLED' } },
+            orderBy: { createdAt: 'asc' },
+            select: {
+              id: true,
+              status: true,
+              total: true,
+              createdAt: true,
+              assignedWaiter: true,
+              items: {
+                where: { cancelledAt: null },
+                select: {
+                  id: true,
+                  quantity: true,
+                  unitPrice: true,
+                  notes: true,
+                  menuItem: { select: { name: true } },
+                },
+              },
+            },
+          },
+          payments: {
+            select: { id: true, amount: true, method: true, processedAt: true },
+          },
+        },
+      });
+
+      if (!session) {
+        res.status(404).json({ success: false, error: 'Session not found' });
+        return;
+      }
+
+      const grandTotal = session.orders.reduce((sum, o) => sum + Number(o.total), 0);
+      const amountPaid = session.payments.reduce((sum, p) => sum + Number(p.amount), 0);
+
+      res.json({
+        success: true,
+        data: {
+          sessionId: session.id,
+          openedAt: session.openedAt,
+          closedAt: session.closedAt,
+          table: session.table,
+          assignedWaiter: session.assignedWaiter,
+          currency: session.organization.currency,
+          orders: session.orders.map((o) => ({
+            id: o.id,
+            status: o.status,
+            total: Number(o.total),
+            createdAt: o.createdAt,
+            items: o.items.map((i) => ({
+              name: i.menuItem?.name ?? 'Item',
+              quantity: i.quantity,
+              unitPrice: Number(i.unitPrice),
+              notes: i.notes,
+              lineTotal: i.quantity * Number(i.unitPrice),
+            })),
+          })),
+          grandTotal,
+          amountPaid,
+          balance: Math.max(0, grandTotal - amountPaid),
+          isPaid: amountPaid >= grandTotal,
+          orderCount: session.orders.length,
+          payments: session.payments.map((p) => ({
+            id: p.id,
+            amount: Number(p.amount),
+            method: p.method,
+            processedAt: p.processedAt,
+          })),
+        },
+      });
+    } catch (err) {
+      logger.error('GET /sessions/:id/bill error', { err });
+      res.status(500).json({ success: false, error: 'Failed to fetch bill' });
+    }
+  },
+);
 
 // Close an active session
 sessionsRouter.patch(
@@ -26,6 +206,7 @@ sessionsRouter.patch(
     'BRANCH_ADMIN',
     'SERVICE',
     'WAITER',
+    'HOST',
   ),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -63,6 +244,110 @@ sessionsRouter.patch(
       }
       logger.error('PATCH /sessions/:id/close error:', err);
       res.status(500).json({ success: false, error: 'Failed to close session' });
+    }
+  },
+);
+
+// Assign a waiter to a session (manual assignment)
+sessionsRouter.patch(
+  '/:id/assign-waiter',
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { waiterId } = z.object({ waiterId: z.string().nullable() }).parse(req.body);
+      const session = await prisma.tableSession.findUnique({
+        where: { id: req.params.id },
+      });
+
+      if (!session) {
+        res.status(404).json({ success: false, error: 'Session not found' });
+        return;
+      }
+
+      if (
+        session.organizationId !== req.user!.organizationId ||
+        session.branchId !== req.branchScope
+      ) {
+        res.status(403).json({ success: false, error: 'Access denied' });
+        return;
+      }
+
+      if (waiterId) {
+        const waiter = await prisma.user.findFirst({
+          where: {
+            id: waiterId,
+            organizationId: req.user!.organizationId,
+            branchId: req.branchScope!,
+            isActive: true,
+          },
+        });
+
+        if (!waiter) {
+          res.status(400).json({ success: false, error: 'Invalid waiter' });
+          return;
+        }
+      }
+
+      await (prisma.tableSession as any).update({
+        where: { id: req.params.id },
+        data: {
+          assignedWaiterId: waiterId,
+          assignedWaiterAt: waiterId ? new Date() : null,
+        },
+      });
+
+      res.json({ success: true });
+    } catch (err: unknown) {
+      if (err instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+        return;
+      }
+      logger.error('PATCH /sessions/:id/assign-waiter error:', err);
+      res.status(500).json({ success: false, error: 'Failed to assign waiter' });
+    }
+  },
+);
+
+// Claim a table session (for Waiter Dashboard)
+sessionsRouter.patch(
+  '/:id/claim',
+  requireRole('WAITER', 'ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const session = await prisma.tableSession.findUnique({
+        where: { id: req.params.id },
+      });
+
+      if (!session) {
+        res.status(404).json({ success: false, error: 'Session not found' });
+        return;
+      }
+
+      if (
+        session.organizationId !== req.user!.organizationId ||
+        session.branchId !== req.branchScope
+      ) {
+        res.status(403).json({ success: false, error: 'Access denied' });
+        return;
+      }
+
+      const { claimTableSession } = await import('../services/waiterAssignment');
+      const result = await claimTableSession(
+        req.user!.userId,
+        session.tableId,
+        session.id,
+        session.branchId,
+      );
+
+      if (!result.success) {
+        res.status(400).json({ success: false, error: result.error });
+        return;
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      logger.error('PATCH /sessions/:id/claim error:', err);
+      res.status(500).json({ success: false, error: 'Failed to claim session' });
     }
   },
 );

@@ -18,8 +18,14 @@ const pwaPlugin: any = VitePWA({
       { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
     ],
   },
+  devOptions: {
+    enabled: true,
+    type: 'module',
+  },
   workbox: {
     globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+    navigateFallback: 'index.html',
+    navigateFallbackAllowlist: [/^\/menu\/.*$/, /^\/order\/.*$/],
     runtimeCaching: [
       {
         urlPattern: /^https:\/\/.*\/api\/menu\/public\/.*/i,

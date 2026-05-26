@@ -80,6 +80,18 @@ export async function closeSession(
   if (!session) throw new Error('Session not found');
   if (session.closedAt) throw new Error('Session already closed');
 
+  // Find all pending tasks for this TABLE before resolving them
+  const [waiterCalls, serviceRequests] = await Promise.all([
+    prisma.waiterCall.findMany({
+      where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
+      select: { id: true },
+    }),
+    prisma.serviceRequest.findMany({
+      where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
+      select: { id: true },
+    }),
+  ]);
+
   await prisma.$transaction([
     (prisma as any).tableSession.update({
       where: { id: sessionId },
@@ -89,18 +101,45 @@ export async function closeSession(
       where: { id: session.tableId },
       data: { status: nextStatus, activeSessionId: null } as any,
     }),
+    // Resolve all pending waiter calls for this TABLE (not just session) to be safe
+    prisma.waiterCall.updateMany({
+      where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
+      data: { status: 'RESOLVED', resolvedAt: new Date(), resolvedBy: closedByUserId },
+    }),
+    // Resolve all pending service requests for this TABLE (not just session) to be safe
+    prisma.serviceRequest.updateMany({
+      where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
+      data: { status: 'RESOLVED', resolvedAt: new Date(), resolvedBy: closedByUserId },
+    }),
   ]);
 
-  io.to(`${session.organizationId}:${session.branchId}`).emit('SESSION_CLOSED', {
+  const orgBranch = `${session.organizationId}:${session.branchId}`;
+
+  // Emit resolution events for each task so they disappear from waiter dashboards
+  waiterCalls.forEach((call) => {
+    io.to(orgBranch).emit('WAITER_CALL_UPDATED', { id: call.id, status: 'RESOLVED' });
+  });
+  serviceRequests.forEach((req) => {
+    io.to(orgBranch).emit('SERVICE_REQUEST_UPDATED', { id: req.id, status: 'RESOLVED' });
+  });
+
+  io.to(orgBranch).emit('SESSION_CLOSED', {
     sessionId,
     tableId: session.tableId,
     branchId: session.branchId,
     closedAt: new Date(),
   });
-  io.to(`${session.organizationId}:${session.branchId}`).emit('TABLE_STATUS_CHANGED', {
+  io.to(orgBranch).emit('TABLE_STATUS_CHANGED', {
     tableId: session.tableId,
     status: nextStatus,
     branchId: session.branchId,
+  });
+
+  // Global sync signal for the branch
+  io.to(orgBranch).emit('SYNC_REQUIRED', {
+    type: 'SESSION_CLOSED',
+    tableId: session.tableId,
+    sessionId,
   });
 
   logger.info('Table session closed', { sessionId, tableId: session.tableId });

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useApi, useAuth } from '../context/auth';
+import { useSocket } from '../context/socket';
 import { ConfirmDialog, showToast } from '../components/Popup';
 
 interface Table {
@@ -11,6 +12,14 @@ interface Table {
   branchId: string | null;
   status: string;
   activeSessionId: string | null;
+  activeSession?: {
+    id: string;
+    assignedWaiter?: {
+      id: string;
+      name: string;
+      staffCode?: string | null;
+    } | null;
+  } | null;
   sectionId: string | null;
   section: { id: string; name: string; colour: string | null } | null;
 }
@@ -30,11 +39,19 @@ const PWA_URL =
 export function TablesPage() {
   const { user } = useAuth();
   const api = useApi();
+  const { socket } = useSocket();
   const [tables, setTables] = useState<Table[]>([]);
-  const [, setSections] = useState<{ id: string; name: string }[]>([]);
+  const [sections, setSections] = useState<{ id: string; name: string }[]>([]);
   const [qrCodes, setQrCodes] = useState<QREntry[]>([]);
   const [qrCardCache, setQrCardCache] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+
+  const [staffList, setStaffStaffList] = useState<any[]>([]);
+  const [assignModal, setAssignModal] = useState<{ sessionId: string; tableLabel: string } | null>(
+    null,
+  );
+  const [assigning, setAssigning] = useState(false);
+
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({ label: '', number: '', sectionId: '' });
   const [editingTableId, setEditingTableId] = useState<string | null>(null);
@@ -93,9 +110,20 @@ export function TablesPage() {
       setLoading(false);
       return;
     }
-    const [res, secRes] = await Promise.all([api.get('/api/tables'), api.get('/api/sections')]);
+    const [res, secRes, staffRes] = await Promise.all([
+      api.get('/api/tables'),
+      api.get('/api/sections'),
+      api.get('/api/users'),
+    ]);
     if (res.success) setTables(res.data);
     if (secRes.success) setSections(secRes.data);
+    if (staffRes.success) {
+      setStaffStaffList(
+        staffRes.data.filter(
+          (u: any) => ['WAITER', 'SERVICE', 'CASHIER', 'HOST'].includes(u.role) && u.isActive,
+        ),
+      );
+    }
     setLoading(false);
   }, [api]);
 
@@ -110,6 +138,83 @@ export function TablesPage() {
     const t = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(t);
   }, [load]);
+
+  // Real-time updates
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleTableStatusChanged = ({ tableId, status }: { tableId: string; status: string }) => {
+      setTables((prev) => prev.map((t) => (t.id === tableId ? { ...t, status } : t)));
+    };
+
+    const handleSessionOpened = ({
+      tableId,
+      sessionId,
+    }: {
+      tableId: string;
+      sessionId: string;
+    }) => {
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === tableId ? { ...t, activeSessionId: sessionId, status: 'OCCUPIED' } : t,
+        ),
+      );
+    };
+
+    const handleSessionClosed = ({ tableId }: { tableId: string }) => {
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === tableId ? { ...t, activeSessionId: null, activeSession: null } : t,
+        ),
+      );
+    };
+
+    const handleTableClaimed = ({
+      tableId,
+      waiterId,
+      waiterName,
+      staffCode,
+      sessionId,
+    }: {
+      tableId: string;
+      waiterId: string;
+      waiterName: string;
+      staffCode?: string | null;
+      sessionId: string;
+    }) => {
+      setTables((prev) =>
+        prev.map((t) => {
+          if (t.id === tableId) {
+            return {
+              ...t,
+              activeSessionId: sessionId,
+              activeSession: {
+                id: sessionId,
+                assignedWaiter: {
+                  id: waiterId,
+                  name: waiterName,
+                  staffCode,
+                },
+              },
+            };
+          }
+          return t;
+        }),
+      );
+    };
+
+    socket.on('TABLE_STATUS_CHANGED', handleTableStatusChanged);
+    socket.on('SESSION_OPENED', handleSessionOpened);
+    socket.on('SESSION_CLOSED', handleSessionClosed);
+    socket.on('TABLE_CLAIMED', handleTableClaimed);
+
+    return () => {
+      socket.off('TABLE_STATUS_CHANGED', handleTableStatusChanged);
+      socket.off('SESSION_OPENED', handleSessionOpened);
+      socket.off('SESSION_CLOSED', handleSessionClosed);
+      socket.off('TABLE_CLAIMED', handleTableClaimed);
+    };
+  }, [socket]);
 
   async function saveTable() {
     setSaving(true);
@@ -302,6 +407,24 @@ export function TablesPage() {
     });
   }
 
+  async function assignWaiter(waiterId: string | null) {
+    if (!assignModal) return;
+    setAssigning(true);
+    try {
+      const res = await api.patch(`/api/sessions/${assignModal.sessionId}/assign-waiter`, {
+        waiterId,
+      });
+      if (res.success) {
+        setAssignModal(null);
+        load();
+      } else {
+        showToast(res.error || 'Failed to assign waiter', 'error');
+      }
+    } finally {
+      setAssigning(false);
+    }
+  }
+
   if (loading)
     return (
       <div className="flex items-center justify-center h-48">
@@ -412,6 +535,37 @@ export function TablesPage() {
                   >
                     {t.status}
                   </span>
+                  {t.activeSessionId && (
+                    <div className="mt-1.5">
+                      {t.activeSession?.assignedWaiter ? (
+                        <button
+                          onClick={() =>
+                            setAssignModal({
+                              sessionId: t.activeSessionId!,
+                              tableLabel: t.label,
+                            })
+                          }
+                          className="text-[10px] bg-indigo-500/10 text-indigo-500 hover:bg-indigo-500/20 px-2 py-0.5 rounded-sm font-bold uppercase tracking-wider border border-indigo-500/20 transition-colors"
+                        >
+                          {t.activeSession.assignedWaiter.staffCode
+                            ? `#${t.activeSession.assignedWaiter.staffCode} - ${t.activeSession.assignedWaiter.name}`
+                            : t.activeSession.assignedWaiter.name}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() =>
+                            setAssignModal({
+                              sessionId: t.activeSessionId!,
+                              tableLabel: t.label,
+                            })
+                          }
+                          className="text-[10px] text-[var(--muted)] hover:text-indigo-500 font-bold uppercase border border-dashed border-[var(--border)] px-2 py-0.5 rounded-sm transition-colors"
+                        >
+                          + Staff
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </td>
                 <td>
                   <div className="flex items-center gap-2">
@@ -593,6 +747,74 @@ export function TablesPage() {
         </div>
       )}
 
+      {assignModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in">
+          <div
+            className="card w-full max-w-sm p-6 space-y-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-2xl text-[var(--text)] uppercase tracking-tight">
+                Assign Staff
+              </h3>
+              <button
+                onClick={() => setAssignModal(null)}
+                className="text-[var(--muted)] hover:text-[var(--text)] text-xl"
+              >
+                ×
+              </button>
+            </div>
+
+            <p className="text-sm text-[var(--muted)] leading-relaxed">
+              Manually assign a staff member to{' '}
+              <span className="text-[var(--text)] font-bold">{assignModal.tableLabel}</span> for the
+              current active session.
+            </p>
+
+            <div className="space-y-2 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
+              <button
+                onClick={() => assignWaiter(null)}
+                disabled={assigning}
+                className="w-full text-left p-3 rounded-sm border border-[var(--border)] hover:border-[var(--danger)] hover:bg-[var(--danger)]/5 text-[var(--danger)] text-xs font-bold uppercase tracking-widest transition-all"
+              >
+                Remove Current Assignment
+              </button>
+              <div className="h-px bg-[var(--border)] my-4 opacity-50" />
+              {staffList.map((staff) => (
+                <button
+                  key={staff.id}
+                  disabled={assigning}
+                  onClick={() => assignWaiter(staff.id)}
+                  className="w-full text-left p-3 rounded-sm border border-[var(--border)] hover:border-[var(--accent)] hover:bg-[var(--accent)]/5 transition-all group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-sm text-[var(--text)] group-hover:text-[var(--accent)] transition-colors">
+                        {staff.name}
+                      </div>
+                      <div className="text-[10px] text-[var(--muted)] uppercase tracking-widest mt-0.5">
+                        {staff.role}
+                      </div>
+                    </div>
+                    <div className="w-2 h-2 rounded-full bg-[var(--border)] group-hover:bg-[var(--accent)] transition-colors" />
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="pt-2">
+              <button
+                onClick={() => setAssignModal(null)}
+                className="w-full btn btn-secondary py-3 text-xs font-bold uppercase tracking-widest"
+                disabled={assigning}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add Table Modal */}
       {modal && (
         <div
@@ -625,6 +847,22 @@ export function TablesPage() {
                 onChange={(e) => setForm({ ...form, label: e.target.value })}
                 placeholder="e.g. Table 1 / Bar Seat A"
               />
+            </div>
+            <div>
+              <label htmlFor="table_form_section">Section</label>
+              <select
+                id="table_form_section"
+                name="sectionId"
+                value={form.sectionId}
+                onChange={(e) => setForm({ ...form, sectionId: e.target.value })}
+              >
+                <option value="">No Section (Unassigned)</option>
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
             </div>
             {error && <p className="text-red-400 text-sm">{error}</p>}
             <div className="flex gap-2">

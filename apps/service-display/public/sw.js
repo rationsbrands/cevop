@@ -66,19 +66,39 @@ self.addEventListener('push', (event) => {
   const body = data && typeof data.body === 'string' ? data.body : '';
   const url = data && typeof data.url === 'string' ? data.url : '/';
   const tag = data && typeof data.tag === 'string' ? data.tag : undefined;
+  const type = data && typeof data.type === 'string' ? data.type : 'GENERIC';
 
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      tag,
-      data: { url },
-    }),
-  );
+  const options = {
+    body,
+    tag,
+    data: { url, type },
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    vibrate: [200, 100, 200, 100, 400], // High-priority double pulse
+    requireInteraction: true, // Keep notification visible until dismissed
+    actions: [],
+  };
+
+  // Add contextual actions for lock-screen efficiency
+  if (type === 'WAITER_CALL' || type === 'SERVICE_REQUEST') {
+    options.actions.push({ action: 'claim', title: 'Claim Table' });
+  }
+
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  const url = event.notification?.data?.url || '/';
+  const { notification, action } = event;
+  notification.close();
+
+  const url = notification.data?.url || '/';
+  const type = notification.data?.type;
+
+  // Handle background actions without opening the app if possible
+  if (action === 'claim' && type) {
+    // In a real production app, we would use fetch() here to call a "background claim" API
+    // For now, we'll open the app to handle the claim logic
+  }
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsArr) => {

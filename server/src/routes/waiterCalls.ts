@@ -81,6 +81,11 @@ waiterCallsRouter.post('/public', async (req: Request, res: Response) => {
         include: { table: true, assignedUser: { select: { id: true, name: true } } },
       });
 
+      if (sessionId) {
+        const { claimTableSession } = await import('../services/waiterAssignment');
+        await claimTableSession(assignedWaiterId, table.id, sessionId, actualBranchId);
+      }
+
       // Notify the assigned waiter directly
       io.to(`waiter:${assignedWaiterId}`).emit('TASK_ASSIGNED', {
         type: 'WAITER_CALL',
@@ -103,6 +108,8 @@ waiterCallsRouter.post('/public', async (req: Request, res: Response) => {
         org.whatsappNumber || undefined,
         org.slackWebhook || undefined,
         org.plan,
+        actualBranchId,
+        table.organizationId,
       ).catch(() => {});
 
     notifyStaffWebPush({
@@ -175,6 +182,8 @@ waiterCallsRouter.patch(
     'BRANCH_ADMIN',
     'WAITER',
     'SERVICE',
+    'CASHIER',
+    'HOST',
   ),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -255,14 +264,30 @@ waiterCallsRouter.patch(
         status: 'PENDING',
       };
 
-      const result = await prisma.waiterCall.updateMany({
-        where,
-        data: { assignedTo: req.user!.userId, assignedAt: new Date() },
-      });
-      if (result.count === 0) {
+      const callToClaim = await prisma.waiterCall.findFirst({ where });
+      if (!callToClaim) {
         res.status(404).json({ success: false, error: 'Task not found or already assigned' });
         return;
       }
+
+      if (callToClaim.sessionId) {
+        const { claimTableSession } = await import('../services/waiterAssignment');
+        const claimResult = await claimTableSession(
+          req.user!.userId,
+          callToClaim.tableId,
+          callToClaim.sessionId,
+          callToClaim.branchId,
+        );
+        if (!claimResult.success && claimResult.error?.startsWith('LIMIT_REACHED')) {
+          res.status(400).json({ success: false, error: claimResult.error });
+          return;
+        }
+      }
+
+      await prisma.waiterCall.updateMany({
+        where,
+        data: { assignedTo: req.user!.userId, assignedAt: new Date() },
+      });
 
       const updated = await prisma.waiterCall.findFirst({
         where: { id: req.params.id, organizationId: req.user!.organizationId },
@@ -288,7 +313,16 @@ waiterCallsRouter.patch(
 
 waiterCallsRouter.patch(
   '/:id/assign',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'SUPERADMIN', 'SERVICE'),
+  requireRole(
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'BRANCH_ADMIN',
+    'SUPERADMIN',
+    'SERVICE',
+    'HOST',
+    'CASHIER',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const { waiterId } = z.object({ waiterId: z.string().nullable() }).parse(req.body);
@@ -356,7 +390,16 @@ waiterCallsRouter.patch(
 // GET /api/waiter-calls/waiters/online — get online waiters for this branch
 waiterCallsRouter.get(
   '/waiters/online',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'SUPERADMIN', 'SERVICE'),
+  requireRole(
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'BRANCH_ADMIN',
+    'SUPERADMIN',
+    'SERVICE',
+    'HOST',
+    'CASHIER',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const { getWaiterAvailability } = await import('../services/waiterAssignment');

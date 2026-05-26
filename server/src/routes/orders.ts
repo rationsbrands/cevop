@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import {
   authenticate,
+  optionalAuthenticate,
   requireRole,
   requireBranchAccess,
   requireBranchSelected,
@@ -40,8 +41,9 @@ const createOrderSchema = z.object({
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Create order (from customer PWA)
-ordersRouter.post('/public', async (req: Request, res: Response) => {
+ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Response) => {
   try {
+    logger.debug('POST /orders/public payload', { body: req.body });
     const data = createOrderSchema.parse(req.body);
 
     const [existing, table] = await Promise.all([
@@ -101,51 +103,101 @@ ordersRouter.post('/public', async (req: Request, res: Response) => {
       return;
     }
 
+    // Fetch the branch to check useOrgMenu setting
+    const branch = await prisma.branch.findFirst({
+      where: { id: actualBranchId as string, organizationId: actualOrgId, isActive: true },
+      select: { useOrgMenu: true },
+    });
+
+    const branchFilter =
+      branch?.useOrgMenu || !actualBranchId
+        ? { OR: [{ branchId: actualBranchId }, { branchId: null }] }
+        : { branchId: actualBranchId };
+
     const menuItemIds = data.items.map((i) => i.menuItemId);
     const menuItems = await prisma.menuItem.findMany({
       where: {
         id: { in: menuItemIds },
         organizationId: actualOrgId,
-        branchId: actualBranchId,
         isAvailable: true,
+        ...branchFilter,
       },
-      select: { id: true, price: true },
+      select: { id: true, price: true, name: true },
     });
 
     if (menuItems.length !== menuItemIds.length) {
-      res.status(400).json({ success: false, error: 'One or more items are unavailable' });
+      const foundIds = new Set(menuItems.map((m) => m.id));
+      const missing = data.items.find((i) => !foundIds.has(i.menuItemId));
+      res.status(400).json({
+        success: false,
+        error: `Item "${missing?.menuItemId || 'unknown'}" is unavailable or does not belong to this branch.`,
+      });
       return;
     }
 
-    type MenuItemLike = { id: string; price: Prisma.Decimal };
+    type MenuItemLike = { id: string; price: Prisma.Decimal; name: string };
     const itemMap = new Map<string, MenuItemLike>(menuItems.map((m) => [m.id, m]));
     let total = 0;
     const orderItems = data.items.map((item) => {
       const menuItem = itemMap.get(item.menuItemId)!;
       const unitPrice = Number(menuItem.price);
       total += unitPrice * item.quantity;
-      return { menuItemId: item.menuItemId, quantity: item.quantity, unitPrice, notes: item.notes };
+      return {
+        menuItemId: item.menuItemId,
+        quantity: item.quantity,
+        unitPrice: unitPrice, // Prisma accepts numbers for Decimal
+        notes: item.notes || null,
+      };
     });
 
-    const sessionId = await getOrCreateSession(
-      actualTableId,
-      actualOrgId as string,
-      actualBranchId,
-    );
+    const sessionId = await getOrCreateSession(actualTableId, actualOrgId, actualBranchId);
+
+    if (!sessionId) {
+      res.status(400).json({
+        success: false,
+        error: 'Could not create table session. Please ensure the table belongs to a valid branch.',
+      });
+      return;
+    }
+
+    // Check if the table session is already claimed by a waiter
+    const session = await prisma.tableSession.findUnique({
+      where: { id: sessionId },
+      select: { assignedWaiterId: true },
+    });
+
+    // If the person placing the order is a Waiter, THEY claim the table (or keep it if it's them)
+    // Otherwise, use whoever is currently assigned.
+    const finalWaiterId =
+      (req as any).user?.role === 'WAITER'
+        ? (req as any).user.userId
+        : session?.assignedWaiterId || null;
 
     const order = (await prisma.order.create({
       data: {
-        organizationId: actualOrgId as string,
+        organizationId: actualOrgId,
         branchId: actualBranchId,
         tableId: actualTableId,
         sessionId,
         idempotencyKey: data.idempotencyKey,
-        total,
-        notes: data.notes,
+        total: Number(total.toFixed(2)), // Prisma accepts numbers for Decimal
+        notes: data.notes || null,
         items: { create: orderItems },
+        ...(finalWaiterId ? { assignedWaiter: finalWaiterId, assignedWaiterAt: new Date() } : {}),
       } as any,
       include: { items: { include: { menuItem: true } }, table: true },
     })) as any;
+
+    if (finalWaiterId) {
+      const { claimTableSession } = await import('../services/waiterAssignment');
+      await claimTableSession(finalWaiterId, actualTableId, sessionId, actualBranchId).catch(
+        (err) => {
+          logger.warn('Failed to auto-claim table session during order creation', {
+            err: err.message,
+          });
+        },
+      );
+    }
 
     io.to(`${actualOrgId}:${actualBranchId}`).emit('ORDER_CREATED', order);
     io.to(`order:${order.id}`).emit('ORDER_UPDATED', order);
@@ -175,6 +227,8 @@ ordersRouter.post('/public', async (req: Request, res: Response) => {
         org.slackWebhook,
         org.plan,
         org.currency ?? 'NGN',
+        actualBranchId as string,
+        actualOrgId,
       );
     }
   } catch (err: unknown) {
@@ -182,8 +236,10 @@ ordersRouter.post('/public', async (req: Request, res: Response) => {
       res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
       return;
     }
+
+    const message = err instanceof Error ? err.message : 'Failed to place order';
     logger.error('POST /orders/public error:', err);
-    res.status(500).json({ success: false, error: 'Failed to place order' });
+    res.status(400).json({ success: false, error: message });
   }
 });
 
@@ -216,7 +272,16 @@ ordersRouter.use(authenticate, requireBranchAccess);
 // ORG-WIDE ANALYTICS
 ordersRouter.get(
   '/analytics/org-dashboard',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'ORG_FINANCE', 'ORG_AUDITOR', 'SUPERADMIN'),
+  requireRole(
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'ORG_FINANCE',
+    'ORG_AUDITOR',
+    'SUPERADMIN',
+    'CASHIER',
+    'HOST',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const orgId = req.user!.organizationId;
@@ -340,6 +405,8 @@ ordersRouter.get(
     'SUPERADMIN',
     'BRANCH_ADMIN',
     'BRANCH_FINANCE',
+    'CASHIER',
+    'HOST',
   ),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -622,6 +689,8 @@ ordersRouter.patch(
     'SERVICE',
     'WAITER',
     'KITCHEN',
+    'HOST',
+    'CASHIER',
   ),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -701,6 +770,14 @@ ordersRouter.patch(
 
       io.to(`${req.user!.organizationId}:${finalOrder.branchId}`).emit('ORDER_UPDATED', finalOrder);
       io.to(`order:${finalOrder.id}`).emit('ORDER_UPDATED', finalOrder);
+
+      // Emit sync signal for status changes
+      io.to(`${req.user!.organizationId}:${finalOrder.branchId}`).emit('SYNC_REQUIRED', {
+        type: 'ORDER_STATUS_CHANGED',
+        orderId: finalOrder.id,
+        status,
+      });
+
       analyticsCache.delete(`${req.user!.organizationId}:${req.branchScope || 'all'}`);
 
       res.json({ success: true, data: finalOrder });
@@ -754,6 +831,16 @@ ordersRouter.patch(
 
       if (!updated) return res.status(404).json({ success: false, error: 'Order not found' });
 
+      if (updated.sessionId && updated.tableId && updated.branchId) {
+        const { claimTableSession } = await import('../services/waiterAssignment');
+        await claimTableSession(
+          req.user!.userId,
+          updated.tableId,
+          updated.sessionId,
+          updated.branchId,
+        );
+      }
+
       io.to(`${req.user!.organizationId}:${updated.branchId}`).emit('TASK_CLAIMED', {
         type: 'ORDER_READY',
         task: updated,
@@ -771,7 +858,16 @@ ordersRouter.patch(
 // Assign Waiter
 ordersRouter.patch(
   '/:id/assign-waiter',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'SUPERADMIN', 'SERVICE'),
+  requireRole(
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'BRANCH_ADMIN',
+    'SUPERADMIN',
+    'SERVICE',
+    'HOST',
+    'CASHIER',
+  ),
   async (req: AuthRequest, res: Response) => {
     try {
       const { waiterId } = z.object({ waiterId: z.string().nullable() }).parse(req.body);
@@ -833,6 +929,7 @@ ordersRouter.patch(
     'SERVICE',
     'SUPERADMIN',
     'KITCHEN',
+    'HOST',
   ),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -860,7 +957,11 @@ ordersRouter.patch(
 
       await (prisma.orderItem as any).update({
         where: { id: item.id },
-        data: { cancelledAt: new Date(), cancelReason: reason || 'Item unavailable' },
+        data: {
+          cancelledAt: new Date(),
+          cancelReason: reason || 'Item unavailable',
+          cancelledBy: req.user!.userId,
+        },
       });
 
       const remainingItems = order.items.filter(
@@ -911,7 +1012,7 @@ ordersRouter.use(requireBranchSelected);
 
 ordersRouter.get(
   '/stale',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN', 'HOST'),
   async (req: AuthRequest, res: Response) => {
     try {
       const { minAgeMinutes, status, limit, cursor } = z
@@ -971,9 +1072,120 @@ ordersRouter.get(
   },
 );
 
+// ─── POST /api/orders (Staff POS Flow) ──────────────────────────────────────────────────────────
+// Placed by a waiter/admin on behalf of a customer.
+ordersRouter.post(
+  '/',
+  requireRole('WAITER', 'ADMIN', 'ORG_OWNER', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { tableId, items, notes } = z
+        .object({
+          tableId: z.string(),
+          notes: z.string().optional(),
+          items: z
+            .array(
+              z.object({
+                menuItemId: z.string(),
+                quantity: z.number().int().positive(),
+                notes: z.string().optional(),
+              }),
+            )
+            .min(1),
+        })
+        .parse(req.body);
+
+      const orgId = req.user!.organizationId;
+      const branchId = req.branchScope!;
+
+      const table = await prisma.table.findUnique({
+        where: { id: tableId, organizationId: orgId, branchId },
+      });
+      if (!table) {
+        res.status(404).json({ success: false, error: 'Table not found' });
+        return;
+      }
+
+      // Calculate total
+      const itemIds = items.map((i) => i.menuItemId);
+      const menuItems = await prisma.menuItem.findMany({
+        where: { id: { in: itemIds }, organizationId: orgId, isAvailable: true },
+      });
+
+      if (menuItems.length !== itemIds.length) {
+        res.status(400).json({ success: false, error: 'One or more items are invalid' });
+        return;
+      }
+
+      type MenuItemLike = { id: string; price: any };
+      const itemMap = new Map<string, MenuItemLike>(menuItems.map((m) => [m.id, m]));
+      let total = 0;
+      const orderItems = items.map((item) => {
+        const menuItem = itemMap.get(item.menuItemId)!;
+        const unitPrice = Number(menuItem.price);
+        total += unitPrice * item.quantity;
+        return {
+          menuItemId: item.menuItemId,
+          quantity: item.quantity,
+          unitPrice,
+          notes: item.notes,
+        };
+      });
+
+      const { getOrCreateSession } = await import('../services/tableSession');
+      const sessionId = await getOrCreateSession(table.id, orgId, branchId);
+      if (!sessionId) {
+        res.status(400).json({ success: false, error: 'Could not create table session' });
+        return;
+      }
+
+      // Claim table session for the waiter
+      const { claimTableSession } = await import('../services/waiterAssignment');
+      await claimTableSession(req.user!.userId, table.id, sessionId, branchId);
+
+      const order = await prisma.order.create({
+        data: {
+          organizationId: orgId,
+          branchId,
+          tableId,
+          sessionId,
+          idempotencyKey: 'manual-' + Date.now() + '-' + Math.random().toString().substring(2, 8),
+          total,
+          notes,
+          items: { create: orderItems },
+          assignedWaiter: req.user!.userId,
+          assignedWaiterAt: new Date(),
+        },
+        include: { items: { include: { menuItem: true } }, table: true },
+      });
+
+      const { io } = await import('../index');
+      io.to(`${orgId}:${branchId}`).emit('ORDER_CREATED', order);
+      io.to(`order:${order.id}`).emit('ORDER_UPDATED', order);
+
+      // Notify kitchen/service
+      const { notifyStaffWebPush } = await import('../services/notifications');
+      notifyStaffWebPush({
+        organizationId: orgId,
+        branchId,
+        roles: ['KITCHEN', 'SERVICE'],
+        title: 'New Manual Order',
+        body: `${table.label || 'Table'} — #${String(order.id).slice(-6).toUpperCase()}`,
+        url: '/',
+        tag: `order:${order.id}`,
+      }).catch(() => {});
+
+      res.status(201).json({ success: true, data: order });
+    } catch (err: any) {
+      logger.error('POST /orders (Staff) error', { error: err });
+      res.status(500).json({ success: false, error: 'Failed to place order' });
+    }
+  },
+);
+
 ordersRouter.post(
   '/reconcile',
-  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN'),
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN', 'BRANCH_ADMIN', 'HOST'),
   async (req: AuthRequest, res: Response) => {
     try {
       const { orderIds, action, reason } = z

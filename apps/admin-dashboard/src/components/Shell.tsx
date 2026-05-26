@@ -18,6 +18,7 @@ import {
   IconChevronLeft,
   IconX,
   IconOverview,
+  IconCashier,
 } from './Icons';
 
 interface BranchOption {
@@ -76,7 +77,13 @@ export function Shell() {
     'ORG_AUDITOR',
     'SUPERADMIN',
   ].includes(role);
-  const canViewOrders = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(role);
+  const canViewOrders = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'HOST'].includes(
+    role,
+  );
+  const canViewFloor = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'HOST'].includes(role);
+  const canViewCashier = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER'].includes(
+    role,
+  );
 
   useEffect(() => {
     const updateInstallState = () => {
@@ -132,19 +139,25 @@ export function Shell() {
   const NAV = [
     { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true, show: true },
     { to: '/orders', label: 'Orders', Icon: IconOrders, show: canViewOrders && hasBranchContext },
+    {
+      to: '/cashier',
+      label: 'Cashier',
+      Icon: IconCashier,
+      show: canViewCashier && hasBranchContext,
+    },
     { to: '/reports', label: 'Reports', Icon: IconOverview, show: canViewReports },
     { to: '/menu', label: 'Menu', Icon: IconMenu, show: canManageOperations && hasBranchContext },
     {
       to: '/sections',
       label: 'Sections',
       Icon: IconSections,
-      show: canManageOperations && hasBranchContext,
+      show: canViewFloor && hasBranchContext,
     },
     {
       to: '/tables',
       label: 'Tables & QR',
       Icon: IconTables,
-      show: canManageOperations && hasBranchContext,
+      show: canViewFloor && hasBranchContext,
     },
     { to: '/users', label: 'Staff', Icon: IconStaff, show: canManageStaff },
     {
@@ -221,7 +234,7 @@ export function Shell() {
       {/* Mobile Backdrop */}
       {mobileMenuOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden backdrop-blur-sm"
+          className="fixed inset-0 bg-black/50 z-[45] lg:hidden backdrop-blur-sm"
           onClick={() => setMobileMenuOpen(false)}
         />
       )}
@@ -229,7 +242,7 @@ export function Shell() {
       {/* Sidebar */}
       <aside
         className={`
-        fixed inset-y-0 left-0 z-50 lg:static
+        fixed inset-y-0 left-0 z-[50] lg:static
         ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         ${mobileMenuOpen || sidebarOpen ? 'w-64' : 'w-16'}
         shrink-0 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col transition-all duration-300 overflow-hidden
@@ -265,13 +278,16 @@ export function Shell() {
         {/* Branch selector for org admins */}
         {(sidebarOpen || mobileMenuOpen) && isOrgWideRole && branches.length > 0 && (
           <div className="mx-3 mt-4">
-            <label htmlFor="admin_active_branch_filter" className="text-[10px] mb-1">
+            <label
+              htmlFor="admin_active_branch_filter"
+              className="text-[10px] mb-1 uppercase font-bold tracking-widest text-[var(--muted)]"
+            >
               Active Branch
             </label>
             <select
               id="admin_active_branch_filter"
               name="activeBranchId"
-              className="w-full bg-[var(--surface2)] border-[var(--border)] text-xs py-1.5"
+              className="w-full bg-[var(--surface2)] border border-[var(--border)] text-xs py-2 px-2 rounded-lg outline-none focus:border-[var(--accent)] transition-all"
               value={activeBranchFilter?.id ?? ''}
               onChange={(e) =>
                 setActiveBranchFilter(branches.find((b) => b.id === e.target.value) ?? null)
@@ -297,9 +313,9 @@ export function Shell() {
               end={exact}
               onClick={() => setMobileMenuOpen(false)}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 text-sm transition-all duration-150 rounded-sm ${
+                `flex items-center gap-3 px-3 py-2.5 text-sm transition-all duration-150 rounded-lg ${
                   isActive
-                    ? 'bg-[var(--accent-dim)] text-[var(--accent)] font-semibold'
+                    ? 'bg-[var(--accent-dim)] text-[var(--accent)] font-semibold shadow-sm'
                     : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface2)]'
                 }`
               }
@@ -308,7 +324,7 @@ export function Shell() {
                 <NavIcon size={18} />
               </span>
               {(sidebarOpen || mobileMenuOpen) && (
-                <span className="whitespace-nowrap">{label}</span>
+                <span className="whitespace-nowrap font-medium">{label}</span>
               )}
             </NavLink>
           ))}
@@ -325,7 +341,7 @@ export function Shell() {
               <div className="flex items-center gap-2 px-1">
                 <button
                   onClick={() => setMode(nextThemeMode)}
-                  className={`w-10 h-10 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
+                  className={`w-9 h-9 rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
                     mode === 'system'
                       ? 'bg-[var(--surface2)] border-[var(--border)] text-[var(--text)] shadow-sm'
                       : mode === 'dark'
@@ -345,7 +361,7 @@ export function Shell() {
           ) : (
             <button
               onClick={() => setMode(nextThemeMode)}
-              className={`w-10 h-10 mx-auto rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
+              className={`w-9 h-9 mx-auto rounded-full border flex items-center justify-center transition-colors text-[10px] font-bold tracking-widest ${
                 mode === 'system'
                   ? 'bg-[var(--surface2)] border-[var(--border)] text-[var(--text)] shadow-sm'
                   : mode === 'dark'
@@ -364,7 +380,7 @@ export function Shell() {
             <div className="pt-2 border-t border-[var(--border)] mt-2">
               <div className="px-3 mb-3">
                 <p className="text-xs text-[var(--text)] font-bold truncate">{user?.name}</p>
-                <p className="text-[10px] text-[var(--muted)] uppercase tracking-wider">
+                <p className="text-[10px] text-[var(--muted)] uppercase tracking-wider font-medium">
                   {[
                     'ORG_OWNER',
                     'ADMIN',
@@ -383,7 +399,7 @@ export function Shell() {
               </div>
               <button
                 onClick={handleLogout}
-                className="flex items-center gap-3 px-3 py-2 text-sm text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors w-full rounded-sm"
+                className="flex items-center gap-3 px-3 py-2 text-sm text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors w-full rounded-lg font-bold"
               >
                 <IconLogout size={16} />
                 <span>Sign out</span>
@@ -403,11 +419,11 @@ export function Shell() {
       {/* Main content */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[var(--bg)]">
         {/* Top bar */}
-        <header className="h-14 flex items-center px-4 lg:px-6 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 justify-between sticky top-0 z-30">
+        <header className="h-14 flex items-center px-4 lg:px-6 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 justify-between sticky top-0 z-[40]">
           <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 -ml-2 text-[var(--text)]"
+              className="lg:hidden p-2 -ml-2 text-[var(--text)] hover:bg-[var(--surface2)] rounded-lg transition-colors"
             >
               <svg
                 width="20"
@@ -415,7 +431,7 @@ export function Shell() {
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2"
+                strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
@@ -428,14 +444,14 @@ export function Shell() {
             <div className="flex items-center gap-2 text-sm min-w-0">
               <NavLink
                 to="/"
-                className="font-bold text-[var(--text)] truncate hover:text-[var(--accent)] transition-colors"
+                className="font-bold text-[var(--text)] truncate hover:text-[var(--accent)] transition-colors uppercase tracking-tight"
               >
                 {user?.organization?.name}
               </NavLink>
               {(activeBranchFilter || isBranchScoped) && (
                 <>
                   <span className="text-[var(--muted)] opacity-50">/</span>
-                  <span className="text-[var(--accent)] font-semibold truncate">
+                  <span className="text-[var(--accent)] font-bold truncate uppercase tracking-tight">
                     {isBranchScoped ? user?.branch?.name : activeBranchFilter?.name}
                   </span>
                 </>
@@ -445,15 +461,18 @@ export function Shell() {
 
           <div className="flex items-center gap-4 shrink-0">
             {installAvailable && (
-              <button className="btn btn-secondary btn-sm" onClick={handleInstall}>
+              <button
+                className="hidden sm:block btn btn-secondary btn-sm font-bold tracking-widest text-[10px]"
+                onClick={handleInstall}
+              >
                 INSTALL
               </button>
             )}
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-[var(--surface2)] border border-[var(--border)]">
               <div
-                className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`}
+                className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.5)]' : 'bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.5)]'}`}
               />
-              <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">
+              <span className="text-[9px] font-black text-[var(--text)] uppercase tracking-widest">
                 {connected ? 'Live' : 'Offline'}
               </span>
             </div>

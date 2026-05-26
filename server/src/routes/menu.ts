@@ -1,6 +1,5 @@
 import { Router, Response, Request } from 'express';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import {
   authenticate,
@@ -41,21 +40,49 @@ menuRouter.get('/public/:orgId', async (req: Request, res: Response) => {
       }
     }
 
+    // Fetch the branch to check useOrgMenu setting
+    const branch = await prisma.branch.findFirst({
+      where: { id: effectiveBranchId, organizationId, isActive: true },
+      select: { id: true, useOrgMenu: true },
+    });
+
+    if (!branch) {
+      res.status(404).json({ success: false, error: 'Branch not found' });
+      return;
+    }
+
+    // Build the branchId filter based on useOrgMenu setting
+    // useOrgMenu = true  → show org-wide items (branchId null) + branch-specific items
+    // useOrgMenu = false → show ONLY branch-specific items (org-wide suppressed)
+    const branchFilter = branch.useOrgMenu
+      ? { OR: [{ branchId: effectiveBranchId }, { branchId: null }] }
+      : { branchId: effectiveBranchId };
+
     const categories = await prisma.category.findMany({
-      where: { organizationId, isActive: true, branchId: effectiveBranchId },
+      where: {
+        organizationId,
+        isActive: true,
+        ...branchFilter,
+      },
       orderBy: { sortOrder: 'asc' },
       include: {
         menuItems: {
-          where: { isAvailable: true, branchId: effectiveBranchId },
+          where: {
+            isAvailable: true,
+            ...branchFilter,
+          },
           orderBy: { sortOrder: 'asc' },
         },
       },
     });
 
+    // Filter out categories that have no visible items
+    const visibleCategories = categories.filter((c) => c.menuItems.length > 0);
+
     // Cache for 60 seconds in CDN/browser, allow stale for 30 seconds while revalidating
     res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=30');
     res.set('Vary', 'Accept-Encoding');
-    res.json({ success: true, data: categories });
+    res.json({ success: true, data: visibleCategories });
   } catch {
     res.status(500).json({ success: false, error: 'Failed to fetch menu' });
   }
@@ -68,14 +95,18 @@ menuRouter.use(authenticate, requireBranchAccess, requireBranchSelected);
 menuRouter.get('/', async (req: AuthRequest, res: Response) => {
   try {
     const orgId = req.user!.organizationId;
-    const where: Prisma.CategoryWhereInput = { organizationId: orgId, branchId: req.branchScope! };
-
     const categories = await prisma.category.findMany({
-      where,
+      where: {
+        organizationId: orgId,
+        isActive: true,
+        OR: [{ branchId: req.branchScope! }, { branchId: null }],
+      },
       orderBy: { sortOrder: 'asc' },
       include: {
         menuItems: {
-          where: { branchId: req.branchScope! },
+          where: {
+            OR: [{ branchId: req.branchScope! }, { branchId: null }],
+          },
           orderBy: { sortOrder: 'asc' },
         },
       },
@@ -87,6 +118,24 @@ menuRouter.get('/', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// Get categories only
+menuRouter.get('/categories', async (req: AuthRequest, res: Response) => {
+  try {
+    const orgId = req.user!.organizationId;
+    const categories = await prisma.category.findMany({
+      where: {
+        organizationId: orgId,
+        isActive: true,
+        OR: [{ branchId: req.branchScope! }, { branchId: null }],
+      },
+      orderBy: { sortOrder: 'asc' },
+    });
+    res.json({ success: true, data: categories });
+  } catch {
+    res.status(500).json({ success: false, error: 'Failed to fetch categories' });
+  }
+});
+
 // ─── Categories ───────────────────────────────────────────────────────────────
 
 const categorySchema = z.object({
@@ -94,6 +143,7 @@ const categorySchema = z.object({
   description: z.string().optional(),
   sortOrder: z.number().int().default(0),
   isActive: z.boolean().default(true),
+  branchId: z.string().nullable().optional(),
 });
 
 menuRouter.post(
@@ -102,7 +152,10 @@ menuRouter.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const data = categorySchema.parse(req.body);
-      const branchId = req.branchScope!;
+      const isOrgAdmin = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'].includes(
+        req.user!.role,
+      );
+      const branchId = isOrgAdmin && data.branchId === null ? null : req.branchScope!;
 
       const category = await prisma.category.create({
         data: { ...data, branchId, organizationId: req.user!.organizationId },
@@ -135,11 +188,26 @@ menuRouter.put(
         res.status(404).json({ success: false, error: 'Category not found' });
         return;
       }
-      if (req.branchScope && existingCat.branchId !== req.branchScope) {
+      if (
+        req.branchScope &&
+        existingCat.branchId !== req.branchScope &&
+        existingCat.branchId !== null
+      ) {
         res.status(403).json({ success: false, error: 'Access denied' });
         return;
       }
-      if (req.branchScope) {
+
+      const isOrgAdmin = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'].includes(
+        req.user!.role,
+      );
+      if (existingCat.branchId === null && !isOrgAdmin) {
+        res
+          .status(403)
+          .json({ success: false, error: 'Only head office can edit org-wide categories' });
+        return;
+      }
+
+      if (!isOrgAdmin) {
         (data as any).branchId = req.branchScope;
       }
       const category = await prisma.category.update({ where: { id: req.params.id }, data });
@@ -166,8 +234,21 @@ menuRouter.delete(
         res.status(404).json({ success: false, error: 'Category not found' });
         return;
       }
-      if (req.branchScope && existingCat2.branchId !== req.branchScope) {
+      if (
+        req.branchScope &&
+        existingCat2.branchId !== req.branchScope &&
+        existingCat2.branchId !== null
+      ) {
         res.status(403).json({ success: false, error: 'Access denied' });
+        return;
+      }
+      const isOrgAdmin = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'].includes(
+        req.user!.role,
+      );
+      if (existingCat2.branchId === null && !isOrgAdmin) {
+        res
+          .status(403)
+          .json({ success: false, error: 'Only head office can delete org-wide categories' });
         return;
       }
       await prisma.category.delete({ where: { id: req.params.id } });
@@ -252,6 +333,7 @@ const menuItemSchema = z.object({
   image: z.string().url().optional(),
   isAvailable: z.boolean().default(true),
   sortOrder: z.number().int().default(0),
+  branchId: z.string().nullable().optional(),
 });
 
 menuRouter.post(
@@ -260,14 +342,22 @@ menuRouter.post(
   async (req: AuthRequest, res: Response) => {
     try {
       const data = menuItemSchema.parse(req.body);
-      const branchId = req.branchScope!;
+      const isOrgAdmin = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'].includes(
+        req.user!.role,
+      );
+      const branchId = isOrgAdmin && data.branchId === null ? null : req.branchScope!;
 
       const category = await prisma.category.findFirst({
-        where: { id: data.categoryId, organizationId: req.user!.organizationId, branchId },
-        select: { id: true },
+        where: { id: data.categoryId, organizationId: req.user!.organizationId },
+        select: { id: true, branchId: true },
       });
       if (!category) {
         res.status(400).json({ success: false, error: 'Invalid category for this branch' });
+        return;
+      }
+      // If branch is trying to create an item in a category, make sure the category belongs to the branch or is org-wide
+      if (!isOrgAdmin && category.branchId !== branchId && category.branchId !== null) {
+        res.status(400).json({ success: false, error: 'Cannot add item to this category' });
         return;
       }
 
@@ -303,22 +393,37 @@ menuRouter.put(
         res.status(404).json({ success: false, error: 'Item not found' });
         return;
       }
-      if (req.branchScope && existing.branchId !== req.branchScope) {
+      if (req.branchScope && existing.branchId !== req.branchScope && existing.branchId !== null) {
         res.status(403).json({ success: false, error: 'Access denied' });
         return;
       }
-      (data as any).branchId = req.branchScope!;
+
+      const isOrgAdmin = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'].includes(
+        req.user!.role,
+      );
+      if (existing.branchId === null && !isOrgAdmin) {
+        res.status(403).json({ success: false, error: 'Only head office can edit org-wide items' });
+        return;
+      }
+
+      if (!isOrgAdmin) {
+        (data as any).branchId = req.branchScope!;
+      }
+
       if (data.categoryId) {
         const category = await prisma.category.findFirst({
           where: {
             id: data.categoryId,
             organizationId: req.user!.organizationId,
-            branchId: req.branchScope!,
           },
-          select: { id: true },
+          select: { id: true, branchId: true },
         });
         if (!category) {
           res.status(400).json({ success: false, error: 'Invalid category for this branch' });
+          return;
+        }
+        if (!isOrgAdmin && category.branchId !== req.branchScope! && category.branchId !== null) {
+          res.status(400).json({ success: false, error: 'Cannot move item to this category' });
           return;
         }
       }
@@ -403,8 +508,21 @@ menuRouter.delete(
         res.status(404).json({ success: false, error: 'Item not found' });
         return;
       }
-      if (req.branchScope && existingItem.branchId !== req.branchScope) {
+      if (
+        req.branchScope &&
+        existingItem.branchId !== req.branchScope &&
+        existingItem.branchId !== null
+      ) {
         res.status(403).json({ success: false, error: 'Access denied' });
+        return;
+      }
+      const isOrgAdmin = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'SUPERADMIN'].includes(
+        req.user!.role,
+      );
+      if (existingItem.branchId === null && !isOrgAdmin) {
+        res
+          .status(403)
+          .json({ success: false, error: 'Only head office can delete org-wide items' });
         return;
       }
       await prisma.menuItem.delete({ where: { id: req.params.id } });

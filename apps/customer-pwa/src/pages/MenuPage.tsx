@@ -72,6 +72,10 @@ export function MenuPage() {
 
   const paramOrderHistoryKey = `${orgId || ''}:${tableId || ''}`;
   const [tableInfo, setTableInfo] = useState<TableInfo | null>(null);
+  const tableInfoRef = useRef<TableInfo | null>(null);
+  useEffect(() => {
+    tableInfoRef.current = tableInfo;
+  }, [tableInfo]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [helpOptions, setHelpOptions] = useState<HelpOption[]>([]);
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -92,6 +96,8 @@ export function MenuPage() {
   const [cartOpen, setCartOpen] = useState(false);
   const [serviceModal, setServiceModal] = useState(false);
   const [waiterModal, setWaiterModal] = useState(false);
+  const [tabModal, setTabModal] = useState(false);
+  const [fullBill, setFullBill] = useState<any>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -113,6 +119,11 @@ export function MenuPage() {
     }
   });
   const [ordersExpanded, setOrdersExpanded] = useState(false);
+  const [sessionBill, setSessionBill] = useState<{
+    grandTotal: number;
+    orderCount: number;
+    currency: string;
+  } | null>(null);
   const [orderPreviews, setOrderPreviews] = useState<Record<string, OrderPreview | null>>({});
   const [ordersPreviewLoading, setOrdersPreviewLoading] = useState(false);
   const categoryRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -148,6 +159,23 @@ export function MenuPage() {
     setTimeout(() => setToast(null), 3000);
   };
 
+  async function fetchRunningTab(sessionId: string) {
+    try {
+      const res = await fetch(`${CUSTOMER_API_BASE}/api/sessions/public/${sessionId}/bill`);
+      const data = await res.json();
+      if (data.success) {
+        setSessionBill({
+          grandTotal: data.data.grandTotal,
+          orderCount: data.data.orderCount,
+          currency: data.data.currency,
+        });
+        setFullBill(data.data);
+      }
+    } catch {
+      void 0;
+    }
+  }
+
   const closeWaiter = useCallback(() => {
     setWaiterModal(false);
     setWaiterReason('');
@@ -172,6 +200,19 @@ export function MenuPage() {
 
   async function submitBillRequest() {
     if (submitting) return;
+
+    // Check both local active orders and the server-side session bill
+    const hasActiveOrders = activeOrderIds.length > 0;
+    const hasSessionOrders = (sessionBill?.orderCount ?? 0) > 0;
+
+    if (!hasActiveOrders && !hasSessionOrders) {
+      showToast(
+        "You haven't made any orders yet. Please call a waiter if you need assistance.",
+        'error',
+      );
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -233,7 +274,7 @@ export function MenuPage() {
     }
   }
 
-  const removeOrderFromHistory = useCallback((id: string) => {
+  const _removeOrderFromHistory = useCallback((id: string) => {
     try {
       const raw = localStorage.getItem('orderHistoryByTable');
       const parsed = raw ? JSON.parse(raw) : {};
@@ -252,27 +293,26 @@ export function MenuPage() {
     }
   }, []);
 
-  const removeActiveOrder = useCallback(
-    (id: string) => {
-      setActiveOrderIds((prev) => prev.filter((x) => x !== id));
-      setOrderPreviews((prev) => {
-        if (!(id in prev)) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      setOrdersExpanded(false);
-      removeOrderFromHistory(id);
-      try {
-        localStorage.removeItem('lastOrderId');
-        localStorage.removeItem('lastOrderOrgId');
-        localStorage.removeItem('lastOrderTableId');
-      } catch {
-        void 0;
-      }
-    },
-    [removeOrderFromHistory],
-  );
+  const removeActiveOrder = useCallback((id: string) => {
+    setActiveOrderIds((prev) => prev.filter((x) => x !== id));
+    setOrderPreviews((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setOrdersExpanded(false);
+    // NOTE: We no longer call removeOrderFromHistory(id) here
+    // because we want the order to remain in the "Running Tab"
+    // until the entire session is closed by the waiter.
+    try {
+      localStorage.removeItem('lastOrderId');
+      localStorage.removeItem('lastOrderOrgId');
+      localStorage.removeItem('lastOrderTableId');
+    } catch {
+      void 0;
+    }
+  }, []);
 
   const pruneActiveOrders = useCallback(
     async (canonicalKey: string, ids: string[]) => {
@@ -560,6 +600,10 @@ export function MenuPage() {
         setHelpOptions(options.filter((o: any) => o.isActive));
         if (menu.length > 0) setActiveCategory(menu[0].id);
 
+        if ((table as any).activeSessionId) {
+          void fetchRunningTab((table as any).activeSessionId);
+        }
+
         // Pre-populate unavailableItems from API data
         const unavailable = new Set<string>();
         menu.forEach((cat: any) => {
@@ -644,10 +688,49 @@ export function MenuPage() {
       });
     });
 
+    socket.on(
+      'SESSION_OPENED',
+      ({ sessionId, tableId: openedTableId }: { sessionId: string; tableId: string }) => {
+        if (openedTableId === tableId) {
+          setTableInfo((prev) => (prev ? { ...prev, activeSessionId: sessionId } : prev));
+          void fetchRunningTab(sessionId);
+        }
+      },
+    );
+
+    socket.on('SESSION_CLOSED', ({ sessionId: closedSessionId }: { sessionId: string }) => {
+      if (closedSessionId === (tableInfoRef.current as any)?.activeSessionId) {
+        setTableInfo((prev) => (prev ? { ...prev, activeSessionId: null } : prev));
+        setSessionBill(null);
+        setFullBill(null);
+        setActiveOrderIds([]);
+        setOrderPreviews({});
+        showToast('Your session has been closed. Thank you for visiting!', 'success');
+      }
+    });
+
+    socket.on('ORDER_CREATED', (order: any) => {
+      const sessionId = order?.sessionId || (tableInfoRef.current as any)?.activeSessionId;
+      if (sessionId) {
+        if (!(tableInfoRef.current as any)?.activeSessionId) {
+          setTableInfo((prev) => (prev ? { ...prev, activeSessionId: sessionId } : prev));
+        }
+        void fetchRunningTab(sessionId);
+      }
+    });
+
     socket.on('ORDER_UPDATED', (updated: any) => {
       if (!updated?.id) return;
       const orderId = String(updated.id);
       const status = String(updated.status ?? '');
+
+      const sessionId = updated.sessionId || (tableInfoRef.current as any)?.activeSessionId;
+      if (sessionId) {
+        if (!(tableInfoRef.current as any)?.activeSessionId) {
+          setTableInfo((prev) => (prev ? { ...prev, activeSessionId: sessionId } : prev));
+        }
+        void fetchRunningTab(sessionId);
+      }
 
       if (!ACTIVE_ORDER_STATUSES.has(status)) {
         if ((activeOrderIdsRef.current ?? []).includes(orderId)) removeActiveOrder(orderId);
@@ -1050,10 +1133,15 @@ export function MenuPage() {
                 if (billOpt) handleHelpOptionClick(billOpt);
                 else void submitBillRequest();
               }}
-              className="min-h-11 px-3 py-2 rounded-full border border-[var(--accent)]/40 bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
+              className="min-h-11 px-3 py-2 rounded-full border border-[var(--accent)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display flex flex-col items-center justify-center leading-none"
               aria-label="Request bill"
             >
-              Bill
+              <span>Bill</span>
+              {sessionBill && sessionBill.grandTotal > 0 && (
+                <span className="text-[9px] text-[var(--accent)] mt-1 mono">
+                  {formatPrice(sessionBill.grandTotal, sessionBill.currency)}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -1130,6 +1218,42 @@ export function MenuPage() {
 
       {/* Menu Content */}
       <main className="flex-1 overflow-y-auto pb-32 relative z-10">
+        {sessionBill && sessionBill.orderCount > 0 && (
+          <div className="px-4 pt-6">
+            <button
+              onClick={() => setTabModal(true)}
+              className="w-full card p-5 border-[var(--accent)]/30 bg-[var(--surface)] text-left flex items-center justify-between group active:scale-[0.98] transition-all"
+            >
+              <div>
+                <p className="text-[10px] text-[var(--accent)] font-black uppercase tracking-[0.2em] mb-1">
+                  Your Running Tab
+                </p>
+                <h3 className="text-2xl font-display text-[var(--text)]">
+                  {formatPrice(sessionBill.grandTotal, sessionBill.currency)}
+                </h3>
+                <p className="text-xs text-[var(--muted)] mt-1">
+                  {sessionBill.orderCount} {sessionBill.orderCount === 1 ? 'order' : 'orders'} — Tap
+                  to view receipt
+                </p>
+              </div>
+              <div className="w-10 h-10 rounded-full bg-[var(--surface2)] flex items-center justify-center text-[var(--muted)] group-hover:text-[var(--accent)] transition-colors">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </div>
+            </button>
+          </div>
+        )}
+
         {categories.map((cat) => (
           <div
             key={cat.id}
@@ -1617,6 +1741,99 @@ export function MenuPage() {
                 className="btn-primary flex-1 py-3 disabled:opacity-50"
               >
                 Send Request
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Running Tab Modal (Receipt) */}
+      {tabModal && fullBill && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center"
+          onClick={() => setTabModal(false)}
+        >
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" />
+          <div
+            className="relative w-full sm:max-w-lg bg-[var(--surface)] border-t sm:border border-[var(--border)] max-h-[85dvh] flex flex-col animate-slide-up sm:rounded-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6 border-b border-[var(--border)] flex justify-between items-center">
+              <div>
+                <h2 className="font-display text-2xl">Current Receipt</h2>
+                <p className="text-xs text-[var(--muted)] mt-1 uppercase tracking-widest mono">
+                  {tableInfo?.label} —{' '}
+                  {new Date(fullBill.openedAt).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </p>
+              </div>
+              <button
+                onClick={() => setTabModal(false)}
+                className="w-10 h-10 rounded-full bg-[var(--surface2)] flex items-center justify-center text-[var(--muted)]"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-8">
+              {fullBill.orders.map((order: any, idx: number) => (
+                <div key={order.id} className="space-y-4">
+                  <div className="flex justify-between items-end border-b border-[var(--border)] pb-2">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-[var(--muted)]">
+                      Order #{idx + 1}
+                    </span>
+                    <span className="text-[10px] mono text-[var(--muted)]">
+                      {new Date(order.createdAt).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                  <div className="space-y-3">
+                    {order.items.map((item: any, iidx: number) => (
+                      <div key={iidx} className="flex justify-between items-start gap-4">
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-[var(--text)]">
+                            {item.quantity}× {item.name}
+                          </div>
+                          {item.notes && (
+                            <p className="text-[10px] text-[var(--muted)] italic mt-0.5">
+                              "{item.notes}"
+                            </p>
+                          )}
+                        </div>
+                        <div className="text-sm font-bold text-[var(--text)] mono">
+                          {formatPrice(item.lineTotal, fullBill.currency)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex justify-end text-xs font-black text-[var(--accent)] uppercase tracking-tight">
+                    Subtotal: {formatPrice(order.total, fullBill.currency)}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-6 bg-[var(--surface2)] border-t border-[var(--border)] space-y-4 safe-bottom">
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-bold text-[var(--muted)] uppercase tracking-[0.2em]">
+                  Grand Total
+                </span>
+                <span className="text-3xl font-display text-[var(--accent)]">
+                  {formatPrice(fullBill.grandTotal, fullBill.currency)}
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  setTabModal(false);
+                  void submitBillRequest();
+                }}
+                className="btn-primary w-full py-4 text-center font-bold tracking-widest"
+              >
+                REQUEST PAYMENT NOW
               </button>
             </div>
           </div>

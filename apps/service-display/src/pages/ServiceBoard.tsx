@@ -491,11 +491,15 @@ export function ServiceBoard() {
       setTables((prev) =>
         prev.map((t) => (t.id === tableId ? { ...t, activeSessionId: null } : t)),
       );
+      // DEFENSIVE: Wipe all requests for this table immediately
+      setWaiterCalls((prev) => prev.filter((c) => c.tableId !== tableId));
+      setServiceRequests((prev) => prev.filter((r) => r.tableId !== tableId));
     });
 
     const handleSyncRequired = () => {
       const now = Date.now();
-      if (now - lastSyncAtRef.current < 8000) return;
+      // Throttle syncs to prevent "refresh loops"
+      if (now - lastSyncAtRef.current < 5000) return;
       lastSyncAtRef.current = now;
       refreshNowRef.current().catch(() => void 0);
     };
@@ -553,6 +557,20 @@ export function ServiceBoard() {
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
+
+  // Background Heartbeat Sync
+  useEffect(() => {
+    if (!token) return;
+
+    // Periodic refresh every 60 seconds as a fallback for missed socket events
+    const interval = setInterval(() => {
+      if (navigator.onLine) {
+        refreshNowRef.current().catch(() => void 0);
+      }
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [token]);
 
   async function updateOrderStatus(orderId: string, status: string) {
     if (updatingItems.has(orderId)) return;
@@ -845,40 +863,61 @@ export function ServiceBoard() {
         </div>
       )}
       {/* Header */}
-      <header className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-2">
-        <div className="flex items-center gap-2 sm:gap-4 shrink-0 min-w-0">
+      <header className="flex flex-col sm:flex-row items-center justify-between px-3 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-2">
+        <div className="flex items-center justify-between w-full sm:w-auto gap-2 sm:gap-4 shrink-0 min-w-0">
           <h1 className="text-base sm:text-2xl flex items-center gap-2 shrink-0">
             <span role="img" aria-label="Cevop" className="cevop-wordmark cevop-wordmark-md" />
-            <span className="font-display hidden xs:inline text-[var(--accent)]">SERVICE</span>
+            <span className="font-display hidden xxs:inline text-[var(--accent)]">SERVICE</span>
           </h1>
-          <div
-            className={`flex items-center gap-1 sm:gap-1.5 text-[9px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 ${
-              isOnline && socketConnected
-                ? 'border-[var(--ready)] text-[var(--ready)] bg-[var(--surface2)]'
-                : 'border-[var(--danger)] text-[var(--danger)] bg-[var(--surface2)]'
-            }`}
-          >
-            <span
-              className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${
-                isOnline && socketConnected ? 'bg-[var(--ready)]' : 'bg-[var(--danger)]'
+          <div className="flex items-center gap-2">
+            <div
+              className={`flex items-center gap-1 sm:gap-1.5 text-[9px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 ${
+                isOnline && socketConnected
+                  ? 'border-[var(--ready)] text-[var(--ready)] bg-[var(--surface2)]'
+                  : 'border-[var(--danger)] text-[var(--danger)] bg-[var(--surface2)]'
               }`}
-            />
-            {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
+            >
+              <span
+                className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${
+                  isOnline && socketConnected ? 'bg-[var(--ready)]' : 'bg-[var(--danger)]'
+                }`}
+              />
+              {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
+            </div>
+            {/* Mobile-only Refresh button */}
+            <button
+              onClick={() => refreshNow().catch(() => void 0)}
+              disabled={refreshing}
+              className="sm:hidden text-[10px] text-[var(--muted)] border border-[var(--border)] px-2 py-1 transition-colors shrink-0 disabled:opacity-50"
+            >
+              {refreshing ? '...' : '⟳'}
+            </button>
+            <button
+              onClick={logout}
+              className="sm:hidden text-[10px] text-[var(--muted)] border border-[var(--border)] px-2 py-1 transition-colors shrink-0"
+            >
+              OUT
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-          <span className="text-[var(--muted)] text-[10px] sm:text-xs hidden md:block max-w-[150px] truncate">
-            {user?.organization?.name}
-            {user?.branch ? ` — ${user.branch.name}` : ''}
-          </span>
-          <div className="text-[var(--muted)] text-[10px] sm:text-xs font-mono hidden sm:block">
+        <div className="flex items-center justify-end w-full sm:w-auto gap-1.5 sm:gap-3 shrink-0">
+          <div className="flex flex-col items-end hidden md:flex">
+            <span className="text-[var(--text)] text-[10px] sm:text-xs font-bold truncate max-w-[150px]">
+              {user?.name}
+            </span>
+            <span className="text-[var(--muted)] text-[9px] sm:text-[10px] truncate max-w-[150px]">
+              {user?.organization?.name}
+              {user?.branch ? ` — ${user.branch.name}` : ''}
+            </span>
+          </div>
+          <div className="text-[var(--muted)] text-[10px] sm:text-xs font-mono hidden lg:block">
             {new Date().toLocaleTimeString()}
           </div>
           <button
             onClick={() => refreshNow().catch(() => void 0)}
             disabled={refreshing}
-            className="text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0 disabled:opacity-50"
+            className="hidden sm:block text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0 disabled:opacity-50"
           >
             {refreshing ? 'REFRESHING…' : 'REFRESH'}
           </button>
@@ -886,19 +925,15 @@ export function ServiceBoard() {
             <button
               onClick={() => enablePush().catch(() => void 0)}
               disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
-              className="text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0 disabled:opacity-50"
+              className="hidden xs:block text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0 disabled:opacity-50"
             >
-              {pushStatus === 'loading'
-                ? 'ENABLING…'
-                : pushStatus === 'blocked'
-                  ? 'ALERTS BLOCKED'
-                  : 'ENABLE ALERTS'}
+              {pushStatus === 'loading' ? '...' : pushStatus === 'blocked' ? 'BLOCKED' : 'ALERTS'}
             </button>
           )}
           {showInstallButton && (
             <button
               onClick={() => handleInstall().catch(() => void 0)}
-              className="text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0"
+              className="hidden sm:block text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0"
             >
               INSTALL
             </button>
@@ -919,7 +954,7 @@ export function ServiceBoard() {
           </button>
           <button
             onClick={logout}
-            className="text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0"
+            className="hidden sm:block text-[10px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-1.5 sm:px-2 py-1 transition-colors shrink-0"
           >
             LOGOUT
           </button>

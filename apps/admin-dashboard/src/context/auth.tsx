@@ -330,6 +330,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           'ORG_AUDITOR',
           'BRANCH_ADMIN',
           'BRANCH_FINANCE',
+          'CASHIER',
+          'HOST',
         ];
         if (!allowedRoles.includes(userData.role)) {
           setUser(null);
@@ -519,6 +521,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       'ORG_AUDITOR',
       'BRANCH_ADMIN',
       'BRANCH_FINANCE',
+      'CASHIER',
+      'HOST',
     ];
     if (!allowedRoles.includes(role)) {
       throw new Error('Access denied for this role');
@@ -600,7 +604,8 @@ export function useApi() {
       pathname.startsWith('/api/sections') ||
       pathname.startsWith('/api/sessions') ||
       pathname.startsWith('/api/help-options') ||
-      pathname.startsWith('/api/waiter-tasks')
+      pathname.startsWith('/api/waiter-tasks') ||
+      pathname.startsWith('/api/payments')
     );
   }, []);
 

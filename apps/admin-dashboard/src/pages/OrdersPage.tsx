@@ -76,8 +76,8 @@ export function OrdersPage() {
   const [staleActionLoading, setStaleActionLoading] = useState(false);
   const [staleCancelReason, setStaleCancelReason] = useState('Backlog cleanup');
 
-  const [refreshing, setRefreshing] = useState(false);
   const [forceSyncing, setForceSyncing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [onlineWaiters, setOnlineWaiters] = useState<
     { id: string; name: string; online: boolean }[]
   >([]);
@@ -112,36 +112,50 @@ export function OrdersPage() {
     };
   }, [socket]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setRefreshing(true);
-    try {
-      if (!api.effectiveBranchId) {
-        setOrders([]);
-        setOrdersHasMore(false);
-        setOrdersCursor(null);
-        setWaiterCalls([]);
-        setServiceRequests([]);
-        return;
+  const load = useCallback(
+    async (isSilent = false) => {
+      if (!isSilent) setLoading(true);
+      else setSyncing(true);
+
+      try {
+        if (!api.effectiveBranchId) {
+          setOrders([]);
+          setOrdersHasMore(false);
+          setOrdersCursor(null);
+          setWaiterCalls([]);
+          setServiceRequests([]);
+          return;
+        }
+        const qs = statusFilter ? `?status=${statusFilter}&limit=100` : '?limit=100';
+        const [ordersRes, callsRes, serviceRes] = await Promise.all([
+          api.get(`/api/orders${qs}`),
+          api.get('/api/waiter-calls'),
+          api.get('/api/service-requests'),
+        ]);
+        if (ordersRes.success) {
+          setOrders(ordersRes.data);
+          setOrdersHasMore(Boolean(ordersRes.pagination?.hasMore));
+          setOrdersCursor(ordersRes.pagination?.nextCursor ?? null);
+        }
+        if (callsRes.success) setWaiterCalls(callsRes.data);
+        if (serviceRes.success) setServiceRequests(serviceRes.data);
+      } finally {
+        setLoading(false);
+        setSyncing(false);
       }
-      const qs = statusFilter ? `?status=${statusFilter}&limit=100` : '?limit=100';
-      const [ordersRes, callsRes, serviceRes] = await Promise.all([
-        api.get(`/api/orders${qs}`),
-        api.get('/api/waiter-calls'),
-        api.get('/api/service-requests'),
-      ]);
-      if (ordersRes.success) {
-        setOrders(ordersRes.data);
-        setOrdersHasMore(Boolean(ordersRes.pagination?.hasMore));
-        setOrdersCursor(ordersRes.pagination?.nextCursor ?? null);
+    },
+    [api, statusFilter],
+  );
+
+  // Background Heartbeat Sync
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        load(true);
       }
-      if (callsRes.success) setWaiterCalls(callsRes.data);
-      if (serviceRes.success) setServiceRequests(serviceRes.data);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [api, statusFilter]);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [load]);
 
   const loadMoreOrders = useCallback(async () => {
     if (!api.effectiveBranchId) return;
@@ -330,7 +344,7 @@ export function OrdersPage() {
     [api, canReconcile, load, loadStale, staleActionLoading, staleCancelReason, staleSelected],
   );
 
-  const forceSync = useCallback(async () => {
+  async function forceSync() {
     if (!canReconcile) return;
     if (forceSyncing) return;
     setForceSyncing(true);
@@ -339,7 +353,7 @@ export function OrdersPage() {
     } finally {
       setForceSyncing(false);
     }
-  }, [api, canReconcile, forceSyncing]);
+  }
 
   async function saveCallEdit() {
     if (!editingCall) return;
@@ -386,6 +400,42 @@ export function OrdersPage() {
 
   return (
     <div className="space-y-6 animate-in">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display text-4xl uppercase tracking-tight">OPERATIONS CONSOLE</h1>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-[var(--muted)] text-sm font-medium">Live Management & Oversight</p>
+            {syncing && (
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] text-[10px] font-black animate-pulse uppercase tracking-widest">
+                <span className="w-1 h-1 rounded-full bg-[var(--accent)]" />
+                Live Sync
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              load(true);
+            }}
+            disabled={syncing || loading}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[var(--surface2)] text-[var(--text)] text-xs font-black uppercase tracking-widest hover:bg-[var(--surface3)] transition-all disabled:opacity-50 group border border-[var(--border)]"
+          >
+            <span
+              className={`transition-transform duration-500 ${syncing ? 'animate-spin' : 'group-hover:rotate-180'}`}
+            >
+              ⟳
+            </span>
+            Sync
+          </button>
+          <button
+            onClick={() => setStaleOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[var(--danger)]/10 text-[var(--danger)] text-xs font-black uppercase tracking-widest hover:bg-[var(--danger)]/20 transition-all border border-[var(--danger)]/20"
+          >
+            Stale Orders
+          </button>
+        </div>
+      </div>
       {onlineWaiters.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--surface2)] overflow-x-auto">
           <span className="text-[10px] font-bold tracking-widest text-[var(--muted)] uppercase shrink-0">
@@ -458,34 +508,15 @@ export function OrdersPage() {
             )}
           </div>
           <div className="flex items-center gap-2 w-full sm:w-auto">
-            {activeTab === 'orders' && canReconcile && (
-              <button
-                className="btn btn-secondary btn-sm disabled:opacity-50 w-full sm:w-auto"
-                onClick={() => {
-                  setStaleOpen(true);
-                  void loadStale({ reset: true });
-                }}
-                disabled={staleLoading}
-              >
-                {staleLoading ? 'Loading…' : 'Stale Orders'}
-              </button>
-            )}
-            {activeTab === 'orders' && canReconcile && (
-              <button
-                className="btn btn-secondary btn-sm disabled:opacity-50 w-full sm:w-auto"
-                onClick={() => forceSync().catch(() => void 0)}
-                disabled={forceSyncing}
-              >
-                {forceSyncing ? 'Syncing…' : 'Force Resync'}
-              </button>
-            )}
             <button
               className="btn btn-secondary btn-sm disabled:opacity-50 w-full sm:w-auto"
-              onClick={load}
-              disabled={refreshing}
+              onClick={() => {
+                load(true);
+              }}
+              disabled={syncing || loading}
             >
-              <span className={refreshing ? 'animate-spin inline-block mr-1' : 'mr-1'}>↻</span>
-              {refreshing ? 'Refreshing...' : 'Refresh'}
+              <span className={syncing ? 'animate-spin inline-block mr-1' : 'mr-1'}>↻</span>
+              {syncing ? 'Syncing...' : 'Sync Now'}
             </button>
           </div>
         </div>

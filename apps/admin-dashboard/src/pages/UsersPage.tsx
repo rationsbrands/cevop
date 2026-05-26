@@ -29,6 +29,8 @@ const ROLE_NAMES: Record<string, string> = {
   SERVICE: 'Service',
   WAITER: 'Waiter',
   KITCHEN: 'Kitchen',
+  CASHIER: 'Cashier',
+  HOST: 'Host',
   SUPERADMIN: 'Superadmin',
 };
 
@@ -43,6 +45,8 @@ const ROLE_SELECT_LABELS: Record<string, string> = {
   SERVICE: 'Service',
   WAITER: 'Waiter',
   KITCHEN: 'Kitchen',
+  CASHIER: 'Cashier',
+  HOST: 'Host',
   SUPERADMIN: 'Superadmin',
 };
 
@@ -145,7 +149,7 @@ export function UsersPage() {
   const canCreateOrgAdmin =
     me?.role === 'ORG_OWNER' || me?.role === 'ADMIN' || me?.role === 'SUPERADMIN';
   const availableRoles = isBranchAdmin
-    ? ['SERVICE', 'WAITER', 'KITCHEN']
+    ? ['SERVICE', 'WAITER', 'KITCHEN', 'CASHIER', 'HOST']
     : [
         ...(canCreateOrgOwner ? ['ORG_OWNER'] : []),
         ...(canCreateOrgAdmin ? ['ADMIN'] : []),
@@ -157,9 +161,11 @@ export function UsersPage() {
         'SERVICE',
         'WAITER',
         'KITCHEN',
+        'CASHIER',
+        'HOST',
       ];
   const inviteRoles = isBranchAdmin
-    ? ['SERVICE', 'WAITER', 'KITCHEN']
+    ? ['SERVICE', 'WAITER', 'KITCHEN', 'CASHIER', 'HOST']
     : [
         'ORG_MANAGER',
         'ORG_FINANCE',
@@ -169,6 +175,8 @@ export function UsersPage() {
         'SERVICE',
         'WAITER',
         'KITCHEN',
+        'CASHIER',
+        'HOST',
       ];
 
   const load = useCallback(async () => {
@@ -322,7 +330,9 @@ export function UsersPage() {
         role === 'BRANCH_FINANCE' ||
         role === 'WAITER' ||
         role === 'SERVICE' ||
-        role === 'KITCHEN';
+        role === 'KITCHEN' ||
+        role === 'HOST' ||
+        role === 'CASHIER';
 
       let branchId: string | null = editForm.branchId ? editForm.branchId : null;
 
@@ -559,6 +569,8 @@ export function UsersPage() {
                         'WAITER',
                         'SERVICE',
                         'KITCHEN',
+                        'HOST',
+                        'CASHIER',
                       ].includes(nextRole)
                         ? f.branchId
                         : '',
@@ -574,9 +586,15 @@ export function UsersPage() {
               </div>
               {isOrgAdmin &&
                 branches.length > 0 &&
-                ['BRANCH_ADMIN', 'BRANCH_FINANCE', 'WAITER', 'SERVICE', 'KITCHEN'].includes(
-                  form.role,
-                ) && (
+                [
+                  'BRANCH_ADMIN',
+                  'BRANCH_FINANCE',
+                  'WAITER',
+                  'SERVICE',
+                  'KITCHEN',
+                  'HOST',
+                  'CASHIER',
+                ].includes(form.role) && (
                   <div className="sm:col-span-2">
                     <label htmlFor="staff_create_branch">Assign to Branch *</label>
                     <select
@@ -656,6 +674,8 @@ export function UsersPage() {
                         'WAITER',
                         'SERVICE',
                         'KITCHEN',
+                        'HOST',
+                        'CASHIER',
                       ].includes(nextRole)
                         ? f.branchId
                         : '',
@@ -671,9 +691,15 @@ export function UsersPage() {
               </div>
               {isOrgAdmin &&
                 branches.length > 0 &&
-                ['BRANCH_ADMIN', 'BRANCH_FINANCE', 'WAITER', 'SERVICE', 'KITCHEN'].includes(
-                  inviteForm.role,
-                ) && (
+                [
+                  'BRANCH_ADMIN',
+                  'BRANCH_FINANCE',
+                  'WAITER',
+                  'SERVICE',
+                  'KITCHEN',
+                  'HOST',
+                  'CASHIER',
+                ].includes(inviteForm.role) && (
                   <div>
                     <label htmlFor="staff_invite_branch">Branch *</label>
                     <select
@@ -1005,6 +1031,8 @@ export function UsersPage() {
                         'WAITER',
                         'SERVICE',
                         'KITCHEN',
+                        'HOST',
+                        'CASHIER',
                       ].includes(nextRole)
                         ? f.branchId
                         : '',
@@ -1022,9 +1050,15 @@ export function UsersPage() {
 
               {isOrgAdmin &&
                 branches.length > 0 &&
-                ['BRANCH_ADMIN', 'BRANCH_FINANCE', 'WAITER', 'SERVICE', 'KITCHEN'].includes(
-                  editForm.role,
-                ) && (
+                [
+                  'BRANCH_ADMIN',
+                  'BRANCH_FINANCE',
+                  'WAITER',
+                  'SERVICE',
+                  'KITCHEN',
+                  'HOST',
+                  'CASHIER',
+                ].includes(editForm.role) && (
                   <div>
                     <label htmlFor="admin_user_edit_branch">Branch *</label>
                     <select

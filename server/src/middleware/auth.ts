@@ -1,9 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import * as jwt from 'jsonwebtoken';
 import type { AuthPayload } from '../../../shared/types';
 
 export interface AuthRequest extends Request {
-  user?: AuthPayload;
+  user?: AuthPayload & { currency?: string };
   branchScope?: string | null; // set by requireBranchAccess
 }
 
@@ -24,6 +24,26 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
     next();
   } catch {
     res.status(401).json({ success: false, error: 'Invalid or expired token' });
+  }
+}
+
+export function optionalAuthenticate(req: AuthRequest, res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith('Bearer ')) {
+    return next();
+  }
+
+  const token = authHeader.slice(7);
+
+  try {
+    const secret = process.env.ACCESS_TOKEN_SECRET || process.env.JWT_SECRET!;
+    const payload = jwt.verify(token, secret) as AuthPayload;
+    req.user = payload;
+    next();
+  } catch {
+    // If token is invalid, just proceed without user — don't throw 401
+    next();
   }
 }
 
@@ -60,7 +80,9 @@ export function requireBranchAccess(req: AuthRequest, res: Response, next: NextF
       req.user.role === 'BRANCH_FINANCE' ||
       req.user.role === 'WAITER' ||
       req.user.role === 'SERVICE' ||
-      req.user.role === 'KITCHEN') &&
+      req.user.role === 'KITCHEN' ||
+      req.user.role === 'HOST' ||
+      req.user.role === 'CASHIER') &&
     !req.user.branchId
   ) {
     res.status(403).json({ success: false, error: 'This account must be assigned to a branch' });

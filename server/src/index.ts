@@ -30,6 +30,7 @@ import { helpOptionsRouter } from './routes/helpOptions';
 import { waiterTasksRouter } from './routes/waiterTasks';
 import { plansRouter } from './routes/plans';
 import { pushRouter } from './routes/push';
+import { paymentsRouter } from './routes/payments';
 import { initSocketHandlers } from './sockets/handlers';
 import { errorHandler } from './middleware/errorHandler';
 import { planGuard } from './middleware/planGuard';
@@ -117,7 +118,7 @@ function getRateLimitKey(req: Request): string {
 // Fallback in-memory limiters (used in dev or if Redis not configured)
 const authFallback = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 50,
   skip: (req) => req.method === 'OPTIONS',
   keyGenerator: getRateLimitKey,
   standardHeaders: true,
@@ -156,7 +157,7 @@ function makeUpstashLimiter(requests: number, window: Duration, prefix: string):
   });
 }
 
-const upstashAuth = makeUpstashLimiter(20, '15 m', 'auth');
+const upstashAuth = makeUpstashLimiter(50, '15 m', 'auth');
 const upstashApi = makeUpstashLimiter(500, '15 m', 'api');
 const upstashPublic = makeUpstashLimiter(60, '1 m', 'public');
 // Wraps an Upstash limiter into Express middleware, falls back to in-memory
@@ -248,6 +249,7 @@ app.use('/api/help-options', helpOptionsRouter);
 app.use('/api/ops', opsRouter);
 app.use('/api/waiter-tasks', waiterTasksRouter);
 app.use('/api/push', pushRouter);
+app.use('/api/payments', paymentsRouter);
 
 // WebSocket
 initSocketHandlers(io);
