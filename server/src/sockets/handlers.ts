@@ -115,6 +115,16 @@ export function initSocketHandlers(io: Server): void {
       logger.info('Customer PWA joined org room for menu updates', { orgId, socketId: socket.id });
     });
 
+    socket.on('JOIN_BRANCH_PUBLIC', ({ orgId, branchId }: { orgId: string; branchId: string }) => {
+      if (typeof orgId !== 'string' || typeof branchId !== 'string') return;
+      const room = `${orgId}:${branchId}`;
+      socket.join(room);
+      logger.info('Customer PWA joined branch room for order updates', {
+        room,
+        socketId: socket.id,
+      });
+    });
+
     // Join a specific branch room (for branch-scoped service displays)
     socket.on('JOIN_BRANCH', async ({ orgId, branchId }: { orgId: string; branchId: string }) => {
       if (!user) {

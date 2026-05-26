@@ -228,8 +228,13 @@ sessionsRouter.patch(
         return;
       }
 
+      if (session.closedAt) {
+        res.json({ success: true, message: 'Session already closed', idempotent: true });
+        return;
+      }
+
       const bodySchema = z.object({
-        nextStatus: z.enum(['CLEANING', 'EMPTY']).default('CLEANING'),
+        nextStatus: z.enum(['CLEANING', 'EMPTY']).optional(),
       });
 
       const { nextStatus } = bodySchema.parse(req.body);

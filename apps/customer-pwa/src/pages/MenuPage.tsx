@@ -655,9 +655,16 @@ export function MenuPage() {
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      // Join org room — no auth token needed, customer is unauthenticated
-      // The org room receives availability events
+      // Join org room for menu availability updates
       socket.emit('JOIN_ORG_PUBLIC', tableInfo.organizationId);
+
+      // Join branch room for session and order updates
+      if (tableInfo.branchId) {
+        socket.emit('JOIN_BRANCH_PUBLIC', {
+          orgId: tableInfo.organizationId,
+          branchId: tableInfo.branchId,
+        });
+      }
 
       const ids = activeOrderIdsRef.current ?? [];
       for (const id of ids) {

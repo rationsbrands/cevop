@@ -99,11 +99,24 @@ orgsRouter.put(
       const data = orgSchema.partial().parse(req.body);
       // Convert empty strings to null for optional db fields, if necessary, or just save empty strings.
       // Prisma usually accepts empty strings, but for URLs it's better to store empty string if not null.
-      const org = await prisma.organization.update({
+      const updated = await prisma.organization.update({
         where: { id: req.user!.organizationId },
         data,
       });
-      res.json({ success: true, data: org });
+
+      // Audit Log
+      await prisma.auditLog.create({
+        data: {
+          organizationId: updated.id,
+          userId: req.user!.userId,
+          action: 'ORG_SETTINGS_UPDATED',
+          entity: 'organization',
+          entityId: updated.id,
+          metadata: data as any,
+        },
+      });
+
+      res.json({ success: true, data: updated });
     } catch (err) {
       if (err instanceof z.ZodError) {
         logger.warn('Validation error in PUT /orgs/me', { errors: err.errors });

@@ -523,7 +523,7 @@ export function KitchenBoard() {
         </div>
 
         <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-1 sm:gap-3 shrink-0">
-          <div className="flex flex-col items-end hidden lg:flex">
+          <div className="hidden lg:flex flex-col items-end">
             <span className="text-gray-200 text-[10px] sm:text-xs font-bold truncate max-w-[150px]">
               {user?.name}
             </span>

@@ -452,7 +452,7 @@ export function ServiceBoard() {
 
     socket.on('WAITER_CALLED', (call: WaiterCall) => {
       playAlert();
-      setWaiterCalls((prev) => [call, ...prev.filter((c) => c.id !== call.id)]);
+      setWaiterCalls((prev) => [...prev.filter((c) => c.id !== call.id), call]);
     });
 
     socket.on('WAITER_CALL_UPDATED', (call: WaiterCall) => {
@@ -460,13 +460,13 @@ export function ServiceBoard() {
         if (call.status !== 'PENDING') return prev.filter((c) => c.id !== call.id);
         const exists = prev.some((c) => c.id === call.id);
         if (exists) return prev.map((c) => (c.id === call.id ? call : c));
-        return [call, ...prev];
+        return [...prev, call];
       });
     });
 
     socket.on('SERVICE_REQUESTED', (req: ServiceRequest) => {
       playAlert();
-      setServiceRequests((prev) => [req, ...prev.filter((r) => r.id !== req.id)]);
+      setServiceRequests((prev) => [...prev.filter((r) => r.id !== req.id), req]);
     });
 
     socket.on('SERVICE_REQUEST_UPDATED', (req: ServiceRequest) => {
@@ -474,7 +474,7 @@ export function ServiceBoard() {
         if (req.status !== 'PENDING') return prev.filter((r) => r.id !== req.id);
         const exists = prev.some((r) => r.id === req.id);
         if (exists) return prev.map((r) => (r.id === req.id ? req : r));
-        return [req, ...prev];
+        return [...prev, req];
       });
     });
 
@@ -905,7 +905,7 @@ export function ServiceBoard() {
         </div>
 
         <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-1 sm:gap-3 shrink-0">
-          <div className="flex flex-col items-end hidden lg:flex">
+          <div className="hidden lg:flex flex-col items-end">
             <span className="text-[var(--text)] text-[10px] sm:text-xs font-bold truncate max-w-[150px]">
               {user?.name}
             </span>

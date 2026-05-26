@@ -10,6 +10,7 @@ import compression from 'compression';
 import { Ratelimit, type Duration } from '@upstash/ratelimit';
 import { Server as SocketServer } from 'socket.io';
 
+import { env } from './config';
 import { getRedisClient } from './services/redis';
 import { prisma } from './services/prisma';
 

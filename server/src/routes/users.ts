@@ -453,7 +453,7 @@ usersRouter.patch(
         }
       }
 
-      const user = await prisma.user.update({
+      const updatedUser = await prisma.user.update({
         where: { id: req.params.id },
         data: updateData,
         select: {
@@ -465,10 +465,25 @@ usersRouter.patch(
           branchId: true,
           staffCode: true,
           branch: { select: { id: true, name: true } },
-        } as any,
+        },
       });
 
-      res.json({ success: true, data: user });
+      // Audit Log
+      await prisma.auditLog.create({
+        data: {
+          organizationId: req.user!.organizationId,
+          userId: req.user!.userId,
+          action: 'USER_UPDATED',
+          entity: 'user',
+          entityId: updatedUser.id,
+          metadata: {
+            newRole: updatedUser.role,
+            email: updatedUser.email,
+          } as Prisma.InputJsonValue,
+        },
+      });
+
+      res.json({ success: true, data: updatedUser });
     } catch (err: unknown) {
       if (err instanceof z.ZodError) {
         res.status(400).json({ success: false, error: 'Validation error', details: err.errors });

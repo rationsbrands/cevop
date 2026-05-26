@@ -11,8 +11,21 @@ export async function getOrCreateSession(
   organizationId: string,
   branchId: string | null,
 ): Promise<string | null> {
-  // If no branchId, we can't really manage sessions properly in this multi-tenant setup
-  if (!branchId) return null;
+  // If no branchId, we try to find it from the table record
+  let actualBranchId = branchId;
+  if (!actualBranchId) {
+    const tableData = await prisma.table.findUnique({
+      where: { id: tableId },
+      select: { branchId: true },
+    });
+    actualBranchId = tableData?.branchId ?? null;
+  }
+
+  // If we still don't have a branchId, we can't safely manage sessions in this multi-tenant setup
+  if (!actualBranchId) {
+    logger.warn('Cannot getOrCreateSession: Missing branchId', { tableId, organizationId });
+    return null;
+  }
 
   // Check for an existing open session
   const table = (await prisma.table.findUnique({
@@ -35,7 +48,7 @@ export async function getOrCreateSession(
   const session = await (prisma as any).tableSession.create({
     data: {
       organizationId,
-      branchId,
+      branchId: actualBranchId,
       tableId,
     },
   });
@@ -47,16 +60,16 @@ export async function getOrCreateSession(
   });
 
   // Emit socket events
-  io.to(`${organizationId}:${branchId}`).emit('SESSION_OPENED', {
+  io.to(`${organizationId}:${actualBranchId}`).emit('SESSION_OPENED', {
     sessionId: session.id,
     tableId,
-    branchId,
+    branchId: actualBranchId,
     openedAt: session.openedAt,
   });
-  io.to(`${organizationId}:${branchId}`).emit('TABLE_STATUS_CHANGED', {
+  io.to(`${organizationId}:${actualBranchId}`).emit('TABLE_STATUS_CHANGED', {
     tableId,
     status: 'OCCUPIED',
-    branchId,
+    branchId: actualBranchId,
   });
 
   logger.info('Table session opened', { sessionId: session.id, tableId });

@@ -157,7 +157,7 @@ waiterCallsRouter.get('/', async (req: AuthRequest, res: Response) => {
     const calls = await prisma.waiterCall.findMany({
       where,
       include: { table: true, assignedUser: { select: { id: true, name: true } } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: 'asc' },
       take: 100,
     });
     res.json({ success: true, data: calls });

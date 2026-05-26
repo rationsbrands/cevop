@@ -355,7 +355,7 @@ ordersRouter.get(
 
       const recentOrders = await prisma.order.findMany({
         where: { organizationId: orgId },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: 'asc' },
         take: 10,
         select: {
           id: true,
@@ -718,48 +718,61 @@ ordersRouter.patch(
         ...(req.branchScope ? { branchId: req.branchScope } : {}),
       };
 
-      const existingOrder = await prisma.order.findFirst({ where: orderWhere });
-      if (!existingOrder) {
-        res.status(404).json({ success: false, error: 'Order not found' });
-        return;
-      }
+      const result = await prisma.$transaction(async (tx) => {
+        const existingOrder = await tx.order.findFirst({ where: orderWhere });
+        if (!existingOrder) {
+          throw new Error('ORDER_NOT_FOUND');
+        }
 
-      const updated = await prisma.order.update({
-        where: { id: req.params.id },
-        data: {
-          status,
-          ...(status === 'CANCELLED' && cancellationReason ? { cancellationReason } : {}),
-        },
-        include: { items: { include: { menuItem: true } }, table: true },
+        const updated = await tx.order.update({
+          where: { id: req.params.id },
+          data: {
+            status,
+            ...(status === 'CANCELLED' && cancellationReason ? { cancellationReason } : {}),
+          },
+          include: { items: { include: { menuItem: true } }, table: true },
+        });
+
+        let finalOrder = updated;
+        if (status === 'READY') {
+          const assignedWaiterId = await findLeastLoadedWaiter(
+            req.user!.organizationId,
+            updated.branchId,
+            updated.tableId,
+          ).catch(() => null);
+
+          if (assignedWaiterId) {
+            finalOrder = await tx.order.update({
+              where: { id: updated.id },
+              data: { assignedWaiter: assignedWaiterId, assignedWaiterAt: new Date() },
+              include: { items: { include: { menuItem: true } }, table: true },
+            });
+            return { finalOrder, assignedWaiterId, type: 'ASSIGNED' };
+          } else {
+            return { finalOrder, type: 'UNASSIGNED' };
+          }
+        }
+        return { finalOrder, type: 'UPDATED' };
       });
 
-      let finalOrder = updated;
+      const { finalOrder } = result;
+
       if (status === 'READY') {
-        const assignedWaiterId = await findLeastLoadedWaiter(
-          req.user!.organizationId,
-          updated.branchId,
-          updated.tableId,
-        ).catch(() => null);
-        if (assignedWaiterId) {
-          finalOrder = await prisma.order.update({
-            where: { id: updated.id },
-            data: { assignedWaiter: assignedWaiterId, assignedWaiterAt: new Date() },
-            include: { items: { include: { menuItem: true } }, table: true },
-          });
-          io.to(`waiter:${assignedWaiterId}`).emit('TASK_ASSIGNED', {
+        if (result.type === 'ASSIGNED') {
+          io.to(`waiter:${result.assignedWaiterId}`).emit('TASK_ASSIGNED', {
             type: 'ORDER_READY',
             task: finalOrder,
           });
         } else {
-          io.to(`${req.user!.organizationId}:${updated.branchId}`).emit('TASK_UNASSIGNED', {
+          io.to(`${req.user!.organizationId}:${finalOrder.branchId}`).emit('TASK_UNASSIGNED', {
             type: 'ORDER_READY',
-            task: updated,
+            task: finalOrder,
           });
         }
 
         notifyStaffWebPush({
           organizationId: req.user!.organizationId,
-          branchId: updated.branchId,
+          branchId: finalOrder.branchId,
           roles: ['WAITER', 'SERVICE'],
           title: 'Order Ready',
           body: `${finalOrder.table?.label || 'Table'} — #${String(finalOrder.id).slice(-6).toUpperCase()}`,
@@ -1368,7 +1381,7 @@ ordersRouter.get('/', async (req: AuthRequest, res: Response) => {
         items: { include: { menuItem: { select: { name: true } } } },
         table: { select: { label: true, number: true } },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: 'asc' },
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });

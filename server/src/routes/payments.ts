@@ -96,8 +96,24 @@ paymentsRouter.post('/', requireRole(...CASHIER_ROLES), async (req: AuthRequest,
         method: z.enum(['CASH', 'CARD', 'TRANSFER']),
         reference: z.string().optional(),
         note: z.string().optional(),
+        idempotencyKey: z.string().optional(),
       })
       .parse(req.body);
+
+    if (body.idempotencyKey) {
+      const existing = await prisma.payment.findFirst({
+        where: {
+          sessionId: body.sessionId,
+          amount: body.amount,
+          method: body.method,
+          createdAt: { gte: new Date(Date.now() - 5 * 60 * 1000) }, // Last 5 minutes
+        },
+      });
+      if (existing) {
+        res.status(200).json({ success: true, data: existing, idempotent: true });
+        return;
+      }
+    }
 
     // Verify session belongs to this org and branch
     const session = await prisma.tableSession.findFirst({

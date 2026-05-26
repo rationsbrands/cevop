@@ -564,9 +564,9 @@ export function MenuPage() {
                 <table className="min-w-[720px]">
                   <thead>
                     <tr>
-                      <th></th>
-                      <th>Name</th>
-                      <th>Description</th>
+                      <th className="w-10"></th>
+                      <th className="w-[40%]">Name</th>
+                      <th className="w-[25%]">Description</th>
                       <th>Price</th>
                       <th>Available</th>
                       <th>Actions</th>
@@ -655,7 +655,7 @@ export function MenuPage() {
                             )}
                           </div>
                         </td>
-                        <td className="text-[var(--muted)] text-xs max-w-xs truncate">
+                        <td className="text-[var(--muted)] text-xs max-w-[180px] truncate">
                           {item.description || '—'}
                         </td>
                         <td className="text-[var(--accent)] font-semibold">
