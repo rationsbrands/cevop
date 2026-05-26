@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { fetchOrderStatus, API_BASE } from '../services/api';
 import { formatPrice } from '../../../../shared/utils/currency';
+import { AutoFitText } from '../components/AutoFitText';
 
 interface OrderItem {
   id: string;
@@ -321,11 +322,13 @@ export function OrderStatusPage() {
               </div>
             ))}
           </div>
-          <div className="px-4 py-3 border-t border-[var(--border)] flex items-center justify-between">
-            <span className="font-semibold">Total</span>
-            <span className="font-display text-2xl text-[var(--accent)]">
-              {formatPrice(order.total)}
-            </span>
+          <div className="px-4 py-3 border-t border-[var(--border)] flex items-center justify-between gap-4">
+            <span className="font-semibold shrink-0">Total</span>
+            <div className="flex-1 text-right max-w-[200px]">
+              <AutoFitText className="font-display text-[var(--accent)]" maxFontSize="1.5rem">
+                {formatPrice(order.total)}
+              </AutoFitText>
+            </div>
           </div>
         </div>
       </main>

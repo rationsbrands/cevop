@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useApi, usePermission } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
+import { AutoFitText } from '../components/AutoFitText';
 
 interface Metrics {
   orgs: {
@@ -30,26 +31,28 @@ function StatCard({
   sub?: string;
   accent?: boolean;
 }) {
-  const str = String(value);
   return (
     <div className="card p-5 flex flex-col justify-between h-full overflow-hidden">
       <div>
-        <p className="text-xs text-[var(--muted)] uppercase tracking-widest font-semibold truncate">
+        <AutoFitText
+          className="text-[var(--muted)] uppercase tracking-widest font-semibold"
+          maxFontSize="12px"
+          minFontSize="8px"
+        >
           {label}
-        </p>
-        <div style={{ containerType: 'inline-size' }} className="w-full mt-1">
-          <p
-            className={`font-display whitespace-nowrap leading-tight ${accent ? 'text-[var(--accent)]' : 'text-[var(--text)]'}`}
-            style={{
-              fontSize: `clamp(1rem, 100cqi / (${Math.max(str.length, 5)} * 0.55), 2.25rem)`,
-            }}
-            title={str}
-          >
-            {value}
-          </p>
-        </div>
+        </AutoFitText>
+        <AutoFitText
+          className={`font-display ${accent ? 'text-[var(--accent)]' : 'text-[var(--text)]'}`}
+          maxFontSize="2.25rem"
+        >
+          {value}
+        </AutoFitText>
       </div>
-      {sub && <p className="text-xs text-[var(--muted)] mt-2 truncate">{sub}</p>}
+      {sub && (
+        <AutoFitText className="text-[var(--muted)] mt-2" maxFontSize="12px" minFontSize="8px">
+          {sub}
+        </AutoFitText>
+      )}
     </div>
   );
 }

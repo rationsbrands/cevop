@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useApi, usePermission } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
+import { AutoFitText } from '../components/AutoFitText';
 import { ConfirmDialog, showToast } from '../components/Popup';
 
 const PLAN_OPTS = ['free', 'trial', 'starter', 'growth', 'enterprise'];
@@ -409,22 +410,52 @@ export function OrgDetailPage() {
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="card p-4">
-          <p className="text-xs text-[var(--muted)] uppercase tracking-wider">Revenue</p>
-          <p className="font-display text-3xl text-[var(--accent)] mt-1">
+          <AutoFitText
+            className="text-[var(--muted)] uppercase tracking-wider"
+            maxFontSize="12px"
+            minFontSize="8px"
+          >
+            Revenue
+          </AutoFitText>
+          <AutoFitText className="font-display text-[var(--accent)] mt-1" maxFontSize="1.875rem">
             {formatPrice(org.stats?.totalRevenue ?? 0, org.currency ?? 'NGN')}
-          </p>
+          </AutoFitText>
         </div>
         <div className="card p-4">
-          <p className="text-xs text-[var(--muted)] uppercase tracking-wider">Orders (30d)</p>
-          <p className="font-display text-3xl mt-1">{org.stats?.ordersLast30Days ?? 0}</p>
+          <AutoFitText
+            className="text-[var(--muted)] uppercase tracking-wider"
+            maxFontSize="12px"
+            minFontSize="8px"
+          >
+            Orders (30d)
+          </AutoFitText>
+          <AutoFitText className="font-display mt-1" maxFontSize="1.875rem">
+            {org.stats?.ordersLast30Days ?? 0}
+          </AutoFitText>
         </div>
         <div className="card p-4">
-          <p className="text-xs text-[var(--muted)] uppercase tracking-wider">Total Orders</p>
-          <p className="font-display text-3xl mt-1">{org._count?.orders ?? 0}</p>
+          <AutoFitText
+            className="text-[var(--muted)] uppercase tracking-wider"
+            maxFontSize="12px"
+            minFontSize="8px"
+          >
+            Total Orders
+          </AutoFitText>
+          <AutoFitText className="font-display mt-1" maxFontSize="1.875rem">
+            {org._count?.orders ?? 0}
+          </AutoFitText>
         </div>
         <div className="card p-4">
-          <p className="text-xs text-[var(--muted)] uppercase tracking-wider">Tables</p>
-          <p className="font-display text-3xl mt-1">{org._count?.tables ?? 0}</p>
+          <AutoFitText
+            className="text-[var(--muted)] uppercase tracking-wider"
+            maxFontSize="12px"
+            minFontSize="8px"
+          >
+            Tables
+          </AutoFitText>
+          <AutoFitText className="font-display mt-1" maxFontSize="1.875rem">
+            {org._count?.tables ?? 0}
+          </AutoFitText>
         </div>
       </div>
 

@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../services/auth';
 import { useTheme } from '../context/theme';
 import { formatPrice } from '../../../../shared/utils/currency';
+import { AutoFitText } from '../components/AutoFitText';
 import { WaiterPOS } from '../components/WaiterPOS';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
@@ -1572,27 +1573,33 @@ export function WaiterBoard() {
 
                 {/* Divider */}
                 <div className="border-t border-[var(--border)] pt-3 space-y-4">
-                  <div className="flex justify-between font-bold">
-                    <span className="text-[var(--text)]">Total</span>
-                    <span className="text-[var(--accent)] text-lg">
-                      {formatPrice(billModal.data.grandTotal, billModal.data.currency)}
-                    </span>
+                  <div className="flex justify-between font-bold items-center gap-4">
+                    <span className="text-[var(--text)] shrink-0">Total</span>
+                    <div className="flex-1 text-right max-w-[150px]">
+                      <AutoFitText className="text-[var(--accent)]" maxFontSize="1.125rem">
+                        {formatPrice(billModal.data.grandTotal, billModal.data.currency)}
+                      </AutoFitText>
+                    </div>
                   </div>
 
                   {billModal.data.amountPaid > 0 && (
-                    <div className="flex justify-between text-sm">
-                      <span className="text-[var(--muted)]">Paid</span>
-                      <span className="text-[var(--success)]">
-                        {formatPrice(billModal.data.amountPaid, billModal.data.currency)}
-                      </span>
+                    <div className="flex justify-between text-sm items-center gap-4">
+                      <span className="text-[var(--muted)] shrink-0">Paid</span>
+                      <div className="flex-1 text-right max-w-[150px]">
+                        <AutoFitText className="text-[var(--success)]" maxFontSize="0.875rem">
+                          {formatPrice(billModal.data.amountPaid, billModal.data.currency)}
+                        </AutoFitText>
+                      </div>
                     </div>
                   )}
 
-                  <div className="flex justify-between font-bold border-t border-[var(--border)] pt-2">
-                    <span className="text-[var(--text)]">Balance</span>
-                    <span className="text-[var(--accent)]">
-                      {formatPrice(billModal.data.balance, billModal.data.currency)}
-                    </span>
+                  <div className="flex justify-between font-bold border-t border-[var(--border)] pt-2 items-center gap-4">
+                    <span className="text-[var(--text)] shrink-0">Balance</span>
+                    <div className="flex-1 text-right max-w-[150px]">
+                      <AutoFitText className="text-[var(--accent)]" maxFontSize="1.125rem">
+                        {formatPrice(billModal.data.balance, billModal.data.currency)}
+                      </AutoFitText>
+                    </div>
                   </div>
 
                   {billModal.data.balance > 0 && (

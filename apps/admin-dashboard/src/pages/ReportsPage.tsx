@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth, useApi } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
+import { AutoFitText } from '../components/AutoFitText';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface SummaryData {
@@ -40,13 +41,24 @@ function StatCard({
 }) {
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] p-5">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--muted)] mb-1">
+      <AutoFitText
+        className="font-bold uppercase tracking-widest text-[var(--muted)] mb-1"
+        maxFontSize="10px"
+        minFontSize="7px"
+      >
         {label}
-      </p>
-      <p className={`text-2xl font-bold ${accent ? 'text-[var(--accent)]' : 'text-[var(--text)]'}`}>
+      </AutoFitText>
+      <AutoFitText
+        className={`font-bold ${accent ? 'text-[var(--accent)]' : 'text-[var(--text)]'}`}
+        maxFontSize="1.5rem"
+      >
         {value}
-      </p>
-      {sub && <p className="text-xs text-[var(--muted)] mt-1">{sub}</p>}
+      </AutoFitText>
+      {sub && (
+        <AutoFitText className="text-[var(--muted)] mt-1" maxFontSize="12px" minFontSize="8px">
+          {sub}
+        </AutoFitText>
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth, useApi } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
+import { AutoFitText } from '../components/AutoFitText';
 
 interface Summary {
   todayOrders: number;
@@ -45,26 +46,27 @@ interface AuditLogItem {
 }
 
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
-  const str = String(value);
   return (
     <div className="card p-5 flex flex-col justify-between min-h-[140px] h-full overflow-hidden">
       <div>
-        <p className="text-[10px] text-[var(--muted)] uppercase tracking-widest font-extrabold mb-1 truncate">
+        <AutoFitText
+          className="text-[var(--muted)] uppercase tracking-widest font-extrabold mb-1"
+          maxFontSize="10px"
+          minFontSize="7px"
+        >
           {label}
-        </p>
-        <div style={{ containerType: 'inline-size' }} className="w-full">
-          <p
-            className="font-display whitespace-nowrap leading-tight text-[var(--accent)]"
-            style={{
-              fontSize: `clamp(1rem, 100cqi / (${Math.max(str.length, 5)} * 0.55), 1.875rem)`,
-            }}
-            title={str}
-          >
-            {value}
-          </p>
-        </div>
+        </AutoFitText>
+        <AutoFitText className="font-display text-[var(--accent)]">{value}</AutoFitText>
       </div>
-      {sub && <p className="text-[11px] text-[var(--muted)] mt-2 font-medium truncate">{sub}</p>}
+      {sub && (
+        <AutoFitText
+          className="text-[var(--muted)] mt-2 font-medium"
+          maxFontSize="11px"
+          minFontSize="8px"
+        >
+          {sub}
+        </AutoFitText>
+      )}
     </div>
   );
 }

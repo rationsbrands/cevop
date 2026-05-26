@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { formatPrice } from '../../../../shared/utils/currency';
 import { useAuth } from '../services/auth';
+import { AutoFitText } from './AutoFitText';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 
@@ -440,13 +441,18 @@ export function WaiterPOS({ onClose, onOrderSuccess }: WaiterPOSProps) {
 
         {/* Checkout Footer */}
         <div className="p-4 sm:p-6 border-t border-[var(--border)] bg-[var(--surface)] shadow-[0_-10px_20px_rgba(0,0,0,0.05)]">
-          <div className="flex justify-between items-center mb-6">
-            <span className="font-display font-bold text-[var(--muted)] tracking-widest">
+          <div className="flex justify-between items-center mb-6 gap-4">
+            <span className="font-display font-bold text-[var(--muted)] tracking-widest shrink-0">
               TOTAL
             </span>
-            <span className="font-display font-bold text-2xl text-[var(--accent)]">
-              {formatPrice(cartTotal)}
-            </span>
+            <div className="flex-1 text-right max-w-[200px]">
+              <AutoFitText
+                className="font-display font-bold text-[var(--accent)]"
+                maxFontSize="1.5rem"
+              >
+                {formatPrice(cartTotal)}
+              </AutoFitText>
+            </div>
           </div>
           <button
             onClick={handleSubmit}
