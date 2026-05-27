@@ -62,7 +62,7 @@ ALTER TABLE "tables" DROP CONSTRAINT "tables_sectionId_fkey";
 ALTER TABLE "waiter_calls" DROP CONSTRAINT "waiter_calls_sessionId_fkey";
 
 -- AlterTable
-ALTER TABLE "branches" ADD COLUMN     "maxTablesPerWaiter" INTEGER;
+ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "maxTablesPerWaiter" INTEGER;
 
 -- AlterTable
 ALTER TABLE "categories" ALTER COLUMN "branchId" DROP NOT NULL;
