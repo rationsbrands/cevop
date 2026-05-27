@@ -274,25 +274,6 @@ export function MenuPage() {
     }
   }
 
-  const _removeOrderFromHistory = useCallback((id: string) => {
-    try {
-      const raw = localStorage.getItem('orderHistoryByTable');
-      const parsed = raw ? JSON.parse(raw) : {};
-      let changed = false;
-      for (const k of Object.keys(parsed)) {
-        if (!Array.isArray(parsed[k])) continue;
-        const next = (parsed[k] as unknown[]).filter((v) => typeof v === 'string' && v !== id);
-        if (next.length !== (parsed[k] as unknown[]).length) {
-          parsed[k] = next;
-          changed = true;
-        }
-      }
-      if (changed) localStorage.setItem('orderHistoryByTable', JSON.stringify(parsed));
-    } catch {
-      void 0;
-    }
-  }, []);
-
   const removeActiveOrder = useCallback((id: string) => {
     setActiveOrderIds((prev) => prev.filter((x) => x !== id));
     setOrderPreviews((prev) => {
@@ -578,6 +559,17 @@ export function MenuPage() {
     };
   }, []);
 
+  // 60-second heartbeat — re-fetches running tab if socket events were missed
+  // Matches the same fallback pattern used on all staff boards
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!navigator.onLine) return;
+      const sessionId = (tableInfoRef.current as any)?.activeSessionId;
+      if (sessionId) void fetchRunningTab(sessionId);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     if (orgId) {
       localStorage.setItem('cartOrgId', orgId);
@@ -672,6 +664,10 @@ export function MenuPage() {
         socket.emit('JOIN_ORDER', { orderId: id });
         joinedOrdersRef.current.add(id);
       }
+
+      // Re-fetch running tab on every connect (initial + reconnect) to catch missed updates
+      const sessionId = (tableInfoRef.current as any)?.activeSessionId;
+      if (sessionId) void fetchRunningTab(sessionId);
     });
 
     socket.on('MENU_ITEM_UNAVAILABLE', ({ menuItemId }: { menuItemId: string }) => {
@@ -706,12 +702,35 @@ export function MenuPage() {
     );
 
     socket.on('SESSION_CLOSED', ({ sessionId: closedSessionId }: { sessionId: string }) => {
-      if (closedSessionId === (tableInfoRef.current as any)?.activeSessionId) {
+      const currentSessionId = (tableInfoRef.current as any)?.activeSessionId;
+      // Match on exact sessionId OR when we have no tracked sessionId but have active orders
+      // (covers case where customer tab was open before session was tracked client-side,
+      //  or where payment was made without a bill request so no SESSION_OPENED was received)
+      const isOurSession =
+        closedSessionId === currentSessionId ||
+        (!currentSessionId && (activeOrderIdsRef.current ?? []).length > 0);
+
+      if (isOurSession) {
         setTableInfo((prev) => (prev ? { ...prev, activeSessionId: null } : prev));
         setSessionBill(null);
         setFullBill(null);
         setActiveOrderIds([]);
         setOrderPreviews({});
+        // Clear localStorage order history so old orders don't bleed into the next session
+        try {
+          const canonicalKey =
+            tableInfoRef.current?.organizationId && tableInfoRef.current?.id
+              ? `${tableInfoRef.current.organizationId}:${tableInfoRef.current.id}`
+              : null;
+          if (canonicalKey) {
+            const raw = localStorage.getItem('orderHistoryByTable');
+            const parsed = raw ? JSON.parse(raw) : {};
+            delete parsed[canonicalKey];
+            localStorage.setItem('orderHistoryByTable', JSON.stringify(parsed));
+          }
+        } catch {
+          void 0;
+        }
         showToast('Your session has been closed. Thank you for visiting!', 'success');
       }
     });
@@ -723,6 +742,16 @@ export function MenuPage() {
           setTableInfo((prev) => (prev ? { ...prev, activeSessionId: sessionId } : prev));
         }
         void fetchRunningTab(sessionId);
+      }
+    });
+
+    // Update running tab when payment is recorded — so customer sees balance reduce in real time
+    // without needing to wait for session close
+    socket.on('PAYMENT_RECORDED', ({ sessionId: paidSessionId }: { sessionId: string }) => {
+      const currentSessionId = (tableInfoRef.current as any)?.activeSessionId;
+      if (paidSessionId && (paidSessionId === currentSessionId || currentSessionId)) {
+        const sid = paidSessionId || currentSessionId;
+        if (sid) void fetchRunningTab(sid);
       }
     });
 
@@ -774,6 +803,9 @@ export function MenuPage() {
         if (!orderId) return;
         if (allCancelled) {
           removeActiveOrder(orderId);
+          // Re-fetch running tab so grand total goes to zero / updates correctly
+          const sessionIdAll = (tableInfoRef.current as any)?.activeSessionId;
+          if (sessionIdAll) void fetchRunningTab(sessionIdAll);
           showToast(
             'All items in your order are unavailable. Your order has been cancelled.',
             'error',
@@ -792,6 +824,9 @@ export function MenuPage() {
             },
           };
         });
+        // Re-fetch running tab so price deducts immediately in customer's view
+        const sessionIdPartial = (tableInfoRef.current as any)?.activeSessionId;
+        if (sessionIdPartial) void fetchRunningTab(sessionIdPartial);
         showToast(`${itemName || 'An item'} is not available at this time.`, 'error');
       },
     );
@@ -806,7 +841,14 @@ export function MenuPage() {
       socketRef.current = null;
       socket.disconnect();
     };
-  }, [removeActiveOrder, tableInfo?.organizationId]);
+  }, [
+    removeActiveOrder,
+    tableInfo?.organizationId,
+    tableId,
+    tableInfo?.branchId,
+    pruneActiveOrders,
+    activeOrderIds,
+  ]);
 
   useEffect(() => {
     const socket = socketRef.current;

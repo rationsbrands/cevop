@@ -4,6 +4,9 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 const pwaPlugin: any = VitePWA({
   registerType: 'autoUpdate',
+  strategies: 'injectManifest',
+  srcDir: 'src',
+  filename: 'sw.ts',
   includeAssets: ['apple-touch-icon.png', 'icon-192.png', 'icon-512.png'],
   manifest: {
     name: 'Cevop Order',
@@ -22,28 +25,8 @@ const pwaPlugin: any = VitePWA({
     enabled: true,
     type: 'module',
   },
-  workbox: {
+  injectManifest: {
     globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-    navigateFallback: 'index.html',
-    navigateFallbackAllowlist: [/^\/menu\/.*$/, /^\/order\/.*$/],
-    runtimeCaching: [
-      {
-        urlPattern: /^https:\/\/.*\/api\/menu\/public\/.*/i,
-        handler: 'StaleWhileRevalidate',
-        options: {
-          cacheName: 'menu-cache',
-          expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 },
-        },
-      },
-      {
-        urlPattern: /^https:\/\/.*\/api\/tables\/public\/.*/i,
-        handler: 'CacheFirst',
-        options: {
-          cacheName: 'table-cache',
-          expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 },
-        },
-      },
-    ],
   },
 });
 

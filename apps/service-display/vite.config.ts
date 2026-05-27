@@ -1,8 +1,20 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
+
+const pwaPlugin: any = VitePWA({
+  registerType: 'autoUpdate',
+  strategies: 'injectManifest',
+  srcDir: 'public',
+  filename: 'sw.js',
+  injectManifest: {
+    globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+  },
+  manifest: false, // manifest.webmanifest already exists in public/
+});
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), pwaPlugin],
   build: {
     rollupOptions: {
       output: {

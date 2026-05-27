@@ -475,14 +475,9 @@ tablesRouter.delete(
         return;
       }
 
-      // Check for query param ?permanent=true for actual deletion
-      if (req.query.permanent === 'true') {
-        await prisma.table.delete({ where: { id: req.params.id } });
-        res.json({ success: true, message: 'Table permanently deleted' });
-      } else {
-        await prisma.table.update({ where: { id: req.params.id }, data: { isActive: false } });
-        res.json({ success: true, message: 'Table deactivated' });
-      }
+      // Always soft-delete to preserve session, payment, and order history
+      await prisma.table.update({ where: { id: req.params.id }, data: { isActive: false } });
+      res.json({ success: true, message: 'Table deactivated' });
     } catch {
       res.status(500).json({ success: false, error: 'Failed to process table deletion' });
     }

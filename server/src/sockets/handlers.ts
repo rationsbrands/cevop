@@ -10,6 +10,33 @@ import {
   getOnlineWaiters,
 } from '../services/waiterAssignment';
 
+// Per-socket event rate limiter
+// Prevents malicious clients from spamming events and overwhelming the server
+const socketEventCounts = new Map<string, { count: number; resetAt: number }>();
+
+function socketRateLimit(socketId: string, limit = 60, windowMs = 60_000): boolean {
+  const now = Date.now();
+  const entry = socketEventCounts.get(socketId);
+  if (!entry || now > entry.resetAt) {
+    socketEventCounts.set(socketId, { count: 1, resetAt: now + windowMs });
+    return true; // allowed
+  }
+  entry.count++;
+  if (entry.count > limit) return false; // blocked
+  return true;
+}
+
+// Clean up stale entries every 5 minutes so the Map doesn't grow forever
+setInterval(
+  () => {
+    const now = Date.now();
+    for (const [id, entry] of socketEventCounts.entries()) {
+      if (now > entry.resetAt) socketEventCounts.delete(id);
+    }
+  },
+  5 * 60 * 1000,
+).unref();
+
 export function initSocketHandlers(io: Server): void {
   io.use((socket: Socket, next) => {
     const token = socket.handshake.auth.token;
@@ -89,6 +116,10 @@ export function initSocketHandlers(io: Server): void {
     }
 
     socket.on('JOIN_ORG', async (orgId: string) => {
+      if (!socketRateLimit(socket.id)) {
+        socket.emit('ERROR', { message: 'Too many requests' });
+        return;
+      }
       if (!user) {
         socket.emit('ERROR', { message: 'Unauthorized room join' });
         return;
@@ -110,12 +141,14 @@ export function initSocketHandlers(io: Server): void {
     // Unauthenticated join — customer PWA only, for menu availability updates
     // No sensitive data in these events — only menu item availability changes
     socket.on('JOIN_ORG_PUBLIC', (orgId: string) => {
+      if (!socketRateLimit(socket.id)) return;
       if (typeof orgId !== 'string' || orgId.length > 100) return; // basic validation
       socket.join(orgId);
       logger.info('Customer PWA joined org room for menu updates', { orgId, socketId: socket.id });
     });
 
     socket.on('JOIN_BRANCH_PUBLIC', ({ orgId, branchId }: { orgId: string; branchId: string }) => {
+      if (!socketRateLimit(socket.id)) return;
       if (typeof orgId !== 'string' || typeof branchId !== 'string') return;
       const room = `${orgId}:${branchId}`;
       socket.join(room);
@@ -127,6 +160,10 @@ export function initSocketHandlers(io: Server): void {
 
     // Join a specific branch room (for branch-scoped service displays)
     socket.on('JOIN_BRANCH', async ({ orgId, branchId }: { orgId: string; branchId: string }) => {
+      if (!socketRateLimit(socket.id)) {
+        socket.emit('ERROR', { message: 'Too many requests' });
+        return;
+      }
       if (!user) {
         socket.emit('ERROR', { message: 'Unauthorized room join' });
         return;
@@ -147,6 +184,10 @@ export function initSocketHandlers(io: Server): void {
     });
 
     socket.on('SHIFT_START', async (_: unknown, ack?: (payload: any) => void) => {
+      if (!socketRateLimit(socket.id, 10, 60_000)) {
+        ack?.({ success: false, error: 'Too many requests' });
+        return;
+      }
       try {
         if (!user || user.role !== 'WAITER') {
           ack?.({ success: false, error: 'Unauthorized' });
@@ -178,6 +219,10 @@ export function initSocketHandlers(io: Server): void {
     });
 
     socket.on('SHIFT_END', async (_: unknown, ack?: (payload: any) => void) => {
+      if (!socketRateLimit(socket.id, 10, 60_000)) {
+        ack?.({ success: false, error: 'Too many requests' });
+        return;
+      }
       try {
         if (!user || user.role !== 'WAITER') {
           ack?.({ success: false, error: 'Unauthorized' });
@@ -217,6 +262,10 @@ export function initSocketHandlers(io: Server): void {
     });
 
     socket.on('JOIN_ORDER', async ({ orderId }: { orderId: string }) => {
+      if (!socketRateLimit(socket.id)) {
+        socket.emit('ERROR', { message: 'Too many requests' });
+        return;
+      }
       try {
         const order = await prisma.order.findUnique({
           where: { id: orderId },
@@ -240,6 +289,7 @@ export function initSocketHandlers(io: Server): void {
 
     socket.on('disconnect', () => {
       logger.info('Socket disconnected', { socketId: socket.id });
+      socketEventCounts.delete(socket.id); // clean up immediately on disconnect
 
       // Unregister waiter if they were one
       const unregistered = unregisterWaiter(socket.id);

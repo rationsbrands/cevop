@@ -39,7 +39,7 @@ const PWA_URL =
 export function TablesPage() {
   const { user } = useAuth();
   const api = useApi();
-  const { socket } = useSocket();
+  const { socket, syncSignal } = useSocket();
   const [tables, setTables] = useState<Table[]>([]);
   const [sections, setSections] = useState<{ id: string; name: string }[]>([]);
   const [qrCodes, setQrCodes] = useState<QREntry[]>([]);
@@ -139,6 +139,13 @@ export function TablesPage() {
     return () => window.clearTimeout(t);
   }, [load]);
 
+  // Re-fetch whenever server signals sync needed
+  useEffect(() => {
+    if (syncSignal === 0) return;
+    const t = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(t);
+  }, [syncSignal, load]);
+
   // Real-time updates
   useEffect(() => {
     if (!socket) return;
@@ -208,13 +215,19 @@ export function TablesPage() {
     socket.on('SESSION_CLOSED', handleSessionClosed);
     socket.on('TABLE_CLAIMED', handleTableClaimed);
 
+    function handleReconnect() {
+      void load();
+    }
+    socket.on('connect', handleReconnect);
+
     return () => {
       socket.off('TABLE_STATUS_CHANGED', handleTableStatusChanged);
       socket.off('SESSION_OPENED', handleSessionOpened);
       socket.off('SESSION_CLOSED', handleSessionClosed);
       socket.off('TABLE_CLAIMED', handleTableClaimed);
+      socket.off('connect', handleReconnect);
     };
-  }, [socket]);
+  }, [socket, load]);
 
   async function saveTable() {
     setSaving(true);
@@ -265,19 +278,6 @@ export function TablesPage() {
   async function activate(id: string) {
     await api.put(`/api/tables/${id}`, { isActive: true });
     load();
-  }
-
-  async function deleteTable(id: string) {
-    openConfirm({
-      title: 'Delete Table',
-      message: 'Permanently delete this table? This cannot be undone.',
-      confirmLabel: 'Delete',
-      variant: 'danger',
-      action: async () => {
-        await api.delete(`/api/tables/${id}?permanent=true`);
-        await load();
-      },
-    });
   }
 
   function downloadQR(entry: QREntry) {
@@ -636,9 +636,6 @@ export function TablesPage() {
                         Mark Clean
                       </button>
                     )}
-                    <button className="btn btn-danger btn-sm" onClick={() => deleteTable(t.id)}>
-                      Delete
-                    </button>
                   </div>
                 </td>
               </tr>

@@ -81,7 +81,9 @@ paymentsRouter.get(
       res.json({ success: true, data: result });
     } catch (err) {
       logger.error('GET /payments/open-sessions error', { err });
-      res.status(500).json({ success: false, error: 'Failed to fetch open sessions' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch open sessions' });
     }
   },
 );
@@ -134,7 +136,9 @@ paymentsRouter.post('/', requireRole(...CASHIER_ROLES), async (req: AuthRequest,
     });
 
     if (!session) {
-      res.status(404).json({ success: false, error: 'Session not found or already closed' });
+      res
+        .status(404)
+        .json({ success: false, code: 'NOT_FOUND', error: 'Session not found or already closed' });
       return;
     }
 
@@ -174,6 +178,21 @@ paymentsRouter.post('/', requireRole(...CASHIER_ROLES), async (req: AuthRequest,
       sessionClosed = true;
     }
 
+    // Notify all clients that payment state changed for this session
+    const orgBranch = `${req.user!.organizationId}:${req.branchScope!}`;
+    io.to(orgBranch).emit('PAYMENT_RECORDED', {
+      sessionId: body.sessionId,
+      payment: { id: payment.id, amount: Number(payAmount), method: body.method },
+      totalPaid,
+      grandTotal,
+      sessionClosed,
+    });
+    io.to(orgBranch).emit('SYNC_REQUIRED', {
+      type: 'PAYMENT_RECORDED',
+      sessionId: body.sessionId,
+      sessionClosed,
+    });
+
     res.json({ success: true, data: { payment, sessionClosed, totalPaid, grandTotal } });
   } catch (err) {
     if (err instanceof z.ZodError) {
@@ -181,7 +200,9 @@ paymentsRouter.post('/', requireRole(...CASHIER_ROLES), async (req: AuthRequest,
       return;
     }
     logger.error('POST /payments error', { err });
-    res.status(500).json({ success: false, error: 'Failed to record payment' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to record payment' });
   }
 });
 
@@ -249,7 +270,9 @@ paymentsRouter.get(
       res.json({ success: true, data: result });
     } catch (err) {
       logger.error('GET /payments/history error', { err });
-      res.status(500).json({ success: false, error: 'Failed to fetch payment history' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch payment history' });
     }
   },
 );
@@ -274,7 +297,7 @@ paymentsRouter.patch(
         payment.organizationId !== orgId ||
         (branchScope && payment.branchId !== branchScope)
       ) {
-        res.status(404).json({ success: false, error: 'Payment not found' });
+        res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Payment not found' });
         return;
       }
 
@@ -313,7 +336,9 @@ paymentsRouter.patch(
       res.json({ success: true, data: { voided: true } });
     } catch (err) {
       logger.error('PATCH /payments/:id/void error', { err });
-      res.status(500).json({ success: false, error: 'Failed to void payment' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to void payment' });
     }
   },
 );

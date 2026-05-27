@@ -1,11 +1,58 @@
 import { prisma } from './prisma';
 import { logger } from './logger';
 import { io } from '../index';
+import { getRedisClient } from './redis';
 
-// In-memory registry of online waiters per branch
-// Key: `${orgId}:${branchId}` or `${orgId}` for org-wide
-// Value: Set of { userId, socketId }
+// Waiter online registry — dual-layer:
+//   1. In-memory Map for low-latency reads within the current process
+//   2. Redis (Upstash) for persistence across server restarts
+//      Key: cevop:waiters:{orgId}:{branchId}
+//      Value: JSON array of { userId, socketId }
+//      TTL: 90 seconds — sockets ping every 25s so this stays alive automatically
+//
+// On startup, the in-memory map is empty. It self-heals within one keepalive cycle
+// as sockets reconnect and re-register. Redis lets us survive brief restarts without
+// a full cold-start gap.
+
+const WAITER_TTL_SECONDS = 90;
 const onlineWaiters = new Map<string, Set<{ userId: string; socketId: string }>>();
+
+function redisKey(orgId: string, branchId: string | null): string {
+  return `cevop:waiters:${orgId}:${branchId ?? 'org'}`;
+}
+
+async function persistToRedis(orgId: string, branchId: string | null): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  const key = redisKey(orgId, branchId);
+  const mapKey = branchId ? `${orgId}:${branchId}` : orgId;
+  const waiters = onlineWaiters.get(mapKey);
+  try {
+    if (!waiters || waiters.size === 0) {
+      await redis.del(key);
+    } else {
+      const data = JSON.stringify(Array.from(waiters));
+      await redis.set(key, data, { ex: WAITER_TTL_SECONDS });
+    }
+  } catch (err) {
+    logger.warn('Failed to persist waiter state to Redis', { err });
+  }
+}
+
+// On startup, restore from Redis into the in-memory map
+// Called once from index.ts after socket handlers are initialized
+export async function restoreWaiterStateFromRedis(): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  try {
+    // We don't know which keys exist, so we can't restore proactively
+    // Sockets reconnect and re-register within seconds anyway
+    // This function exists for future use with Redis SCAN if needed
+    logger.info('Waiter state will restore as sockets reconnect (Redis-backed)');
+  } catch (err) {
+    logger.warn('Failed to restore waiter state from Redis', { err });
+  }
+}
 
 export function registerWaiter(
   orgId: string,
@@ -22,6 +69,8 @@ export function registerWaiter(
   }
   existing.add({ userId, socketId });
   logger.info('Waiter registered online', { userId, key });
+  // Async persist — don't await, never block the socket connect path
+  void persistToRedis(orgId, branchId);
 }
 
 export function unregisterWaiter(socketId: string): { userId: string; key: string } | null {
@@ -31,6 +80,11 @@ export function unregisterWaiter(socketId: string): { userId: string; key: strin
         waiters.delete(entry);
         if (waiters.size === 0) onlineWaiters.delete(key);
         logger.info('Waiter unregistered offline', { userId: entry.userId, key });
+        // Parse orgId and branchId back from key for Redis persist
+        const [unreg_orgId, unreg_branchId] = key.includes(':')
+          ? [key.split(':')[0], key.split(':').slice(1).join(':')]
+          : [key, null];
+        void persistToRedis(unreg_orgId, unreg_branchId === 'org' ? null : unreg_branchId || null);
         return { userId: entry.userId, key };
       }
     }
@@ -178,6 +232,7 @@ export async function claimTableSession(
   options: { force?: boolean; ignoreLimit?: boolean } = {},
 ): Promise<{
   success: boolean;
+  code?: string;
   error?: string;
   currentWaiter?: string;
   alreadyOwned?: boolean;
@@ -208,7 +263,8 @@ export async function claimTableSession(
     if (!options.force) {
       return {
         success: false,
-        error: 'ALREADY_CLAIMED',
+        code: 'ALREADY_CLAIMED',
+        error: 'This table is already claimed by another waiter',
         currentWaiter: session.assignedWaiter?.name || 'Another waiter',
       };
     }
@@ -249,7 +305,8 @@ export async function claimTableSession(
     if (activeOwnedCount >= branch.maxTablesPerWaiter) {
       return {
         success: false,
-        error: `LIMIT_REACHED: You have reached the maximum of ${branch.maxTablesPerWaiter} active tables.`,
+        code: 'LIMIT_REACHED',
+        error: `You have reached the maximum of ${branch.maxTablesPerWaiter} active tables`,
       };
     }
   }

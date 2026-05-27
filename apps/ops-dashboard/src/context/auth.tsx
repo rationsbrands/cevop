@@ -79,6 +79,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
+      // If we're on the login page and don't have a marker, don't even try
+      if (window.location.pathname === '/login' && !localStorage.getItem(HAS_SESSION_KEY)) {
+        return null;
+      }
+
       const res = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
         credentials: 'include',

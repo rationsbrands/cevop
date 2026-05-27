@@ -110,19 +110,23 @@ authRouter.get('/impersonate/exchange', async (req: Request, res: Response) => {
     const store = getImpersonationCodeStore();
     const entry = store.get(code);
     if (!entry) {
-      res.status(400).json({ success: false, error: 'Invalid or expired code' });
+      res
+        .status(400)
+        .json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid or expired code' });
       return;
     }
     store.delete(code);
 
     if (Date.now() > entry.expiresAt) {
-      res.status(400).json({ success: false, error: 'Invalid or expired code' });
+      res
+        .status(400)
+        .json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid or expired code' });
       return;
     }
 
     res.json({ success: true, data: { token: entry.token } });
   } catch {
-    res.status(400).json({ success: false, error: 'Invalid request' });
+    res.status(400).json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid request' });
   }
 });
 
@@ -139,7 +143,9 @@ authRouter.post('/push/subscribe', authenticate, async (req: AuthRequest, res: R
     const { subscription } = schema.parse(req.body);
     const endpoint = typeof subscription?.endpoint === 'string' ? subscription.endpoint : '';
     if (!endpoint) {
-      res.status(400).json({ success: false, error: 'Invalid subscription' });
+      res
+        .status(400)
+        .json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid subscription' });
       return;
     }
 
@@ -165,7 +171,7 @@ authRouter.post('/push/subscribe', authenticate, async (req: AuthRequest, res: R
 
     res.json({ success: true });
   } catch {
-    res.status(400).json({ success: false, error: 'Invalid request' });
+    res.status(400).json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid request' });
   }
 });
 
@@ -178,7 +184,7 @@ authRouter.post('/push/unsubscribe', authenticate, async (req: AuthRequest, res:
     });
     res.json({ success: true });
   } catch {
-    res.status(400).json({ success: false, error: 'Invalid request' });
+    res.status(400).json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid request' });
   }
 });
 
@@ -205,7 +211,9 @@ authRouter.post('/login', async (req: Request, res: Response) => {
 
     if (candidates.length === 0) {
       // Generic message — don't reveal whether email exists
-      res.status(401).json({ success: false, error: 'Invalid email or password' });
+      res
+        .status(401)
+        .json({ success: false, code: 'UNAUTHORIZED', error: 'Invalid email or password' });
       return;
     }
 
@@ -249,7 +257,9 @@ authRouter.post('/login', async (req: Request, res: Response) => {
         return;
       }
 
-      res.status(401).json({ success: false, error: 'Invalid email or password' });
+      res
+        .status(401)
+        .json({ success: false, code: 'UNAUTHORIZED', error: 'Invalid email or password' });
       return;
     }
 
@@ -388,11 +398,18 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+      res
+        .status(400)
+        .json({
+          success: false,
+          code: 'VALIDATION_ERROR',
+          error: 'Validation error',
+          details: err.errors,
+        });
       return;
     }
     logger.error('Login error', { err });
-    res.status(500).json({ success: false, error: 'Login failed' });
+    res.status(500).json({ success: false, code: 'INTERNAL_ERROR', error: 'Login failed' });
   }
 });
 
@@ -401,7 +418,7 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
   try {
     const rawRefresh = req.cookies?.[getRefreshCookieName(req)];
     if (!rawRefresh) {
-      res.status(401).json({ success: false, error: 'No refresh token' });
+      res.status(401).json({ success: false, code: 'UNAUTHORIZED', error: 'No refresh token' });
       return;
     }
     const tokenHash = hashToken(rawRefresh);
@@ -412,12 +429,14 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
     });
 
     if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
-      res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
+      res
+        .status(401)
+        .json({ success: false, code: 'UNAUTHORIZED', error: 'Invalid or expired refresh token' });
       return;
     }
 
     if (!stored.user.isActive) {
-      res.status(401).json({ success: false, error: 'Account deactivated' });
+      res.status(401).json({ success: false, code: 'UNAUTHORIZED', error: 'Account deactivated' });
       return;
     }
 
@@ -453,7 +472,7 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
     res.cookie(getRefreshCookieName(req), newRawRefresh, COOKIE_OPTIONS);
     res.json({ success: true, data: { accessToken: newAccess, expiresIn: 900 } });
   } catch {
-    res.status(500).json({ success: false, error: 'Token refresh failed' });
+    res.status(500).json({ success: false, code: 'INTERNAL_ERROR', error: 'Token refresh failed' });
   }
 });
 
@@ -493,7 +512,7 @@ authRouter.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
       include: { organization: true, branch: true },
     });
     if (!user) {
-      res.status(404).json({ success: false, error: 'User not found' });
+      res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'User not found' });
       return;
     }
 
@@ -539,7 +558,7 @@ authRouter.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
       },
     });
   } catch {
-    res.status(500).json({ success: false, error: 'Failed to fetch user' });
+    res.status(500).json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch user' });
   }
 });
 
@@ -577,7 +596,9 @@ authRouter.post('/forgot-password', async (req: Request, res: Response) => {
 
     res.json({ success: true, message: 'If that email exists, a reset link has been sent.' });
   } catch {
-    res.status(500).json({ success: false, error: 'Failed to process request' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to process request' });
   }
 });
 
@@ -592,7 +613,9 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
 
     const user = await prisma.user.findUnique({ where: { passwordResetToken: token } });
     if (!user || !user.passwordResetExpiry || user.passwordResetExpiry < new Date()) {
-      res.status(400).json({ success: false, error: 'Invalid or expired reset token' });
+      res
+        .status(400)
+        .json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid or expired reset token' });
       return;
     }
 
@@ -617,10 +640,19 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
     res.json({ success: true, message: 'Password updated successfully' });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+      res
+        .status(400)
+        .json({
+          success: false,
+          code: 'VALIDATION_ERROR',
+          error: 'Validation error',
+          details: err.errors,
+        });
       return;
     }
-    res.status(500).json({ success: false, error: 'Failed to reset password' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to reset password' });
   }
 });
 
@@ -661,10 +693,14 @@ authRouter.post('/resend-verification', async (req: Request, res: Response) => {
     });
   } catch (err) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: 'Valid email required' });
+      res
+        .status(400)
+        .json({ success: false, code: 'INVALID_REQUEST', error: 'Valid email required' });
       return;
     }
-    res.status(500).json({ success: false, error: 'Failed to resend verification' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to resend verification' });
   }
 });
 
@@ -681,7 +717,9 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
 
     const invite = await prisma.inviteToken.findUnique({ where: { token } });
     if (!invite || invite.usedAt || invite.expiresAt < new Date()) {
-      res.status(400).json({ success: false, error: 'Invalid or expired invite link' });
+      res
+        .status(400)
+        .json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid or expired invite link' });
       return;
     }
 
@@ -712,7 +750,13 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
       },
     });
     if (existing) {
-      res.status(409).json({ success: false, error: 'An account with this email already exists' });
+      res
+        .status(409)
+        .json({
+          success: false,
+          code: 'CONFLICT',
+          error: 'An account with this email already exists',
+        });
       return;
     }
 
@@ -805,10 +849,19 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
     });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+      res
+        .status(400)
+        .json({
+          success: false,
+          code: 'VALIDATION_ERROR',
+          error: 'Validation error',
+          details: err.errors,
+        });
       return;
     }
-    res.status(500).json({ success: false, error: 'Failed to accept invite' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to accept invite' });
   }
 });
 
@@ -821,7 +874,9 @@ authRouter.get('/validate-invite/:token', async (req: Request, res: Response) =>
     });
 
     if (!invite || invite.usedAt || invite.expiresAt < new Date()) {
-      res.status(400).json({ success: false, error: 'Invalid or expired invite' });
+      res
+        .status(400)
+        .json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid or expired invite' });
       return;
     }
 
@@ -835,7 +890,9 @@ authRouter.get('/validate-invite/:token', async (req: Request, res: Response) =>
       },
     });
   } catch {
-    res.status(500).json({ success: false, error: 'Failed to validate invite' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to validate invite' });
   }
 });
 
@@ -849,7 +906,9 @@ authRouter.post(
   requireOpsPermission('onboard_org'),
   async (req: AuthRequest, res: Response) => {
     if (req.user!.role !== 'SUPERADMIN') {
-      res.status(403).json({ success: false, error: 'Superadmin access required' });
+      res
+        .status(403)
+        .json({ success: false, code: 'FORBIDDEN', error: 'Superadmin access required' });
       return;
     }
 
@@ -871,7 +930,9 @@ authRouter.post(
 
       const slugExists = await prisma.organization.findUnique({ where: { slug: body.orgSlug } });
       if (slugExists) {
-        res.status(409).json({ success: false, error: 'Organisation slug already taken' });
+        res
+          .status(409)
+          .json({ success: false, code: 'CONFLICT', error: 'Organisation slug already taken' });
         return;
       }
 
@@ -906,10 +967,19 @@ authRouter.post(
       });
     } catch (err: unknown) {
       if (err instanceof z.ZodError) {
-        res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+        res
+          .status(400)
+          .json({
+            success: false,
+            code: 'VALIDATION_ERROR',
+            error: 'Validation error',
+            details: err.errors,
+          });
         return;
       }
-      res.status(500).json({ success: false, error: 'Failed to onboard organisation' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to onboard organisation' });
     }
   },
 );
@@ -923,7 +993,7 @@ authRouter.get('/table/:orgId/:tableId', async (req: Request, res: Response) => 
       include: { organization: true, branch: true },
     });
     if (!table) {
-      res.status(404).json({ success: false, error: 'Table not found' });
+      res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Table not found' });
       return;
     }
 
@@ -941,7 +1011,9 @@ authRouter.get('/table/:orgId/:tableId', async (req: Request, res: Response) => 
       },
     });
   } catch {
-    res.status(500).json({ success: false, error: 'Failed to fetch table info' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch table info' });
   }
 });
 
@@ -1035,11 +1107,20 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
     });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+      res
+        .status(400)
+        .json({
+          success: false,
+          code: 'VALIDATION_ERROR',
+          error: 'Validation error',
+          details: err.errors,
+        });
       return;
     }
     logger.error('Signup error', { err });
-    res.status(500).json({ success: false, error: 'Failed to create organisation' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to create organisation' });
   }
 });
 
@@ -1054,7 +1135,13 @@ authRouter.post('/verify-email', async (req: Request, res: Response) => {
     });
 
     if (!user) {
-      res.status(400).json({ success: false, error: 'Invalid or expired verification token' });
+      res
+        .status(400)
+        .json({
+          success: false,
+          code: 'INVALID_REQUEST',
+          error: 'Invalid or expired verification token',
+        });
       return;
     }
 
@@ -1119,11 +1206,20 @@ authRouter.post('/verify-email', async (req: Request, res: Response) => {
     });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+      res
+        .status(400)
+        .json({
+          success: false,
+          code: 'VALIDATION_ERROR',
+          error: 'Validation error',
+          details: err.errors,
+        });
       return;
     }
     logger.error('Email verification error', { err });
-    res.status(500).json({ success: false, error: 'Failed to verify email' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to verify email' });
   }
 });
 
@@ -1152,12 +1248,14 @@ authRouter.post('/resend-verification', authenticate, async (req: AuthRequest, r
     });
 
     if (!user) {
-      res.status(404).json({ success: false, error: 'User not found' });
+      res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'User not found' });
       return;
     }
 
     if (user.emailVerified) {
-      res.status(400).json({ success: false, error: 'Email is already verified' });
+      res
+        .status(400)
+        .json({ success: false, code: 'INVALID_REQUEST', error: 'Email is already verified' });
       return;
     }
 
@@ -1174,6 +1272,6 @@ authRouter.post('/resend-verification', authenticate, async (req: AuthRequest, r
     res.json({ success: true, message: 'Verification email sent' });
   } catch (err) {
     logger.error('Failed to resend verification email', { err });
-    res.status(500).json({ success: false, error: 'Failed to send email' });
+    res.status(500).json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to send email' });
   }
 });

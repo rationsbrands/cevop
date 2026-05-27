@@ -55,7 +55,7 @@ interface PaymentForm {
 export function CashierPage() {
   const { user } = useAuth();
   const api = useApi();
-  const { socket } = useSocket();
+  const { socket, syncSignal } = useSocket();
   const currency = user?.organization?.currency ?? 'NGN';
 
   const [tab, setTab] = useState<'open' | 'history'>('open');
@@ -124,6 +124,15 @@ export function CashierPage() {
     };
   }, [load]);
 
+  // Re-fetch whenever server signals sync needed (payments, session changes)
+  useEffect(() => {
+    if (syncSignal === 0) return;
+    const t = window.setTimeout(() => {
+      void load(true).catch(() => void 0);
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [syncSignal, load]);
+
   // Background Heartbeat Sync
   useEffect(() => {
     const interval = setInterval(() => {
@@ -147,6 +156,8 @@ export function CashierPage() {
     socket.on('ORDER_UPDATED', handleUpdate);
     socket.on('SERVICE_REQUEST_CREATED', handleUpdate);
     socket.on('SERVICE_REQUEST_UPDATED', handleUpdate);
+    socket.on('PAYMENT_RECORDED', handleUpdate);
+    socket.on('connect', handleUpdate);
 
     return () => {
       socket.off('SESSION_CLOSED', handleUpdate);
@@ -154,6 +165,8 @@ export function CashierPage() {
       socket.off('ORDER_UPDATED', handleUpdate);
       socket.off('SERVICE_REQUEST_CREATED', handleUpdate);
       socket.off('SERVICE_REQUEST_UPDATED', handleUpdate);
+      socket.off('PAYMENT_RECORDED', handleUpdate);
+      socket.off('connect', handleUpdate);
     };
   }, [socket, load]);
 

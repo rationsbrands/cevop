@@ -3,7 +3,6 @@ import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../services/auth';
 import { useTheme } from '../context/theme';
 import { AutoFitText } from '../components/AutoFitText';
-import { formatPrice } from '../../../../shared/utils/currency';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 
@@ -136,7 +135,6 @@ export function ServiceBoard() {
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
-  const nextThemeLabel = nextThemeMode === 'system' ? 'OS' : nextThemeMode === 'dark' ? 'D' : 'L';
   const [orders, setOrders] = useState<Order[]>([]);
   const [ordersHasMore, setOrdersHasMore] = useState(false);
   const [ordersCursor, setOrdersCursor] = useState<string | null>(null);
@@ -431,6 +429,8 @@ export function ServiceBoard() {
       } else {
         socket.emit('JOIN_ORG', user.organizationId);
       }
+      // Re-fetch immediately on every connect (initial + reconnect) to catch missed events
+      refreshNowRef.current().catch(() => void 0);
     });
     socket.on('disconnect', () => setSocketConnected(false));
 
@@ -500,7 +500,7 @@ export function ServiceBoard() {
     const handleSyncRequired = () => {
       const now = Date.now();
       // Throttle syncs to prevent "refresh loops"
-      if (now - lastSyncAtRef.current < 5000) return;
+      if (now - lastSyncAtRef.current < 2000) return; // 2s throttle — tight enough to not swallow rapid mutations
       lastSyncAtRef.current = now;
       refreshNowRef.current().catch(() => void 0);
     };

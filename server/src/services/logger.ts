@@ -1,41 +1,24 @@
 import { createLogger, format, transports } from 'winston';
+import { WinstonTransport as AxiomTransport } from '@axiomhq/winston';
 
-function safeStringify(value: unknown): string {
-  const seen = new WeakSet<object>();
-  return JSON.stringify(
-    value,
-    (_key, v) => {
-      if (v instanceof Error) {
-        return { name: v.name, message: v.message, stack: v.stack };
-      }
-      if (typeof v === 'object' && v !== null) {
-        if (seen.has(v as object)) return '[Circular]';
-        seen.add(v as object);
-      }
-      return v;
-    },
-    0,
-  );
-}
+const isProduction = process.env.NODE_ENV === 'production';
+
+const axiomTransport =
+  process.env.AXIOM_TOKEN && process.env.AXIOM_DATASET
+    ? new AxiomTransport({
+        token: process.env.AXIOM_TOKEN,
+        dataset: process.env.AXIOM_DATASET,
+      })
+    : null;
 
 export const logger = createLogger({
   level: process.env.LOG_LEVEL || 'info',
-  format: format.combine(
-    format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    format.errors({ stack: true }),
-    format.splat(),
-    format.json(),
-  ),
-  defaultMeta: { service: 'cevop-api' },
+  format: format.combine(format.timestamp(), format.errors({ stack: true }), format.json()),
+  defaultMeta: { service: 'cevop-api', env: process.env.NODE_ENV },
   transports: [
     new transports.Console({
-      format: format.combine(
-        format.colorize(),
-        format.printf(({ timestamp, level, message, ...meta }) => {
-          const metaStr = Object.keys(meta).length ? ` ${safeStringify(meta)}` : '';
-          return `${timestamp} [${level}]: ${message}${metaStr}`;
-        }),
-      ),
+      format: isProduction ? format.json() : format.combine(format.colorize(), format.simple()),
     }),
+    ...(axiomTransport ? [axiomTransport] : []),
   ],
 });

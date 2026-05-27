@@ -88,7 +88,7 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
     }
 
     if (!table) {
-      res.status(404).json({ success: false, error: 'Table not found' });
+      res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Table not found' });
       return;
     }
 
@@ -233,7 +233,14 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
     }
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+      res
+        .status(400)
+        .json({
+          success: false,
+          code: 'VALIDATION_ERROR',
+          error: 'Validation error',
+          details: err.errors,
+        });
       return;
     }
 
@@ -254,12 +261,14 @@ ordersRouter.get('/public/:orderId', async (req: Request, res: Response) => {
       },
     });
     if (!order) {
-      res.status(404).json({ success: false, error: 'Order not found' });
+      res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Order not found' });
       return;
     }
     res.json({ success: true, data: order });
   } catch {
-    res.status(500).json({ success: false, error: 'Failed to fetch order' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch order' });
   }
 });
 
@@ -388,7 +397,9 @@ ordersRouter.get(
         },
       });
     } catch {
-      res.status(500).json({ success: false, error: 'Failed to fetch analytics' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch analytics' });
     }
   },
 );
@@ -474,7 +485,9 @@ ordersRouter.get(
       analyticsCache.set(cacheKey, { data: result, expiresAt: now + 30_000 });
       res.json({ success: true, data: result });
     } catch {
-      res.status(500).json({ success: false, error: 'Failed to fetch analytics' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch analytics' });
     }
   },
 );
@@ -540,7 +553,13 @@ ordersRouter.get(
       res.json({ success: true, data: timeline });
     } catch (err) {
       logger.error('GET /analytics/revenue-timeline error', { err });
-      res.status(500).json({ success: false, error: 'Failed to fetch revenue timeline' });
+      res
+        .status(500)
+        .json({
+          success: false,
+          code: 'INTERNAL_ERROR',
+          error: 'Failed to fetch revenue timeline',
+        });
     }
   },
 );
@@ -672,7 +691,9 @@ ordersRouter.get(
       res.send(BOM + csv);
     } catch (err) {
       logger.error('GET /orders/export/csv error', { err });
-      res.status(500).json({ success: false, error: 'Failed to export orders' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to export orders' });
     }
   },
 );
@@ -700,7 +721,9 @@ ordersRouter.patch(
           select: { isOnShift: true } as any,
         });
         if (!(waiter as any)?.isOnShift) {
-          res.status(403).json({ success: false, error: 'Start shift to work on tasks' });
+          res
+            .status(403)
+            .json({ success: false, code: 'FORBIDDEN', error: 'Start shift to work on tasks' });
           return;
         }
       }
@@ -797,7 +820,9 @@ ordersRouter.patch(
     } catch (err) {
       if (err instanceof z.ZodError)
         return res.status(400).json({ success: false, error: err.errors[0].message });
-      res.status(500).json({ success: false, error: 'Failed to update status' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to update status' });
     }
   },
 );
@@ -814,7 +839,9 @@ ordersRouter.patch(
           select: { isOnShift: true } as any,
         });
         if (!(waiter as any)?.isOnShift) {
-          res.status(403).json({ success: false, error: 'Start shift to claim tasks' });
+          res
+            .status(403)
+            .json({ success: false, code: 'FORBIDDEN', error: 'Start shift to claim tasks' });
           return;
         }
       }
@@ -833,7 +860,9 @@ ordersRouter.patch(
       });
 
       if (result.count === 0) {
-        res.status(404).json({ success: false, error: 'Task not found or already assigned' });
+        res
+          .status(404)
+          .json({ success: false, code: 'NOT_FOUND', error: 'Task not found or already assigned' });
         return;
       }
 
@@ -842,7 +871,10 @@ ordersRouter.patch(
         include: { items: { include: { menuItem: true } }, table: true },
       });
 
-      if (!updated) return res.status(404).json({ success: false, error: 'Order not found' });
+      if (!updated)
+        return res
+          .status(404)
+          .json({ success: false, code: 'NOT_FOUND', error: 'Order not found' });
 
       if (updated.sessionId && updated.tableId && updated.branchId) {
         const { claimTableSession } = await import('../services/waiterAssignment');
@@ -863,7 +895,9 @@ ordersRouter.patch(
 
       res.json({ success: true, data: updated });
     } catch {
-      res.status(500).json({ success: false, error: 'Failed to claim task' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to claim task' });
     }
   },
 );
@@ -893,7 +927,10 @@ ordersRouter.patch(
         },
       });
 
-      if (!existing) return res.status(404).json({ success: false, error: 'Order not found' });
+      if (!existing)
+        return res
+          .status(404)
+          .json({ success: false, code: 'NOT_FOUND', error: 'Order not found' });
 
       if (waiterId) {
         const waiter = await prisma.user.findFirst({
@@ -904,7 +941,10 @@ ordersRouter.patch(
             isActive: true,
           },
         });
-        if (!waiter) return res.status(404).json({ success: false, error: 'Waiter not found' });
+        if (!waiter)
+          return res
+            .status(404)
+            .json({ success: false, code: 'NOT_FOUND', error: 'Waiter not found' });
         if (existing.branchId !== waiter.branchId)
           return res
             .status(400)
@@ -926,7 +966,9 @@ ordersRouter.patch(
     } catch (err) {
       if (err instanceof z.ZodError)
         return res.status(400).json({ success: false, error: err.errors[0].message });
-      res.status(500).json({ success: false, error: 'Failed to assign waiter' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to assign waiter' });
     }
   },
 );
@@ -964,9 +1006,12 @@ ordersRouter.patch(
           .json({ success: false, error: 'Order not found or cannot be modified' });
 
       const item = order.items.find((i: any) => i.id === req.params.itemId);
-      if (!item) return res.status(404).json({ success: false, error: 'Item not found' });
+      if (!item)
+        return res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Item not found' });
       if ((item as any).cancelledAt)
-        return res.status(400).json({ success: false, error: 'Item already cancelled' });
+        return res
+          .status(400)
+          .json({ success: false, code: 'INVALID_REQUEST', error: 'Item already cancelled' });
 
       await (prisma.orderItem as any).update({
         where: { id: item.id },
@@ -1012,7 +1057,9 @@ ordersRouter.patch(
     } catch (err) {
       if (err instanceof z.ZodError)
         return res.status(400).json({ success: false, error: err.errors[0].message });
-      res.status(500).json({ success: false, error: 'Failed to cancel item' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to cancel item' });
     }
   },
 );
@@ -1080,7 +1127,9 @@ ordersRouter.get(
     } catch (err) {
       if (err instanceof z.ZodError)
         return res.status(400).json({ success: false, error: err.errors[0].message });
-      res.status(500).json({ success: false, error: 'Failed to fetch stale orders' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch stale orders' });
     }
   },
 );
@@ -1115,7 +1164,7 @@ ordersRouter.post(
         where: { id: tableId, organizationId: orgId, branchId },
       });
       if (!table) {
-        res.status(404).json({ success: false, error: 'Table not found' });
+        res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Table not found' });
         return;
       }
 
@@ -1126,7 +1175,13 @@ ordersRouter.post(
       });
 
       if (menuItems.length !== itemIds.length) {
-        res.status(400).json({ success: false, error: 'One or more items are invalid' });
+        res
+          .status(400)
+          .json({
+            success: false,
+            code: 'INVALID_REQUEST',
+            error: 'One or more items are invalid',
+          });
         return;
       }
 
@@ -1148,7 +1203,13 @@ ordersRouter.post(
       const { getOrCreateSession } = await import('../services/tableSession');
       const sessionId = await getOrCreateSession(table.id, orgId, branchId);
       if (!sessionId) {
-        res.status(400).json({ success: false, error: 'Could not create table session' });
+        res
+          .status(400)
+          .json({
+            success: false,
+            code: 'INVALID_REQUEST',
+            error: 'Could not create table session',
+          });
         return;
       }
 
@@ -1191,7 +1252,9 @@ ordersRouter.post(
       res.status(201).json({ success: true, data: order });
     } catch (err: any) {
       logger.error('POST /orders (Staff) error', { error: err });
-      res.status(500).json({ success: false, error: 'Failed to place order' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to place order' });
     }
   },
 );
@@ -1210,7 +1273,13 @@ ordersRouter.post(
         .parse(req.body);
 
       if (action === 'CANCEL' && !reason) {
-        res.status(400).json({ success: false, error: 'reason is required for CANCEL' });
+        res
+          .status(400)
+          .json({
+            success: false,
+            code: 'INVALID_REQUEST',
+            error: 'reason is required for CANCEL',
+          });
         return;
       }
 
@@ -1303,7 +1372,9 @@ ordersRouter.post(
       if (err instanceof z.ZodError)
         return res.status(400).json({ success: false, error: err.errors[0].message });
       logger.error('POST /orders/reconcile error', { err });
-      res.status(500).json({ success: false, error: 'Failed to reconcile orders' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to reconcile orders' });
     }
   },
 );
@@ -1349,25 +1420,39 @@ ordersRouter.post(
     } catch (err) {
       if (err instanceof z.ZodError)
         return res.status(400).json({ success: false, error: err.errors[0].message });
-      res.status(500).json({ success: false, error: 'Failed to force sync' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to force sync' });
     }
   },
 );
 
 ordersRouter.get('/', async (req: AuthRequest, res: Response) => {
   try {
-    const { status, tableId, limit, cursor } = z
+    const { status, tableId, limit, cursor, date, search } = z
       .object({
         status: z.union([z.string(), z.array(z.string())]).optional(),
         tableId: z.string().optional(),
-        limit: z.coerce.number().int().min(1).max(100).default(50),
+        limit: z.coerce.number().int().min(1).max(200).default(100),
         cursor: z.string().optional(),
+        // date in YYYY-MM-DD local format; defaults to today in org timezone (we use UTC date boundary)
+        date: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .optional(),
+        search: z.string().max(100).optional(),
       })
       .parse(req.query);
+
+    // Build date range — start and end of the requested day in UTC
+    const targetDate = date ?? new Date().toISOString().slice(0, 10);
+    const dayStart = new Date(targetDate + 'T00:00:00.000Z');
+    const dayEnd = new Date(targetDate + 'T23:59:59.999Z');
 
     const where: Prisma.OrderWhereInput = {
       organizationId: req.user!.organizationId,
       branchId: req.branchScope!,
+      createdAt: { gte: dayStart, lte: dayEnd },
     };
 
     if (status) {
@@ -1375,25 +1460,40 @@ ordersRouter.get('/', async (req: AuthRequest, res: Response) => {
     }
     if (tableId) where.tableId = tableId;
 
+    // Search: match against table label (via relation) — fetch then filter
     const orders = await prisma.order.findMany({
       where,
       include: {
         items: { include: { menuItem: { select: { name: true } } } },
         table: { select: { label: true, number: true } },
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
 
-    const hasMore = orders.length > limit;
-    const data = hasMore ? orders.slice(0, limit) : orders;
+    // Apply search filter in-memory (table label or order id suffix)
+    const filtered = search
+      ? orders.filter((o) => {
+          const q = search.toLowerCase();
+          return (
+            o.table?.label?.toLowerCase().includes(q) ||
+            o.id.toLowerCase().endsWith(q) ||
+            o.items?.some((i: any) => i.menuItem?.name?.toLowerCase().includes(q))
+          );
+        })
+      : orders;
+
+    const hasMore = filtered.length > limit;
+    const data = hasMore ? filtered.slice(0, limit) : filtered;
     const nextCursor = hasMore ? data[data.length - 1].id : null;
 
-    res.json({ success: true, data, pagination: { hasMore, nextCursor, limit } });
+    res.json({ success: true, data, pagination: { hasMore, nextCursor, limit, date: targetDate } });
   } catch (err) {
     if (err instanceof z.ZodError)
       return res.status(400).json({ success: false, error: err.errors[0].message });
-    res.status(500).json({ success: false, error: 'Failed to fetch orders' });
+    res
+      .status(500)
+      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch orders' });
   }
 });

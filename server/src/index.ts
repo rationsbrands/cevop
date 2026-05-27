@@ -1,4 +1,17 @@
 import 'dotenv/config';
+import * as Sentry from '@sentry/node';
+import { nodeProfilingIntegration } from '@sentry/profiling-node';
+
+// Initialise Sentry before anything else so it captures all errors
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV || 'development',
+  integrations: [nodeProfilingIntegration()],
+  tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.1 : 1.0,
+  profilesSampleRate: 0.1,
+  enabled: !!process.env.SENTRY_DSN,
+});
+
 import express, { Request, Response, NextFunction } from 'express';
 import { createServer } from 'http';
 import cors from 'cors';
@@ -10,7 +23,6 @@ import compression from 'compression';
 import { Ratelimit, type Duration } from '@upstash/ratelimit';
 import { Server as SocketServer } from 'socket.io';
 
-import { env } from './config';
 import { getRedisClient } from './services/redis';
 import { prisma } from './services/prisma';
 
@@ -36,6 +48,8 @@ import { initSocketHandlers } from './sockets/handlers';
 import { errorHandler } from './middleware/errorHandler';
 import { planGuard } from './middleware/planGuard';
 import { logger } from './services/logger';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { createClient } from 'redis';
 
 const app = express();
 const httpServer = createServer(app);
@@ -94,9 +108,24 @@ app.use(cookieParser());
 app.use(compression());
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true }));
+
 // Use minimal format in production — 'combined' is too verbose and slow at high traffic
 const morganFormat = process.env.NODE_ENV === 'production' ? 'tiny' : 'combined';
 app.use(morgan(morganFormat, { stream: { write: (msg) => logger.info(msg.trim()) } }));
+
+// Request timeout — 30s hard limit. Prevents slow DB queries from hanging the server.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const TIMEOUT_MS = 30_000;
+  const timer = setTimeout(() => {
+    if (!res.headersSent) {
+      logger.warn('Request timeout', { method: req.method, url: req.url });
+      res.status(503).json({ success: false, error: 'Request timeout' });
+    }
+  }, TIMEOUT_MS);
+  res.on('finish', () => clearTimeout(timer));
+  res.on('close', () => clearTimeout(timer));
+  next();
+});
 
 // ---------------------------------------------------------------------------
 // Rate limiting — Upstash Redis when available, in-memory fallback otherwise
@@ -228,9 +257,26 @@ app.get('/api/public/config', (req, res) => {
 // Enforce organization plan status
 app.use('/api/', planGuard as express.RequestHandler);
 
-// Health
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.1.0' });
+// Health — actually verify DB connectivity so Railway knows when we're truly unhealthy
+app.get('/health', async (_req, res) => {
+  const start = Date.now();
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({
+      status: 'ok',
+      db: 'ok',
+      dbLatencyMs: Date.now() - start,
+      timestamp: new Date().toISOString(),
+      version: '1.1.0',
+    });
+  } catch (err) {
+    res.status(503).json({
+      status: 'error',
+      db: 'unreachable',
+      error: err instanceof Error ? err.message : 'DB check failed',
+      timestamp: new Date().toISOString(),
+    });
+  }
 });
 
 // Routes
@@ -255,7 +301,22 @@ app.use('/api/payments', paymentsRouter);
 // WebSocket
 initSocketHandlers(io);
 
-const staleOrderCutoffMinutes = Number(process.env.STALE_ORDER_MINUTES || 120);
+// Redis adapter — enables horizontal scaling across multiple server instances
+// Only activates when REDIS_URL is set. Safe to leave unset — falls back to single-instance.
+if (process.env.REDIS_URL) {
+  const pubClient = createClient({ url: process.env.REDIS_URL });
+  const subClient = pubClient.duplicate();
+  Promise.all([pubClient.connect(), subClient.connect()])
+    .then(() => {
+      io.adapter(createAdapter(pubClient, subClient));
+      logger.info('Socket.io Redis adapter connected');
+    })
+    .catch((err) => {
+      logger.error('Socket.io Redis adapter failed — running single-instance', { err });
+    });
+}
+
+const staleOrderCutoffMinutes = Number(process.env.STALE_ORDER_MINUTES || 30); // 30min default — flag early
 const staleOrderCheckEveryMs = Number(process.env.STALE_ORDER_CHECK_MS || 5 * 60 * 1000);
 const staleOrderAuditThrottleMs = 60 * 60 * 1000;
 const lastStaleAudit = new Map<string, { count: number; at: number }>();
@@ -322,6 +383,8 @@ function startStaleOrderMonitor() {
 
 startStaleOrderMonitor();
 
+// Sentry error handler must be before the custom error handler
+Sentry.setupExpressErrorHandler(app);
 // Error handler (must be last)
 app.use(errorHandler);
 

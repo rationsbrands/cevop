@@ -9,6 +9,7 @@
     "dev:service": "npm run dev -w cevop-service-display",
     "dev:admin": "npm run dev -w cevop-admin-dashboard",
     "dev:ops": "npm run dev -w cevop-ops-dashboard",
+    "build": "npm run build:all",
     "build:all": "npm run build --workspaces --if-present",
     "db:migrate": "npm run db:migrate -w cevop-server",
     "db:seed": "npm run db:seed -w cevop-server",

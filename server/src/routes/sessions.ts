@@ -9,6 +9,7 @@ import {
   AuthRequest,
 } from '../middleware/auth';
 import { closeSession } from '../services/tableSession';
+import { io } from '../index';
 import { logger } from '../services/logger';
 
 export const sessionsRouter = Router();
@@ -49,7 +50,7 @@ sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response
     });
 
     if (!session) {
-      res.status(404).json({ success: false, error: 'Session not found' });
+      res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Session not found' });
       return;
     }
 
@@ -81,7 +82,7 @@ sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response
     });
   } catch (err) {
     logger.error('GET /sessions/public/:sessionId/bill error', { err });
-    res.status(500).json({ success: false, error: 'Failed to fetch bill' });
+    res.status(500).json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch bill' });
   }
 });
 
@@ -146,7 +147,7 @@ sessionsRouter.get(
       });
 
       if (!session) {
-        res.status(404).json({ success: false, error: 'Session not found' });
+        res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Session not found' });
         return;
       }
 
@@ -190,7 +191,9 @@ sessionsRouter.get(
       });
     } catch (err) {
       logger.error('GET /sessions/:id/bill error', { err });
-      res.status(500).json({ success: false, error: 'Failed to fetch bill' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch bill' });
     }
   },
 );
@@ -215,7 +218,7 @@ sessionsRouter.patch(
       });
 
       if (!session) {
-        res.status(404).json({ success: false, error: 'Session not found' });
+        res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Session not found' });
         return;
       }
 
@@ -224,7 +227,7 @@ sessionsRouter.patch(
         session.organizationId !== req.user!.organizationId ||
         session.branchId !== req.branchScope
       ) {
-        res.status(403).json({ success: false, error: 'Access denied' });
+        res.status(403).json({ success: false, code: 'FORBIDDEN', error: 'Access denied' });
         return;
       }
 
@@ -244,11 +247,19 @@ sessionsRouter.patch(
       res.json({ success: true });
     } catch (err: unknown) {
       if (err instanceof Error && err.message === 'Session already closed') {
-        res.status(400).json({ success: false, error: 'Session already closed' });
+        res
+          .status(400)
+          .json({
+            success: false,
+            code: 'SESSION_ALREADY_CLOSED',
+            error: 'Session already closed',
+          });
         return;
       }
       logger.error('PATCH /sessions/:id/close error:', err);
-      res.status(500).json({ success: false, error: 'Failed to close session' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to close session' });
     }
   },
 );
@@ -265,7 +276,7 @@ sessionsRouter.patch(
       });
 
       if (!session) {
-        res.status(404).json({ success: false, error: 'Session not found' });
+        res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Session not found' });
         return;
       }
 
@@ -273,7 +284,7 @@ sessionsRouter.patch(
         session.organizationId !== req.user!.organizationId ||
         session.branchId !== req.branchScope
       ) {
-        res.status(403).json({ success: false, error: 'Access denied' });
+        res.status(403).json({ success: false, code: 'FORBIDDEN', error: 'Access denied' });
         return;
       }
 
@@ -288,7 +299,9 @@ sessionsRouter.patch(
         });
 
         if (!waiter) {
-          res.status(400).json({ success: false, error: 'Invalid waiter' });
+          res
+            .status(400)
+            .json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid waiter' });
           return;
         }
       }
@@ -301,14 +314,35 @@ sessionsRouter.patch(
         },
       });
 
+      // Notify all clients that waiter assignment changed
+      const orgBranch = `${req.user!.organizationId}:${req.branchScope!}`;
+      io.to(orgBranch).emit('TABLE_CLAIMED', {
+        sessionId: req.params.id,
+        tableId: session.tableId,
+        waiterId,
+      });
+      io.to(orgBranch).emit('SYNC_REQUIRED', {
+        type: 'WAITER_ASSIGNED',
+        sessionId: req.params.id,
+      });
+
       res.json({ success: true });
     } catch (err: unknown) {
       if (err instanceof z.ZodError) {
-        res.status(400).json({ success: false, error: 'Validation error', details: err.errors });
+        res
+          .status(400)
+          .json({
+            success: false,
+            code: 'VALIDATION_ERROR',
+            error: 'Validation error',
+            details: err.errors,
+          });
         return;
       }
       logger.error('PATCH /sessions/:id/assign-waiter error:', err);
-      res.status(500).json({ success: false, error: 'Failed to assign waiter' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to assign waiter' });
     }
   },
 );
@@ -324,7 +358,7 @@ sessionsRouter.patch(
       });
 
       if (!session) {
-        res.status(404).json({ success: false, error: 'Session not found' });
+        res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Session not found' });
         return;
       }
 
@@ -332,7 +366,7 @@ sessionsRouter.patch(
         session.organizationId !== req.user!.organizationId ||
         session.branchId !== req.branchScope
       ) {
-        res.status(403).json({ success: false, error: 'Access denied' });
+        res.status(403).json({ success: false, code: 'FORBIDDEN', error: 'Access denied' });
         return;
       }
 
@@ -352,7 +386,9 @@ sessionsRouter.patch(
       res.json({ success: true });
     } catch (err) {
       logger.error('PATCH /sessions/:id/claim error:', err);
-      res.status(500).json({ success: false, error: 'Failed to claim session' });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to claim session' });
     }
   },
 );

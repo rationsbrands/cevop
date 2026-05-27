@@ -269,6 +269,7 @@ model TableSession {
   @@index([tableId, closedAt])
   @@index([branchId, closedAt])
   @@index([organizationId])
+  @@index([branchId, openedAt(sort: Desc)])
   @@map("table_sessions")
 }
 
@@ -300,6 +301,7 @@ model Payment {
 
   @@index([sessionId])
   @@index([branchId, processedAt])
+  @@index([branchId, processedAt(sort: Desc)],map: "payments_branchId_processedAt_desc_idx")
   @@index([organizationId])
   @@map("payments")
 }
@@ -519,6 +521,20 @@ model AuditLog {
   @@index([entity, entityId])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+model NotificationLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  type           String   // 'whatsapp' | 'push' | 'email'
+  recipient      String   // phone or userId
+  event          String   // 'NEW_ORDER' | 'WAITER_CALL' etc
+  status         String   // 'sent' | 'failed' | 'delivered'
+  error          String?
+  sentAt         DateTime @default(now())
+  
+  @@index([organizationId, sentAt])
+  @@map("notification_logs")
 }
 
 enum HelpOptionType {

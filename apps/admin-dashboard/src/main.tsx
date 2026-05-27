@@ -25,31 +25,7 @@ const AcceptInvitePage = React.lazy(() =>
 import { ThemeProvider } from './context/theme';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './index.css';
-
-type DeferredPromptEvent = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
-};
-
-declare global {
-  interface Window {
-    __cevopDeferredInstallPrompt?: DeferredPromptEvent | null;
-  }
-}
-
-try {
-  window.addEventListener('beforeinstallprompt', (e: Event) => {
-    e.preventDefault();
-    window.__cevopDeferredInstallPrompt = e as DeferredPromptEvent;
-    window.dispatchEvent(new Event('cevop-install-available'));
-  });
-  window.addEventListener('appinstalled', () => {
-    window.__cevopDeferredInstallPrompt = null;
-    window.dispatchEvent(new Event('cevop-install-available'));
-  });
-} catch {
-  void 0;
-}
+import * as Sentry from '@sentry/react';
 
 try {
   if (import.meta.env.PROD && 'serviceWorker' in navigator) {
@@ -291,6 +267,14 @@ function AppRoutes() {
 }
 
 const RootWrapper = import.meta.env.DEV ? React.Fragment : React.StrictMode;
+
+Sentry.init({
+  dsn: import.meta.env.VITE_SENTRY_DSN,
+  environment: import.meta.env.MODE,
+  integrations: [Sentry.browserTracingIntegration()],
+  tracesSampleRate: 0.1,
+  enabled: !!import.meta.env.VITE_SENTRY_DSN,
+});
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <RootWrapper>

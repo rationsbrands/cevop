@@ -42,10 +42,17 @@ export function InstallPrompt() {
     }
 
     const handler = (e: Event) => {
+      // Only prevent default if we're actually going to show our custom prompt
+      // This avoids the Chrome console warning about prevented banners that never show
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
-      // Show after a 3-second delay — don't interrupt on arrival
-      setTimeout(() => setShow(true), 3000);
+
+      // If user hasn't dismissed before, show our custom UI
+      const isDismissed = localStorage.getItem('pwa_install_dismissed');
+      if (!isDismissed) {
+        // Show after a delay — don't interrupt on arrival
+        setTimeout(() => setShow(true), 5000);
+      }
     };
 
     window.addEventListener('beforeinstallprompt', handler);

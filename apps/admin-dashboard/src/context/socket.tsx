@@ -6,9 +6,14 @@ const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 interface SocketContextType {
   socket: Socket | null;
   connected: boolean;
+  syncSignal: number; // increments every time SYNC_REQUIRED fires — pages watch this to re-fetch
 }
 
-const SocketContext = createContext<SocketContextType>({ socket: null, connected: false });
+const SocketContext = createContext<SocketContextType>({
+  socket: null,
+  connected: false,
+  syncSignal: 0,
+});
 
 export function SocketProvider({
   children,
@@ -23,6 +28,7 @@ export function SocketProvider({
 }) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
+  const [syncSignal, setSyncSignal] = useState(0);
   const tokenRef = useRef(token);
 
   useEffect(() => {
@@ -60,14 +66,27 @@ export function SocketProvider({
     s.on('disconnect', () => setConnected(false));
     s.on('connect_error', () => setConnected(false));
 
+    // Bump syncSignal on SYNC_REQUIRED so any page watching it can re-fetch
+    s.on('SYNC_REQUIRED', () => setSyncSignal((n) => n + 1));
+
+    // Keepalive ping every 25 seconds — prevents iOS/Android killing idle connections
+    const keepAlive = setInterval(() => {
+      if (s.connected) s.emit('ping');
+    }, 25000);
+
     return () => {
+      clearInterval(keepAlive);
       s.disconnect();
       setSocket(null);
       setConnected(false);
     };
   }, [token, organizationId, branchId]);
 
-  return <SocketContext.Provider value={{ socket, connected }}>{children}</SocketContext.Provider>;
+  return (
+    <SocketContext.Provider value={{ socket, connected, syncSignal }}>
+      {children}
+    </SocketContext.Provider>
+  );
 }
 
 export function useSocket() {

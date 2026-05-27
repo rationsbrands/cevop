@@ -38,7 +38,7 @@ interface ServiceRequest {
 export function OrdersPage() {
   const { activeBranchFilter, user } = useAuth();
   const api = useApi();
-  const { socket } = useSocket();
+  const { socket, syncSignal } = useSocket();
   const canEdit =
     user && ['SUPERADMIN', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'WAITER'].includes(user.role);
   const canReconcile =
@@ -51,6 +51,9 @@ export function OrdersPage() {
   const [waiterCalls, setWaiterCalls] = useState<WaiterCall[]>([]);
   const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
   const [statusFilter, setStatusFilter] = useState('');
+  const today = new Date().toISOString().slice(0, 10);
+  const [dateFilter, setDateFilter] = useState(today);
+  const [searchFilter, setSearchFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'orders' | 'calls' | 'service'>('orders');
@@ -67,7 +70,7 @@ export function OrdersPage() {
   const [cancellationReason, setCancellationReason] = useState('');
 
   const [staleOpen, setStaleOpen] = useState(false);
-  const [staleMinAgeMinutes, setStaleMinAgeMinutes] = useState(120);
+  const [staleMinAgeMinutes, setStaleMinAgeMinutes] = useState(30);
   const [staleOrders, setStaleOrders] = useState<any[]>([]);
   const [staleHasMore, setStaleHasMore] = useState(false);
   const [staleCursor, setStaleCursor] = useState<string | null>(null);
@@ -76,7 +79,6 @@ export function OrdersPage() {
   const [staleActionLoading, setStaleActionLoading] = useState(false);
   const [staleCancelReason, setStaleCancelReason] = useState('Backlog cleanup');
 
-  const [forceSyncing, setForceSyncing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [onlineWaiters, setOnlineWaiters] = useState<
     { id: string; name: string; online: boolean }[]
@@ -126,9 +128,11 @@ export function OrdersPage() {
           setServiceRequests([]);
           return;
         }
-        const qs = statusFilter ? `?status=${statusFilter}&limit=100` : '?limit=100';
+        const params = new URLSearchParams({ limit: '100', date: dateFilter });
+        if (statusFilter) params.set('status', statusFilter);
+        if (searchFilter) params.set('search', searchFilter);
         const [ordersRes, callsRes, serviceRes] = await Promise.all([
-          api.get(`/api/orders${qs}`),
+          api.get(`/api/orders?${params.toString()}`),
           api.get('/api/waiter-calls'),
           api.get('/api/service-requests'),
         ]);
@@ -144,8 +148,15 @@ export function OrdersPage() {
         setSyncing(false);
       }
     },
-    [api, statusFilter],
+    [api, statusFilter, dateFilter, searchFilter],
   );
+
+  // Re-fetch whenever server signals a sync is needed (SYNC_REQUIRED event)
+  useEffect(() => {
+    if (syncSignal === 0) return; // skip initial mount
+    const t = window.setTimeout(() => load(true), 0);
+    return () => window.clearTimeout(t);
+  }, [syncSignal, load]);
 
   // Background Heartbeat Sync
   useEffect(() => {
@@ -163,8 +174,10 @@ export function OrdersPage() {
     if (ordersLoadingMore) return;
     setOrdersLoadingMore(true);
     try {
-      const qs = statusFilter ? `?status=${statusFilter}&limit=100` : '?limit=100';
-      const res = await api.get(`/api/orders${qs}&cursor=${ordersCursor}`);
+      const params = new URLSearchParams({ limit: '100', date: dateFilter, cursor: ordersCursor! });
+      if (statusFilter) params.set('status', statusFilter);
+      if (searchFilter) params.set('search', searchFilter);
+      const res = await api.get(`/api/orders?${params.toString()}`);
       if (!res?.success) return;
 
       const newOrders: any[] = Array.isArray(res.data) ? res.data : [];
@@ -184,10 +197,13 @@ export function OrdersPage() {
     } finally {
       setOrdersLoadingMore(false);
     }
-  }, [api, ordersCursor, ordersHasMore, ordersLoadingMore, statusFilter]);
+  }, [api, ordersCursor, ordersHasMore, ordersLoadingMore, statusFilter, dateFilter, searchFilter]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
+      setOrders([]);
+      setOrdersCursor(null);
+      setOrdersHasMore(false);
       void load();
     }, 0);
     return () => window.clearTimeout(t);
@@ -197,8 +213,13 @@ export function OrdersPage() {
     if (!socket) return;
 
     function handleOrderCreated(order: any) {
+      // Only inject if the order's date matches what's currently displayed
+      const orderDate = order.createdAt
+        ? new Date(order.createdAt).toISOString().slice(0, 10)
+        : null;
       setOrders((prev) => {
         if (statusFilter && order.status !== statusFilter) return prev;
+        if (orderDate && orderDate !== dateFilter) return prev;
         if (prev.some((o) => o.id === order.id)) return prev;
         return [order, ...prev];
       });
@@ -254,6 +275,12 @@ export function OrdersPage() {
     socket.on('SERVICE_REQUESTED', handleServiceRequested);
     socket.on('SERVICE_REQUEST_UPDATED', handleServiceRequestUpdated);
 
+    // Re-fetch on reconnect to catch any events missed during socket gap
+    function handleReconnect() {
+      load(true);
+    }
+    socket.on('connect', handleReconnect);
+
     return () => {
       socket.off('ORDER_CREATED', handleOrderCreated);
       socket.off('ORDER_UPDATED', handleOrderUpdated);
@@ -261,8 +288,9 @@ export function OrdersPage() {
       socket.off('WAITER_CALL_UPDATED', handleWaiterCallUpdated);
       socket.off('SERVICE_REQUESTED', handleServiceRequested);
       socket.off('SERVICE_REQUEST_UPDATED', handleServiceRequestUpdated);
+      socket.off('connect', handleReconnect);
     };
-  }, [socket, statusFilter]);
+  }, [socket, statusFilter, dateFilter, load]);
 
   async function updateOrderStatus(id: string, status: string, cancellationReason?: string) {
     await api.patch(`/api/orders/${id}/status`, {
@@ -322,6 +350,13 @@ export function OrdersPage() {
     [api, staleCursor, staleLoading, staleMinAgeMinutes],
   );
 
+  // Auto-load stale orders whenever the modal is opened
+  useEffect(() => {
+    if (!staleOpen) return;
+    const t = window.setTimeout(() => loadStale({ reset: true }), 0);
+    return () => window.clearTimeout(t);
+  }, [staleOpen, loadStale]);
+
   const reconcileSelected = useCallback(
     async (action: 'SERVE' | 'CANCEL') => {
       if (!canReconcile) return;
@@ -343,17 +378,6 @@ export function OrdersPage() {
     },
     [api, canReconcile, load, loadStale, staleActionLoading, staleCancelReason, staleSelected],
   );
-
-  async function forceSync() {
-    if (!canReconcile) return;
-    if (forceSyncing) return;
-    setForceSyncing(true);
-    try {
-      await api.post('/api/orders/force-sync', { reason: 'Admin requested resync' });
-    } finally {
-      setForceSyncing(false);
-    }
-  }
 
   async function saveCallEdit() {
     if (!editingCall) return;
@@ -481,15 +505,45 @@ export function OrdersPage() {
           ))}
         </div>
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2 w-full sm:w-auto">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             {activeTab === 'orders' && (
               <>
-                <label
-                  htmlFor="admin_orders_status_filter"
-                  className="mb-0 normal-case text-sm shrink-0"
-                >
-                  Filter:
-                </label>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <label
+                    htmlFor="admin_orders_date_filter"
+                    className="mb-0 normal-case text-sm shrink-0"
+                  >
+                    Date:
+                  </label>
+                  <input
+                    id="admin_orders_date_filter"
+                    name="date"
+                    type="date"
+                    value={dateFilter}
+                    max={today}
+                    onChange={(e) => setDateFilter(e.target.value || today)}
+                    className="text-sm w-auto"
+                    autoComplete="off"
+                  />
+                  {dateFilter !== today && (
+                    <button
+                      className="text-xs text-[var(--accent)] hover:underline shrink-0"
+                      onClick={() => setDateFilter(today)}
+                    >
+                      Today
+                    </button>
+                  )}
+                </div>
+                <input
+                  id="admin_orders_search"
+                  name="search"
+                  type="search"
+                  value={searchFilter}
+                  onChange={(e) => setSearchFilter(e.target.value)}
+                  placeholder="Search table, item…"
+                  className="text-sm w-full sm:w-44"
+                  autoComplete="off"
+                />
                 <select
                   id="admin_orders_status_filter"
                   name="status"
@@ -500,7 +554,7 @@ export function OrdersPage() {
                 >
                   {STATUS_OPTS.map((s) => (
                     <option key={s} value={s}>
-                      {s || 'All'}
+                      {s || 'All statuses'}
                     </option>
                   ))}
                 </select>
@@ -528,6 +582,19 @@ export function OrdersPage() {
         </div>
       ) : activeTab === 'orders' ? (
         <div className="card overflow-x-auto">
+          <div className="px-4 pt-3 pb-1 flex items-center justify-between">
+            <span className="text-xs text-[var(--muted)] font-bold uppercase tracking-widest">
+              {dateFilter === today ? "Today's Orders" : `Orders — ${dateFilter}`}
+              {searchFilter && (
+                <span className="ml-2 text-[var(--accent)]">· "{searchFilter}"</span>
+              )}
+            </span>
+            {orders.length > 0 && (
+              <span className="text-xs text-[var(--muted)]">
+                {orders.length} order{orders.length !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
           <table className="min-w-[800px]">
             <thead>
               <tr>
@@ -544,7 +611,8 @@ export function OrdersPage() {
               {orders.length === 0 && (
                 <tr>
                   <td colSpan={7} className="text-center text-[var(--muted)] py-10">
-                    No orders found
+                    No orders found for {dateFilter === today ? 'today' : dateFilter}
+                    {searchFilter ? ` matching "${searchFilter}"` : ''}
                   </td>
                 </tr>
               )}
@@ -1006,7 +1074,12 @@ export function OrdersPage() {
               <div>
                 <h2 className="font-display text-2xl">STALE ORDERS</h2>
                 <p className="text-sm text-[var(--muted)]">
-                  Orders older than the threshold based on last update time.
+                  Orders stuck in RECEIVED / PREPARING / READY beyond the threshold.
+                  {staleOrders.length > 0 && (
+                    <span className="ml-2 text-[var(--danger)] font-bold">
+                      {staleOrders.length} found
+                    </span>
+                  )}
                 </p>
               </div>
               <button className="btn btn-secondary btn-sm" onClick={() => setStaleOpen(false)}>
@@ -1035,7 +1108,7 @@ export function OrdersPage() {
                     onClick={() => loadStale({ reset: true })}
                     disabled={staleLoading}
                   >
-                    {staleLoading ? 'Loading…' : 'Reload'}
+                    {staleLoading ? 'Loading…' : '↻ Refresh'}
                   </button>
                 </div>
 

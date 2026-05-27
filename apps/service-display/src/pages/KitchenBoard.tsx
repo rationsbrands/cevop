@@ -318,6 +318,8 @@ export function KitchenBoard() {
       } else {
         socket.emit('JOIN_ORG', user.organizationId);
       }
+      // Re-fetch immediately on every connect (initial + reconnect) to catch missed events
+      refreshNowRef.current().catch(() => void 0);
     });
     socket.on('disconnect', () => setSocketConnected(false));
 
@@ -331,7 +333,7 @@ export function KitchenBoard() {
     const handleSyncRequired = () => {
       const now = Date.now();
       // Throttle syncs to prevent "refresh loops"
-      if (now - lastSyncAtRef.current < 5000) return;
+      if (now - lastSyncAtRef.current < 2000) return; // 2s throttle — tight enough to not swallow rapid mutations
       lastSyncAtRef.current = now;
       refreshNowRef.current().catch(() => void 0);
     };

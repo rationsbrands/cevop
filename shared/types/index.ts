@@ -2,6 +2,34 @@
 // Cevop – Shared Types
 // ─────────────────────────────────────────────
 
+// Structured error codes — use these on the server, switch on them in the client
+// Never switch on the human-readable `error` string
+export type ApiErrorCode =
+  | 'ALREADY_CLAIMED' // Table session already claimed by another waiter
+  | 'LIMIT_REACHED' // Waiter at max tables
+  | 'SESSION_CLOSED' // Session already closed
+  | 'SESSION_NOT_FOUND' // Session does not exist
+  | 'TABLE_NOT_FOUND' // Table does not exist
+  | 'ORDER_NOT_FOUND' // Order does not exist
+  | 'PAYMENT_OVERPAY' // Payment would exceed balance
+  | 'PLAN_LIMIT' // Plan limit reached (tables, staff, branches)
+  | 'UNAUTHORIZED' // Auth failure
+  | 'VALIDATION_ERROR' // Zod / input validation
+  | 'TIMEOUT' // Request timed out
+  | 'INTERNAL' // Unhandled server error
+  | 'NOT_FOUND'; // Generic not found
+
+export interface ApiError {
+  success: false;
+  code: ApiErrorCode;
+  error: string; // Human-readable message (for display)
+}
+
+export interface ApiSuccess<T = unknown> {
+  success: true;
+  data: T;
+}
+
 export type OrderStatus = 'RECEIVED' | 'PREPARING' | 'READY' | 'SERVED' | 'CANCELLED';
 export type UserRole =
   | 'SUPERADMIN'

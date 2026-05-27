@@ -94,8 +94,7 @@ function getServiceTypeColor(serviceType: string): string {
 }
 
 export function WaiterBoard() {
-  const { user, token, logout, silentRefresh, updateUser, _pushStatus, _enablePush } =
-    useAuth() as any;
+  const { user, token, logout, silentRefresh, updateUser } = useAuth() as any;
   const { mode, setMode } = useTheme();
   const [installAvailable, setInstallAvailable] = useState(false);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
@@ -196,7 +195,6 @@ export function WaiterBoard() {
     typeof navigator !== 'undefined' &&
     /iphone|ipad|ipod/i.test(navigator.userAgent) &&
     !(window as any).MSStream;
-  const showInstallButton = !isStandalone && (installAvailable || isIos);
 
   useEffect(() => {
     const update = () => setInstallAvailable(!!(window as any).__cevopDeferredInstallPrompt);
@@ -204,21 +202,6 @@ export function WaiterBoard() {
     window.addEventListener('cevop-install-available', update as any);
     return () => window.removeEventListener('cevop-install-available', update as any);
   }, []);
-
-  const handleInstall = useCallback(async () => {
-    const deferred = (window as any).__cevopDeferredInstallPrompt;
-    if (deferred && typeof deferred.prompt === 'function') {
-      try {
-        await deferred.prompt();
-        await deferred.userChoice.catch(() => void 0);
-      } finally {
-        (window as any).__cevopDeferredInstallPrompt = null;
-        window.dispatchEvent(new Event('cevop-install-available'));
-      }
-      return;
-    }
-    if (isIos) setInstallHelpOpen(true);
-  }, [isIos]);
 
   const playAlert = useCallback(() => {
     try {
@@ -370,12 +353,30 @@ export function WaiterBoard() {
       setMyTasks([]);
       setUnassignedTasks([]);
 
-      await silentRefresh();
+      const freshToken = await silentRefresh();
+
+      // Re-fetch the user's current state from the server before loading tasks.
+      // This ensures isOnShift is always accurate — if it's stale on the client,
+      // loadTasks bails out early and nothing appears, which is the stuck-task bug.
+      if (freshToken) {
+        try {
+          const meRes = await fetch(`${API_BASE}/api/auth/me`, {
+            headers: { Authorization: `Bearer ${freshToken}` },
+          });
+          if (meRes.ok) {
+            const meData = await meRes.json();
+            if (meData?.data) updateUser(meData.data);
+          }
+        } catch {
+          void 0;
+        }
+      }
+
       await loadTasksRef.current();
     } finally {
       setRefreshing(false);
     }
-  }, [refreshing, silentRefresh]);
+  }, [refreshing, silentRefresh, updateUser]);
 
   const refreshNowRef = useRef(refreshNow);
   useEffect(() => {
@@ -414,6 +415,8 @@ export function WaiterBoard() {
       } else {
         socket.emit('JOIN_ORG', user.organizationId);
       }
+      // Re-fetch immediately on every connect (initial + reconnect) to catch missed events
+      refreshNowRef.current().catch(() => void 0);
     });
     socket.on('disconnect', () => setSocketConnected(false));
 
@@ -494,7 +497,7 @@ export function WaiterBoard() {
     const handleSyncRequired = () => {
       const now = Date.now();
       // Throttle syncs to prevent "refresh loops"
-      if (now - lastSyncAtRef.current < 5000) return;
+      if (now - lastSyncAtRef.current < 2000) return; // 2s throttle — tight enough to not swallow rapid mutations
       lastSyncAtRef.current = now;
       refreshNowRef.current().catch(() => void 0);
     };
@@ -766,9 +769,10 @@ export function WaiterBoard() {
         return { success: true, tableLabel: data.data.tableLabel };
       }
 
-      if (data.error === 'ALREADY_CLAIMED') {
+      if (data.code === 'ALREADY_CLAIMED' || data.error === 'ALREADY_CLAIMED') {
+        // code is preferred
         setHandoverConfirm({ orgId, tableId, waiterName: data.currentWaiter });
-        return { success: false, error: 'ALREADY_CLAIMED' };
+        return { success: false, code: 'ALREADY_CLAIMED', error: 'Table already claimed' };
       }
 
       return { success: false, error: data.error ?? 'Failed to attach' };

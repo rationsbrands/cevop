@@ -5,6 +5,7 @@ import App from './App.tsx';
 import { AuthProvider } from './services/auth.tsx';
 import { ThemeProvider } from './context/theme.tsx';
 import './index.css';
+import * as Sentry from '@sentry/react';
 
 type DeferredPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -50,20 +51,6 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 }
 
 try {
-  window.addEventListener('beforeinstallprompt', (e: Event) => {
-    e.preventDefault();
-    window.__cevopDeferredInstallPrompt = e as DeferredPromptEvent;
-    window.dispatchEvent(new Event('cevop-install-available'));
-  });
-  window.addEventListener('appinstalled', () => {
-    window.__cevopDeferredInstallPrompt = null;
-    window.dispatchEvent(new Event('cevop-install-available'));
-  });
-} catch {
-  void 0;
-}
-
-try {
   if (import.meta.env.PROD && 'serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker
@@ -91,6 +78,14 @@ if (import.meta.env.DEV) {
     void 0;
   }
 }
+
+Sentry.init({
+  dsn: import.meta.env.VITE_SENTRY_DSN,
+  environment: import.meta.env.MODE,
+  integrations: [Sentry.browserTracingIntegration()],
+  tracesSampleRate: 0.1,
+  enabled: !!import.meta.env.VITE_SENTRY_DSN,
+});
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   import.meta.env.DEV ? (

@@ -136,12 +136,28 @@ export async function closeSession(
     io.to(orgBranch).emit('SERVICE_REQUEST_UPDATED', { id: req.id, status: 'RESOLVED' });
   });
 
-  io.to(orgBranch).emit('SESSION_CLOSED', {
+  const sessionClosedPayload = {
     sessionId,
     tableId: session.tableId,
     branchId: session.branchId,
     closedAt: new Date(),
-  });
+  };
+
+  io.to(orgBranch).emit('SESSION_CLOSED', sessionClosedPayload);
+
+  // Also emit SESSION_CLOSED to individual order rooms so customers who joined via
+  // JOIN_ORDER receive the event and clear their running tab immediately
+  try {
+    const sessionOrders = await prisma.order.findMany({
+      where: { sessionId },
+      select: { id: true },
+    });
+    for (const order of sessionOrders) {
+      io.to(`order:${order.id}`).emit('SESSION_CLOSED', sessionClosedPayload);
+    }
+  } catch (err) {
+    logger.warn('Failed to emit SESSION_CLOSED to order rooms', { err, sessionId });
+  }
   io.to(orgBranch).emit('TABLE_STATUS_CHANGED', {
     tableId: session.tableId,
     status: nextStatus,

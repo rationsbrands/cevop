@@ -189,6 +189,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
+      // If we're on the login page and don't have a marker, don't even try
+      if (window.location.pathname === '/login' && !localStorage.getItem(HAS_SESSION_KEY)) {
+        return null;
+      }
+
       const res = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
@@ -288,6 +293,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           headers: AUTH_HEADERS,
         });
         if (!res.ok) {
+          // Clear the session marker so we don't try to refresh on every subsequent page load
+          // This happens in dev when the DB is reset and tokens are wiped
+          doLogout();
           setLoading(false);
           return;
         }
