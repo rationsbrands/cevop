@@ -247,7 +247,7 @@ model TableSession {
   id             String    @id @default(cuid())
   organizationId String
   branchId       String
-  tableId        String
+  tableId        String?
   openedAt       DateTime  @default(now())
   closedAt       DateTime?
   closedBy       String?
@@ -259,7 +259,7 @@ model TableSession {
 
   organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   branch         Branch           @relation(fields: [branchId], references: [id])
-  table          Table            @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  table          Table?            @relation(fields: [tableId], references: [id], onDelete: SetNull)
   assignedWaiter User?            @relation("SessionWaiterAssignments", fields: [assignedWaiterId], references: [id], onDelete: SetNull)
   orders         Order[]
   waiterCalls    WaiterCall[]
@@ -392,7 +392,7 @@ model MenuItem {
 model Order {
   id             String       @id @default(cuid())
   organizationId String
-  tableId        String
+  tableId        String?
   idempotencyKey String       @unique
   status         OrderStatus  @default(RECEIVED)
   total          Decimal      @db.Decimal(10, 2)
@@ -409,7 +409,7 @@ model Order {
   items          OrderItem[]
   branch         Branch       @relation(fields: [branchId], references: [id])
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  table          Table        @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  table          Table?        @relation(fields: [tableId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([branchId])
@@ -445,7 +445,7 @@ model OrderItem {
 model WaiterCall {
   id             String           @id @default(cuid())
   organizationId String
-  tableId        String
+  tableId        String?
   reason         String?
   status         WaiterCallStatus @default(PENDING)
   createdAt      DateTime         @default(now())
@@ -462,7 +462,7 @@ model WaiterCall {
   assignedUser User?    @relation("WaiterCallAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
   branch         Branch           @relation(fields: [branchId], references: [id])
   organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  table          Table            @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  table          Table?            @relation(fields: [tableId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([branchId])
@@ -476,7 +476,7 @@ model WaiterCall {
 model ServiceRequest {
   id             String               @id @default(cuid())
   organizationId String
-  tableId        String
+  tableId        String?
   serviceType    String
   notes          String?
   status         ServiceRequestStatus @default(PENDING)
@@ -494,7 +494,7 @@ model ServiceRequest {
   assignedUser User?    @relation("ServiceRequestAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
   branch         Branch               @relation(fields: [branchId], references: [id])
   organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  table          Table                @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  table          Table?                @relation(fields: [tableId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([branchId])

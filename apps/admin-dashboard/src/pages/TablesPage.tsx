@@ -142,9 +142,9 @@ export function TablesPage() {
   // Re-fetch whenever server signals sync needed
   useEffect(() => {
     if (syncSignal === 0) return;
-    const t = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(t);
-  }, [syncSignal, load]);
+    const t = setTimeout(() => void load(), 0);
+    return () => clearTimeout(t);
+  }, [syncSignal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Real-time updates
   useEffect(() => {
@@ -227,7 +227,7 @@ export function TablesPage() {
       socket.off('TABLE_CLAIMED', handleTableClaimed);
       socket.off('connect', handleReconnect);
     };
-  }, [socket, load]);
+  }, [socket]);
 
   async function saveTable() {
     setSaving(true);
@@ -278,6 +278,20 @@ export function TablesPage() {
   async function activate(id: string) {
     await api.put(`/api/tables/${id}`, { isActive: true });
     load();
+  }
+
+  async function deleteTable(id: string, label: string) {
+    openConfirm({
+      title: 'Delete Table',
+      message: `Permanently delete "${label}"? All historical orders, sessions and payments for this table are preserved — only the table record is removed. This cannot be undone.`,
+      confirmLabel: 'Delete Permanently',
+      variant: 'danger',
+      action: async () => {
+        const res = await api.delete(`/api/tables/${id}?permanent=true`);
+        if (!res.success) throw new Error(res.error || 'Failed to delete table');
+        await load();
+      },
+    });
   }
 
   function downloadQR(entry: QREntry) {
@@ -634,6 +648,14 @@ export function TablesPage() {
                         onClick={() => markTableEmpty(t.id)}
                       >
                         Mark Clean
+                      </button>
+                    )}
+                    {!t.isActive && !t.activeSessionId && (
+                      <button
+                        className="btn btn-danger btn-sm"
+                        onClick={() => deleteTable(t.id, t.label)}
+                      >
+                        Delete
                       </button>
                     )}
                   </div>

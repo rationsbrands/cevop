@@ -475,9 +475,54 @@ tablesRouter.delete(
         return;
       }
 
-      // Always soft-delete to preserve session, payment, and order history
-      await prisma.table.update({ where: { id: req.params.id }, data: { isActive: false } });
-      res.json({ success: true, message: 'Table deactivated' });
+      // Check if permanent delete was requested
+      if (req.query.permanent === 'true') {
+        // Safety checks: refuse if table has an active session or open orders
+        const table = await prisma.table.findUnique({
+          where: { id: req.params.id },
+          select: {
+            activeSessionId: true,
+            label: true,
+            orders: {
+              where: { status: { in: ['RECEIVED', 'PREPARING', 'READY'] } },
+              select: { id: true },
+              take: 1,
+            },
+          },
+        });
+
+        if (!table) {
+          res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Table not found' });
+          return;
+        }
+
+        if (table.activeSessionId) {
+          res.status(400).json({
+            success: false,
+            code: 'INVALID_REQUEST',
+            error: 'Cannot delete a table with an active session. Close the session first.',
+          });
+          return;
+        }
+
+        if (table.orders.length > 0) {
+          res.status(400).json({
+            success: false,
+            code: 'INVALID_REQUEST',
+            error: 'Cannot delete a table with open orders. Resolve all orders first.',
+          });
+          return;
+        }
+
+        // Safe to delete — tableId is nullable on Order, TableSession, WaiterCall,
+        // ServiceRequest so all historical data is preserved with tableId set to null
+        await prisma.table.delete({ where: { id: req.params.id } });
+        res.json({ success: true, message: 'Table deleted. Historical data preserved.' });
+      } else {
+        // Default: soft-delete (deactivate) — table hidden from floor but data fully intact
+        await prisma.table.update({ where: { id: req.params.id }, data: { isActive: false } });
+        res.json({ success: true, message: 'Table deactivated' });
+      }
     } catch {
       res.status(500).json({ success: false, error: 'Failed to process table deletion' });
     }
