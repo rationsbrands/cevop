@@ -43,4 +43,5 @@ RUN chown -R appuser:appgroup /app
 USER appuser
 
 EXPOSE 4000
-CMD ["sh", "-c", "npx prisma migrate deploy --schema=src/prisma/schema.prisma && node dist/server/src/index.js"]
+# Command to run the application
+CMD ["sh", "-c", "npx prisma migrate deploy --schema=src/prisma/schema.prisma && npm start"]

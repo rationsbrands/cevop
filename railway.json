@@ -8,8 +8,8 @@
   "deploy": {
     "runtime": "V2",
     "numReplicas": 1,
-    "cronSchedule": "*/5 * * * *",
-    "startCommand": "node dist/scripts/stale-monitor.js",
+    "cronSchedule": "*/10 * * * *",
+    "startCommand": "npm run start:monitor",
     "sleepApplication": false,
     "useLegacyStacker": false,
     "ipv6EgressEnabled": false,
