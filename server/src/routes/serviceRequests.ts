@@ -322,6 +322,12 @@ serviceRequestsRouter.patch(
 
       if (requestToClaim.sessionId) {
         const { claimTableSession } = await import('../services/waiterAssignment');
+        if (!requestToClaim.tableId) {
+          res
+            .status(400)
+            .json({ success: false, code: 'INVALID_REQUEST', error: 'Table no longer exists' });
+          return;
+        }
         const claimResult = await claimTableSession(
           req.user!.userId,
           requestToClaim.tableId,
@@ -356,7 +362,7 @@ serviceRequestsRouter.patch(
         const { claimTableSession } = await import('../services/waiterAssignment');
         await claimTableSession(
           req.user!.userId,
-          updated.tableId,
+          updated.tableId, // tableId is non-null here — guarded by the if condition
           updated.sessionId,
           updated.branchId,
         );

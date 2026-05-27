@@ -233,14 +233,12 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
     }
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res
-        .status(400)
-        .json({
-          success: false,
-          code: 'VALIDATION_ERROR',
-          error: 'Validation error',
-          details: err.errors,
-        });
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        error: 'Validation error',
+        details: err.errors,
+      });
       return;
     }
 
@@ -553,13 +551,11 @@ ordersRouter.get(
       res.json({ success: true, data: timeline });
     } catch (err) {
       logger.error('GET /analytics/revenue-timeline error', { err });
-      res
-        .status(500)
-        .json({
-          success: false,
-          code: 'INTERNAL_ERROR',
-          error: 'Failed to fetch revenue timeline',
-        });
+      res.status(500).json({
+        success: false,
+        code: 'INTERNAL_ERROR',
+        error: 'Failed to fetch revenue timeline',
+      });
     }
   },
 );
@@ -761,7 +757,7 @@ ordersRouter.patch(
           const assignedWaiterId = await findLeastLoadedWaiter(
             req.user!.organizationId,
             updated.branchId,
-            updated.tableId,
+            updated.tableId ?? '', // tableId is nullable after schema change; empty string skips session lookup
           ).catch(() => null);
 
           if (assignedWaiterId) {
@@ -1175,13 +1171,11 @@ ordersRouter.post(
       });
 
       if (menuItems.length !== itemIds.length) {
-        res
-          .status(400)
-          .json({
-            success: false,
-            code: 'INVALID_REQUEST',
-            error: 'One or more items are invalid',
-          });
+        res.status(400).json({
+          success: false,
+          code: 'INVALID_REQUEST',
+          error: 'One or more items are invalid',
+        });
         return;
       }
 
@@ -1203,13 +1197,11 @@ ordersRouter.post(
       const { getOrCreateSession } = await import('../services/tableSession');
       const sessionId = await getOrCreateSession(table.id, orgId, branchId);
       if (!sessionId) {
-        res
-          .status(400)
-          .json({
-            success: false,
-            code: 'INVALID_REQUEST',
-            error: 'Could not create table session',
-          });
+        res.status(400).json({
+          success: false,
+          code: 'INVALID_REQUEST',
+          error: 'Could not create table session',
+        });
         return;
       }
 
@@ -1273,13 +1265,11 @@ ordersRouter.post(
         .parse(req.body);
 
       if (action === 'CANCEL' && !reason) {
-        res
-          .status(400)
-          .json({
-            success: false,
-            code: 'INVALID_REQUEST',
-            error: 'reason is required for CANCEL',
-          });
+        res.status(400).json({
+          success: false,
+          code: 'INVALID_REQUEST',
+          error: 'reason is required for CANCEL',
+        });
         return;
       }
 

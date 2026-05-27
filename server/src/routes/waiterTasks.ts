@@ -68,7 +68,8 @@ waiterTasksRouter.get(
 
       const myTableIds = Array.from(
         new Set([
-          ...myActiveSessions.map((s) => s.tableId),
+          // Filter out null tableIds — table may have been deleted but session preserved
+          ...myActiveSessions.map((s) => s.tableId).filter((id): id is string => id !== null),
           ...myTablesFromSections.map((t) => t.id),
         ]),
       );

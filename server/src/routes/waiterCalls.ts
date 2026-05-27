@@ -280,6 +280,12 @@ waiterCallsRouter.patch(
 
       if (callToClaim.sessionId) {
         const { claimTableSession } = await import('../services/waiterAssignment');
+        if (!callToClaim.tableId) {
+          res
+            .status(400)
+            .json({ success: false, code: 'INVALID_REQUEST', error: 'Table no longer exists' });
+          return;
+        }
         const claimResult = await claimTableSession(
           req.user!.userId,
           callToClaim.tableId,
