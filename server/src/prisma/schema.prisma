@@ -46,6 +46,7 @@ model Organization {
   waiterCalls      WaiterCall[]
   tableSessions    TableSession[]
   sections         Section[]
+  stations         Station[]
   pushSubscriptions PushSubscription[]
   payments         Payment[]
 
@@ -78,10 +79,30 @@ model Branch {
   tableSessions   TableSession[]
   sections        Section[]
   payments        Payment[]
+  stations        Station[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
   @@map("branches")
+}
+
+model Station {
+  id             String       @id @default(cuid())
+  organizationId String
+  branchId       String
+  name           String       // e.g. "Kitchen", "Bar", "Grill"
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch       @relation(fields: [branchId], references: [id])
+  menuItems      MenuItem[]
+  orderItems     OrderItem[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("stations")
 }
 
 model HelpOption {
@@ -368,11 +389,14 @@ model MenuItem {
   id             String       @id @default(cuid())
   organizationId String
   categoryId     String
+  stationId      String?
   name           String
   description    String?
   price          Decimal      @db.Decimal(10, 2)
   image          String?
   isAvailable    Boolean      @default(true)
+  trackStock     Boolean      @default(false)
+  stockCount     Int          @default(0)
   sortOrder      Int          @default(0)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
@@ -380,11 +404,13 @@ model MenuItem {
   branch         Branch?      @relation(fields: [branchId], references: [id])
   category       Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  station        Station?     @relation(fields: [stationId], references: [id], onDelete: SetNull)
   orderItems     OrderItem[]
 
   @@index([organizationId])
   @@index([branchId])
   @@index([categoryId])
+  @@index([stationId])
   @@index([organizationId, isAvailable])
   @@index([categoryId, isAvailable])
   @@map("menu_items")
@@ -404,6 +430,9 @@ model Order {
   assignedWaiter     String?
   assignedWaiterAt   DateTime?
   assignedWaiterUser User?    @relation("OrderWaiterAssignments", fields: [assignedWaiter], references: [id], onDelete: SetNull)
+  acknowledgedAt     DateTime?
+  escalationLevel    Int          @default(0)
+  lastEscalatedAt    DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   branchId       String
@@ -429,17 +458,21 @@ model OrderItem {
   id         String   @id @default(cuid())
   orderId    String
   menuItemId String
+  stationId  String?
   quantity   Int
   unitPrice  Decimal  @db.Decimal(10, 2)
   notes      String?
+  status     OrderItemStatus @default(PENDING)
   cancelledAt   DateTime?
   cancelReason  String?
   cancelledBy   String?
   cancelledByUser User?   @relation("OrderItemCancellations", fields: [cancelledBy], references: [id], onDelete: SetNull)
   menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
   order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  station    Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
+  @@index([stationId])
   @@map("order_items")
 }
 
@@ -458,6 +491,9 @@ model WaiterCall {
   resolvedAt     DateTime?
   assignedTo   String?
   assignedAt   DateTime?
+  acknowledgedAt DateTime?
+  escalationLevel Int          @default(0)
+  lastEscalatedAt DateTime?
   sessionId    String?
   session      TableSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   assignedUser User?    @relation("WaiterCallAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
@@ -490,6 +526,9 @@ model ServiceRequest {
   resolvedAt     DateTime?
   assignedTo   String?
   assignedAt   DateTime?
+  acknowledgedAt DateTime?
+  escalationLevel Int          @default(0)
+  lastEscalatedAt DateTime?
   sessionId    String?
   session      TableSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   assignedUser User?    @relation("ServiceRequestAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
@@ -572,6 +611,12 @@ enum OrderStatus {
   PREPARING
   READY
   SERVED
+  CANCELLED
+}
+
+enum OrderItemStatus {
+  PENDING
+  PAID
   CANCELLED
 }
 

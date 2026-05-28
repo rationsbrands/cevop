@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth, useApi } from '../context/auth';
 import { useSocket } from '../context/socket';
 import { formatPrice } from '../../../../shared/utils/currency';
+import { showToast } from '../components/Popup';
 
 const STATUS_OPTS = ['', 'RECEIVED', 'PREPARING', 'READY', 'SERVED', 'CANCELLED'];
 const SC: Record<string, string> = {
@@ -75,6 +76,7 @@ export function OrdersPage() {
   const [staleHasMore, setStaleHasMore] = useState(false);
   const [staleCursor, setStaleCursor] = useState<string | null>(null);
   const [staleLoading, setStaleLoading] = useState(false);
+  const staleLoadingRef = React.useRef(false);
   const [staleSelected, setStaleSelected] = useState<Set<string>>(new Set());
   const [staleActionLoading, setStaleActionLoading] = useState(false);
   const [staleCancelReason, setStaleCancelReason] = useState('Backlog cleanup');
@@ -268,12 +270,20 @@ export function OrdersPage() {
       });
     }
 
+    function handleStaleOrders(payload: { count: number; minAgeMinutes: number }) {
+      showToast(
+        `Alert: ${payload.count} stale orders detected (unresolved for >${payload.minAgeMinutes} mins). Check the stale orders console.`,
+        'info',
+      );
+    }
+
     socket.on('ORDER_CREATED', handleOrderCreated);
     socket.on('ORDER_UPDATED', handleOrderUpdated);
     socket.on('WAITER_CALLED', handleWaiterCalled);
     socket.on('WAITER_CALL_UPDATED', handleWaiterCallUpdated);
     socket.on('SERVICE_REQUESTED', handleServiceRequested);
     socket.on('SERVICE_REQUEST_UPDATED', handleServiceRequestUpdated);
+    socket.on('STALE_ORDERS_DETECTED', handleStaleOrders);
 
     // Re-fetch on reconnect to catch any events missed during socket gap
     function handleReconnect() {
@@ -288,6 +298,7 @@ export function OrdersPage() {
       socket.off('WAITER_CALL_UPDATED', handleWaiterCallUpdated);
       socket.off('SERVICE_REQUESTED', handleServiceRequested);
       socket.off('SERVICE_REQUEST_UPDATED', handleServiceRequestUpdated);
+      socket.off('STALE_ORDERS_DETECTED', handleStaleOrders);
       socket.off('connect', handleReconnect);
     };
   }, [socket, statusFilter, dateFilter, load]);
@@ -299,6 +310,28 @@ export function OrdersPage() {
     });
     load();
   }
+
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const i = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(i);
+  }, []);
+
+  const getOrderHeat = (order: any) => {
+    if (!['RECEIVED', 'PREPARING', 'READY'].includes(order.status)) return 'text-muted';
+    const updatedAt = new Date(order.updatedAt || order.createdAt).getTime();
+    const age = (now - updatedAt) / (1000 * 60);
+
+    if (age >= 20) return 'text-[var(--danger)] font-bold animate-pulse';
+    if (age >= 10) return 'text-[var(--warning)] font-bold';
+    return 'text-muted';
+  };
+
+  const getAgeString = (order: any) => {
+    const updatedAt = new Date(order.updatedAt || order.createdAt).getTime();
+    const age = Math.floor((now - updatedAt) / (1000 * 60));
+    return `${age}m`;
+  };
 
   async function assignOrderWaiter(orderId: string, waiterId: string | null) {
     if (orderAssigningId === orderId) return;
@@ -315,7 +348,8 @@ export function OrdersPage() {
     async (opts?: { reset?: boolean }) => {
       if (!api.effectiveBranchId) return;
       const reset = opts?.reset ?? false;
-      if (staleLoading) return;
+      if (staleLoadingRef.current) return;
+      staleLoadingRef.current = true;
       setStaleLoading(true);
       try {
         const cursor = reset ? null : staleCursor;
@@ -344,10 +378,11 @@ export function OrdersPage() {
         setStaleHasMore(Boolean(res.pagination?.hasMore));
         setStaleCursor(res.pagination?.nextCursor ?? null);
       } finally {
+        staleLoadingRef.current = false;
         setStaleLoading(false);
       }
     },
-    [api, staleCursor, staleLoading, staleMinAgeMinutes],
+    [api, staleCursor, staleMinAgeMinutes],
   );
 
   // Auto-load stale orders whenever the modal is opened
@@ -631,9 +666,12 @@ export function OrdersPage() {
                       {formatPrice(o.total, currency)}
                     </td>
                     <td>
-                      <span className={'text-xs font-bold ' + (SC[o.status] || '')}>
-                        {o.status}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={'text-xs font-bold ' + (SC[o.status] || '')}>
+                          {o.status}
+                        </span>
+                        <span className={'text-[10px] ' + getOrderHeat(o)}>{getAgeString(o)}</span>
+                      </div>
                     </td>
                     <td className="text-[var(--muted)] text-xs">
                       {new Date(o.createdAt).toLocaleString()}

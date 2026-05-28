@@ -253,6 +253,69 @@ export function initSocketHandlers(io: Server): void {
       }
     });
 
+    socket.on(
+      'ACKNOWLEDGE_TASK',
+      async (
+        {
+          taskId,
+          type,
+        }: { taskId: string; type: 'ORDER_READY' | 'WAITER_CALL' | 'SERVICE_REQUEST' },
+        ack?: (payload: any) => void,
+      ) => {
+        if (!socketRateLimit(socket.id, 30, 60_000)) {
+          ack?.({ success: false, error: 'Too many requests' });
+          return;
+        }
+
+        try {
+          if (!user || !['WAITER', 'BRANCH_ADMIN', 'ORG_MANAGER', 'ADMIN'].includes(user.role)) {
+            ack?.({ success: false, error: 'Unauthorized' });
+            return;
+          }
+
+          const now = new Date();
+          let updated: any = null;
+
+          if (type === 'ORDER_READY') {
+            updated = await prisma.order.update({
+              where: { id: taskId, organizationId: user.organizationId },
+              data: { acknowledgedAt: now },
+            });
+          } else if (type === 'WAITER_CALL') {
+            updated = await prisma.waiterCall.update({
+              where: { id: taskId, organizationId: user.organizationId },
+              data: { acknowledgedAt: now },
+            });
+          } else if (type === 'SERVICE_REQUEST') {
+            updated = await prisma.serviceRequest.update({
+              where: { id: taskId, organizationId: user.organizationId },
+              data: { acknowledgedAt: now },
+            });
+          }
+
+          if (updated) {
+            logger.info('Task acknowledged', { taskId, type, userId: user.userId });
+            ack?.({ success: true, data: { acknowledgedAt: now } });
+
+            // Notify others (like the kitchen or manager) that it's been acknowledged
+            const branchRoom = `${user.organizationId}:${updated.branchId}`;
+            const eventName =
+              type === 'ORDER_READY'
+                ? 'ORDER_UPDATED'
+                : type === 'WAITER_CALL'
+                  ? 'WAITER_CALL_UPDATED'
+                  : 'SERVICE_REQUEST_UPDATED';
+            io.to(branchRoom).emit(eventName, updated);
+          } else {
+            ack?.({ success: false, error: 'Task not found' });
+          }
+        } catch (err) {
+          logger.error('ACKNOWLEDGE_TASK error', { err, taskId, type, userId: user?.userId });
+          ack?.({ success: false, error: 'Failed to acknowledge task' });
+        }
+      },
+    );
+
     socket.on('LEAVE_ORG', (orgId: string) => {
       socket.leave(orgId);
     });

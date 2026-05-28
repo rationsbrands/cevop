@@ -4,15 +4,10 @@ import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
 const CACHE_NAME = 'cevop-service-v2';
 
 // Precache ALL build assets — injected by vite-plugin-pwa at build time
-// This replaces the manual cache.addAll(['/', '/index.html']) which missed JS chunks
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
-// Fallback install for environments where __WB_MANIFEST is not injected (dev)
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(['/', '/index.html']).catch(() => void 0)),
-  );
+self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
@@ -31,7 +26,6 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch strategy: network first for navigation, cache first for assets
 self.addEventListener('fetch', (event) => {
   if (!event.request.url.startsWith(self.location.origin)) return;
   if (event.request.url.includes('/api/') || event.request.url.includes('/socket.io/')) return;
@@ -61,50 +55,55 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Push notification handler
+// Improved Push notification handler
 self.addEventListener('push', (event) => {
-  let data;
+  if (!event.data) return;
+
   try {
-    data = event.data ? event.data.json() : {};
-  } catch {
-    data = {};
+    const data = event.data.json();
+    const options = {
+      body: data.body || 'New update from Cevop',
+      icon: '/logo192.png',
+      badge: '/logo192.png',
+      vibrate: [200, 100, 200, 100, 200, 100, 400],
+      data: {
+        url: data.url || '/',
+        type: data.type || 'GENERIC',
+      },
+      tag: data.tag || 'cevop-alert',
+      renotify: true,
+      requireInteraction: true,
+      actions: [],
+    };
+
+    if (
+      data.type === 'WAITER_CALL' ||
+      data.type === 'SERVICE_REQUEST' ||
+      data.type === 'ORDER_READY'
+    ) {
+      options.actions.push({ action: 'view', title: 'View Task' });
+    }
+
+    event.waitUntil(self.registration.showNotification(data.title || 'Cevop Alert', options));
+  } catch (err) {
+    console.error('Push error:', err);
   }
-  const title = data.title ?? 'Cevop';
-  const body = data.body ?? '';
-  const url = data.url ?? '/';
-  const tag = data.tag;
-  const type = data.type ?? 'GENERIC';
-
-  const options = {
-    body,
-    tag,
-    data: { url, type },
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    vibrate: [200, 100, 200, 100, 400],
-    requireInteraction: true,
-    actions: [],
-  };
-
-  if (type === 'WAITER_CALL' || type === 'SERVICE_REQUEST') {
-    options.actions.push({ action: 'claim', title: 'Claim Table' });
-  }
-
-  event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener('notificationclick', (event) => {
-  const { notification } = event;
-  notification.close();
-  const url = notification.data?.url || '/';
+  event.notification.close();
+  const urlToOpen = event.notification.data.url || '/';
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsArr) => {
-      for (const client of clientsArr) {
-        if (client.url && 'focus' in client) return client.focus();
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      for (let client of windowClients) {
+        if (client.url === urlToOpen && 'focus' in client) {
+          return client.focus();
+        }
       }
-      if (self.clients.openWindow) return self.clients.openWindow(url);
-      return null;
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(urlToOpen);
+      }
     }),
   );
 });

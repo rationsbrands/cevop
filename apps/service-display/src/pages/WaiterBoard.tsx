@@ -59,20 +59,20 @@ function waiterSnapshotKey(params: {
   return `cevop_service_snapshot:waiter:${params.organizationId}:${scope}:${who}`;
 }
 
-function elapsed(dateStr: string): string {
-  const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
-  if (diff < 60) return `${diff}s`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  return `${Math.floor(diff / 3600)}h`;
-}
-
 function TimeElapsed({ createdAt, className }: { createdAt: string; className?: string }) {
-  const [, setTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const i = setInterval(() => setTick((t) => t + 1), 15000);
+    const i = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(i);
   }, []);
-  const text = elapsed(createdAt);
+  const diff = Math.floor((now - new Date(createdAt).getTime()) / 1000);
+  const text =
+    diff < 60
+      ? `${diff}s`
+      : diff < 3600
+        ? `${Math.floor(diff / 60)}m`
+        : `${Math.floor(diff / 3600)}h`;
+
   const isUrgent = text.includes('m') && parseInt(text) > 10;
   return (
     <span
@@ -96,7 +96,6 @@ function getServiceTypeColor(serviceType: string): string {
 export function WaiterBoard() {
   const { user, token, logout, silentRefresh, updateUser } = useAuth() as any;
   const { mode, setMode } = useTheme();
-  const [installAvailable, setInstallAvailable] = useState(false);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
   const [showPOS, setShowPOS] = useState(false);
   const [activeTab, setActiveTab] = useState<'tasks' | 'tables'>('tasks');
@@ -187,21 +186,6 @@ export function WaiterBoard() {
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
-
-  const isStandalone =
-    typeof window !== 'undefined' &&
-    (window.matchMedia?.('(display-mode: standalone)')?.matches || (navigator as any)?.standalone);
-  const isIos =
-    typeof navigator !== 'undefined' &&
-    /iphone|ipad|ipod/i.test(navigator.userAgent) &&
-    !(window as any).MSStream;
-
-  useEffect(() => {
-    const update = () => setInstallAvailable(!!(window as any).__cevopDeferredInstallPrompt);
-    update();
-    window.addEventListener('cevop-install-available', update as any);
-    return () => window.removeEventListener('cevop-install-available', update as any);
-  }, []);
 
   const playAlert = useCallback(() => {
     try {
@@ -408,6 +392,15 @@ export function WaiterBoard() {
     });
     socketRef.current = socket;
 
+    const acknowledgeTask = (taskId: string, type: string) => {
+      let taskType: 'ORDER_READY' | 'WAITER_CALL' | 'SERVICE_REQUEST';
+      if (type === 'ORDER_READY') taskType = 'ORDER_READY';
+      else if (type === 'SERVICE_REQUEST') taskType = 'SERVICE_REQUEST';
+      else taskType = 'WAITER_CALL';
+
+      socket.emit('ACKNOWLEDGE_TASK', { taskId, type: taskType });
+    };
+
     socket.on('connect', () => {
       setSocketConnected(true);
       if (user.branchId) {
@@ -427,6 +420,7 @@ export function WaiterBoard() {
       const normalised = normaliseTask(type, task);
       setMyTasks((prev) => [...prev.filter((t) => t.id !== normalised.id), normalised]);
       setUnassignedTasks((prev) => prev.filter((t) => t.id !== normalised.id));
+      acknowledgeTask(task.id, type);
     });
 
     // Task available for anyone to claim
@@ -449,6 +443,7 @@ export function WaiterBoard() {
             ? 'SERVICE_REQUEST'
             : 'WAITER_CALL';
         setMyTasks((prev) => [...prev.filter((t) => t.id !== task.id), normaliseTask(type, task)]);
+        acknowledgeTask(task.id, type);
       }
     });
 

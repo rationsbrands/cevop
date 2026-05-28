@@ -79,13 +79,19 @@ function elapsed(dateStr: string): string {
 }
 
 function TimeElapsed({ createdAt, className }: { createdAt: string; className?: string }) {
-  const [, setTick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const i = setInterval(() => setTick((t) => t + 1), 15000);
+    const i = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(i);
   }, []);
+  const diffMinutes = Math.floor((now - new Date(createdAt).getTime()) / 60000);
   const text = elapsed(createdAt);
-  const color = text.includes('m') && parseInt(text) > 15 ? 'text-red-400' : 'text-gray-400';
+
+  let color = 'text-gray-400';
+  if (diffMinutes >= 20) color = 'text-red-500 font-bold animate-pulse';
+  else if (diffMinutes >= 10) color = 'text-orange-400 font-bold';
+  else if (diffMinutes >= 5) color = 'text-yellow-400';
+
   return <span className={className || color}>{text} ago</span>;
 }
 
@@ -133,20 +139,31 @@ export function KitchenBoard() {
   const [socketConnected, setSocketConnected] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [refreshing, setRefreshing] = useState(false);
-  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false);
   const [offlineSnapshotTs, setOfflineSnapshotTs] = useState<number | null>(null);
+  const [stations, setStations] = useState<{ id: string; name: string }[]>([]);
+  const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
   const lastSyncAtRef = useRef(0);
 
-  const applyOrderUpdate = useCallback((order: Order) => {
-    setOrders((prev) => {
-      if (!KITCHEN_STATUSES.includes(order.status)) return prev.filter((o) => o.id !== order.id);
-      const exists = prev.some((o) => o.id === order.id);
-      if (exists) return prev.map((o) => (o.id === order.id ? order : o));
-      return [...prev, order];
-    });
-  }, []);
+  const applyOrderUpdate = useCallback(
+    (order: Order) => {
+      setOrders((prev) => {
+        // Filter by station if selected
+        if (selectedStationId) {
+          const hasStationItem = order.items.some((i: any) => i.stationId === selectedStationId);
+          if (!hasStationItem) return prev.filter((o) => o.id !== order.id);
+        }
+
+        if (!KITCHEN_STATUSES.includes(order.status)) return prev.filter((o) => o.id !== order.id);
+        const exists = prev.some((o) => o.id === order.id);
+        if (exists) return prev.map((o) => (o.id === order.id ? order : o));
+        return [...prev, order];
+      });
+    },
+    [selectedStationId],
+  );
 
   const tokenRef = useRef(token);
   useEffect(() => {
@@ -189,8 +206,17 @@ export function KitchenBoard() {
       if (!freshToken) return;
       const headers = { Authorization: `Bearer ${freshToken}` };
       const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
+
+      // Fetch stations
+      const stationsRes = await fetch(`${API_BASE}/api/stations?${branchParam}`, { headers });
+      if (stationsRes.ok) {
+        const stationsData = await stationsRes.json();
+        if (stationsData.success) setStations(stationsData.data);
+      }
+
+      const stationFilter = selectedStationId ? `&stationId=${selectedStationId}` : '';
       const ordersRes = await fetch(
-        `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&limit=50${branchParam}`,
+        `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&limit=50${branchParam}${stationFilter}`,
         { headers },
       );
       if (!ordersRes.ok) throw new Error('Network error');
@@ -225,7 +251,7 @@ export function KitchenBoard() {
         }
       }
     }
-  }, [silentRefresh, token, user]);
+  }, [selectedStationId, silentRefresh, token, user]);
 
   const loadDataRef = useRef(loadData);
   useEffect(() => {
@@ -325,7 +351,14 @@ export function KitchenBoard() {
 
     socket.on('ORDER_CREATED', (order: Order) => {
       playAlert();
-      setOrders((prev) => [...prev.filter((o) => o.id !== order.id), order]);
+      setOrders((prev) => {
+        // Filter by station if selected
+        if (selectedStationId) {
+          const hasStationItem = order.items.some((i: any) => i.stationId === selectedStationId);
+          if (!hasStationItem) return prev;
+        }
+        return [...prev.filter((o) => o.id !== order.id), order];
+      });
     });
 
     socket.on('ORDER_UPDATED', (order: Order) => applyOrderUpdate(order));
@@ -352,7 +385,7 @@ export function KitchenBoard() {
       socket.off('SYNC_REQUIRED', handleSyncRequired);
       socket.disconnect();
     };
-  }, [user, playAlert, applyOrderUpdate]);
+  }, [user, playAlert, applyOrderUpdate, selectedStationId]);
 
   useEffect(() => {
     const up = () => {
@@ -536,6 +569,20 @@ export function KitchenBoard() {
           </div>
 
           <div className="flex items-center gap-1">
+            {stations.length > 0 && (
+              <select
+                className="text-[9px] sm:text-xs bg-black text-gray-400 border border-gray-800 px-2 py-1 shrink-0 rounded-full font-bold font-display outline-none"
+                onChange={(e) => setSelectedStationId(e.target.value || null)}
+                value={selectedStationId || ''}
+              >
+                <option value="">ALL STATIONS</option>
+                {stations.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               onClick={() => refreshNow().catch(() => void 0)}
               disabled={refreshing}
@@ -611,47 +658,49 @@ export function KitchenBoard() {
               </div>
 
               <div className="space-y-2 py-2 border-t border-gray-800 overflow-hidden">
-                {order.items.map((item) => (
-                  <div
-                    key={item.id}
-                    className={`flex flex-col min-w-0 ${item.cancelledAt ? 'opacity-30 line-through' : ''}`}
-                  >
-                    <div className="flex justify-between items-start gap-2 overflow-hidden">
-                      <span className="text-sm sm:text-base font-bold leading-tight">
-                        <span className="text-[var(--accent)] mr-1.5 shrink-0">
-                          {item.quantity}×
+                {order.items
+                  .filter((i: any) => !selectedStationId || i.stationId === selectedStationId)
+                  .map((item) => (
+                    <div
+                      key={item.id}
+                      className={`flex flex-col min-w-0 ${item.cancelledAt ? 'opacity-30 line-through' : ''}`}
+                    >
+                      <div className="flex justify-between items-start gap-2 overflow-hidden">
+                        <span className="text-sm sm:text-base font-bold leading-tight">
+                          <span className="text-[var(--accent)] mr-1.5 shrink-0">
+                            {item.quantity}×
+                          </span>
+                          {item.menuItem?.name}
                         </span>
-                        {item.menuItem?.name}
-                      </span>
-                      {!item.cancelledAt && (
-                        <div className="flex gap-1 shrink-0 mt-0.5">
-                          <button
-                            onClick={() => toggleItemAvailability(item.menuItemId)}
-                            className="text-[8px] sm:text-[9px] border border-gray-700 px-1 text-gray-500 hover:text-red-500 transition-colors"
-                            title="86 item"
-                          >
-                            86
-                          </button>
-                          <button
-                            onClick={() =>
-                              cancelOrderItem(order.id, item.id, item.menuItem?.name || '')
-                            }
-                            disabled={updatingItems.has(item.id)}
-                            className="text-[8px] sm:text-[9px] border border-gray-700 px-1 text-gray-500 hover:text-red-500 disabled:opacity-50 transition-colors"
-                            title="Cancel item"
-                          >
-                            {updatingItems.has(item.id) ? '...' : '✕'}
-                          </button>
+                        {!item.cancelledAt && (
+                          <div className="flex gap-1 shrink-0 mt-0.5">
+                            <button
+                              onClick={() => toggleItemAvailability(item.menuItemId)}
+                              className="text-[8px] sm:text-[9px] border border-gray-700 px-1 text-gray-500 hover:text-red-500 transition-colors"
+                              title="86 item"
+                            >
+                              86
+                            </button>
+                            <button
+                              onClick={() =>
+                                cancelOrderItem(order.id, item.id, item.menuItem?.name || '')
+                              }
+                              disabled={updatingItems.has(item.id)}
+                              className="text-[8px] sm:text-[9px] border border-gray-700 px-1 text-gray-500 hover:text-red-500 disabled:opacity-50 transition-colors"
+                              title="Cancel item"
+                            >
+                              {updatingItems.has(item.id) ? '...' : '✕'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {item.notes && (
+                        <div className="text-[10px] sm:text-xs text-yellow-500 italic ml-4 sm:ml-5 leading-tight mt-0.5 break-words">
+                          "{item.notes}"
                         </div>
                       )}
                     </div>
-                    {item.notes && (
-                      <div className="text-[10px] sm:text-xs text-yellow-500 italic ml-4 sm:ml-5 leading-tight mt-0.5 break-words">
-                        "{item.notes}"
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  ))}
               </div>
             </div>
 

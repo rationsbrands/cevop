@@ -122,7 +122,14 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
         isAvailable: true,
         ...branchFilter,
       },
-      select: { id: true, price: true, name: true },
+      select: {
+        id: true,
+        price: true,
+        name: true,
+        stationId: true,
+        trackStock: true,
+        stockCount: true,
+      },
     });
 
     if (menuItems.length !== menuItemIds.length) {
@@ -135,8 +142,28 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
       return;
     }
 
-    type MenuItemLike = { id: string; price: Prisma.Decimal; name: string };
+    type MenuItemLike = {
+      id: string;
+      price: Prisma.Decimal;
+      name: string;
+      stationId: string | null;
+      trackStock: boolean;
+      stockCount: number;
+    };
     const itemMap = new Map<string, MenuItemLike>(menuItems.map((m) => [m.id, m]));
+
+    // Check stock for all items
+    for (const item of data.items) {
+      const menuItem = itemMap.get(item.menuItemId)!;
+      if (menuItem.trackStock && menuItem.stockCount < item.quantity) {
+        res.status(400).json({
+          success: false,
+          error: `Insufficient stock for "${menuItem.name}". Only ${menuItem.stockCount} left.`,
+        });
+        return;
+      }
+    }
+
     let total = 0;
     const orderItems = data.items.map((item) => {
       const menuItem = itemMap.get(item.menuItemId)!;
@@ -147,6 +174,7 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
         quantity: item.quantity,
         unitPrice: unitPrice, // Prisma accepts numbers for Decimal
         notes: item.notes || null,
+        stationId: menuItem.stationId,
       };
     });
 
@@ -173,19 +201,39 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
         ? (req as any).user.userId
         : session?.assignedWaiterId || null;
 
-    const order = (await prisma.order.create({
-      data: {
-        organizationId: actualOrgId,
-        branchId: actualBranchId,
-        tableId: actualTableId,
-        sessionId,
-        idempotencyKey: data.idempotencyKey,
-        total: Number(total.toFixed(2)), // Prisma accepts numbers for Decimal
-        notes: data.notes || null,
-        items: { create: orderItems },
-        ...(finalWaiterId ? { assignedWaiter: finalWaiterId, assignedWaiterAt: new Date() } : {}),
-      } as any,
-      include: { items: { include: { menuItem: true } }, table: true },
+    const order = (await prisma.$transaction(async (tx) => {
+      // 1. Decrement stock for tracked items
+      for (const item of data.items) {
+        const menuItem = itemMap.get(item.menuItemId)!;
+        if (menuItem.trackStock) {
+          await tx.menuItem.update({
+            where: { id: menuItem.id },
+            data: {
+              stockCount: { decrement: item.quantity },
+              // Automatically "86" the item if stock hits 0
+              isAvailable: {
+                set: menuItem.stockCount - item.quantity > 0,
+              },
+            },
+          });
+        }
+      }
+
+      // 2. Create the order
+      return tx.order.create({
+        data: {
+          organizationId: actualOrgId,
+          branchId: actualBranchId,
+          tableId: actualTableId,
+          sessionId,
+          idempotencyKey: data.idempotencyKey,
+          total: Number(total.toFixed(2)), // Prisma accepts numbers for Decimal
+          notes: data.notes || null,
+          items: { create: orderItems },
+          ...(finalWaiterId ? { assignedWaiter: finalWaiterId, assignedWaiterAt: new Date() } : {}),
+        } as any,
+        include: { items: { include: { menuItem: true } }, table: true },
+      });
     })) as any;
 
     if (finalWaiterId) {
@@ -1426,7 +1474,7 @@ ordersRouter.post(
 
 ordersRouter.get('/', async (req: AuthRequest, res: Response) => {
   try {
-    const { status, tableId, limit, cursor, date, search } = z
+    const { status, tableId, limit, cursor, date, search, stationId } = z
       .object({
         status: z.union([z.string(), z.array(z.string())]).optional(),
         tableId: z.string().optional(),
@@ -1438,6 +1486,7 @@ ordersRouter.get('/', async (req: AuthRequest, res: Response) => {
           .regex(/^\d{4}-\d{2}-\d{2}$/)
           .optional(),
         search: z.string().max(100).optional(),
+        stationId: z.string().optional(),
       })
       .parse(req.query);
 
@@ -1456,6 +1505,13 @@ ordersRouter.get('/', async (req: AuthRequest, res: Response) => {
       where.status = Array.isArray(status) ? { in: status as any } : (status as any);
     }
     if (tableId) where.tableId = tableId;
+    if (stationId) {
+      where.items = {
+        some: {
+          stationId: stationId,
+        },
+      };
+    }
 
     // Search: match against table label (via relation) — fetch then filter
     const orders = await prisma.order.findMany({

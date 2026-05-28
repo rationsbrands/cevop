@@ -44,6 +44,7 @@ import { waiterTasksRouter } from './routes/waiterTasks';
 import { plansRouter } from './routes/plans';
 import { pushRouter } from './routes/push';
 import { paymentsRouter } from './routes/payments';
+import { stationsRouter } from './routes/stations';
 import { initSocketHandlers } from './sockets/handlers';
 import { errorHandler } from './middleware/errorHandler';
 import { planGuard } from './middleware/planGuard';
@@ -296,6 +297,7 @@ app.use('/api/help-options', helpOptionsRouter);
 app.use('/api/ops', opsRouter);
 app.use('/api/waiter-tasks', waiterTasksRouter);
 app.use('/api/push', pushRouter);
+app.use('/api/stations', stationsRouter);
 app.use('/api/payments', paymentsRouter);
 
 // WebSocket
@@ -371,6 +373,11 @@ function startStaleOrderMonitor() {
           cutoffMinutes: staleOrderCutoffMinutes,
         });
 
+        io.to(`${g.organizationId}:${g.branchId}`).emit('STALE_ORDERS_DETECTED', {
+          count,
+          minAgeMinutes: staleOrderCutoffMinutes,
+        });
+
         lastStaleAudit.set(key, { count, at: now });
       }
     } catch (err) {
@@ -381,7 +388,133 @@ function startStaleOrderMonitor() {
   (interval as any).unref?.();
 }
 
+/**
+ * Task Escalation Monitor (Industry Grade Handshake)
+ * Periodically checks for tasks that were assigned but never acknowledged by a device.
+ * If a task is not acknowledged within the timeout, it is escalated (e.g. unassigned to broadcast to everyone).
+ */
+function startTaskEscalationMonitor() {
+  if (process.env.NODE_ENV === 'test') return;
+
+  const ESCALATION_CHECK_MS = 30_000; // Check every 30s
+  const ACK_TIMEOUT_MS = 60_000; // Handshake timeout: 60s
+
+  const interval = setInterval(async () => {
+    try {
+      const now = new Date();
+      const cutoff = new Date(Date.now() - ACK_TIMEOUT_MS);
+
+      // 1. Escalate Orders (READY status but no handshake)
+      const unackedOrders = await prisma.order.findMany({
+        where: {
+          status: 'READY',
+          assignedWaiter: { not: null },
+          acknowledgedAt: null,
+          assignedWaiterAt: { lt: cutoff },
+          escalationLevel: 0,
+        } as any,
+      });
+
+      for (const order of unackedOrders) {
+        logger.warn('Order handshake timeout — escalating to broadcast', {
+          orderId: order.id,
+          branchId: order.branchId,
+        });
+
+        const updated = await prisma.order.update({
+          where: { id: order.id },
+          data: {
+            assignedWaiter: null, // Unassign so it broadcasts to everyone
+            assignedWaiterAt: null,
+            escalationLevel: 1,
+            lastEscalatedAt: now,
+          } as any,
+        });
+
+        io.to(`${order.organizationId}:${order.branchId}`).emit('TASK_UNASSIGNED', {
+          type: 'ORDER_READY',
+          task: updated,
+        });
+        io.to(`${order.organizationId}:${order.branchId}`).emit('ORDER_UPDATED', updated);
+      }
+
+      // 2. Escalate Waiter Calls
+      const unackedCalls = await prisma.waiterCall.findMany({
+        where: {
+          status: 'PENDING',
+          assignedTo: { not: null },
+          acknowledgedAt: null,
+          assignedAt: { lt: cutoff },
+          escalationLevel: 0,
+        } as any,
+      });
+
+      for (const call of unackedCalls) {
+        logger.warn('Waiter call handshake timeout — escalating to broadcast', {
+          callId: call.id,
+          branchId: call.branchId,
+        });
+
+        const updated = await prisma.waiterCall.update({
+          where: { id: call.id },
+          data: {
+            assignedTo: null,
+            assignedAt: null,
+            escalationLevel: 1,
+            lastEscalatedAt: now,
+          } as any,
+        });
+
+        io.to(`${call.organizationId}:${call.branchId}`).emit('TASK_UNASSIGNED', {
+          type: 'WAITER_CALL',
+          task: updated,
+        });
+        io.to(`${call.organizationId}:${call.branchId}`).emit('WAITER_CALL_UPDATED', updated);
+      }
+
+      // 3. Escalate Service Requests
+      const unackedRequests = await prisma.serviceRequest.findMany({
+        where: {
+          status: 'PENDING',
+          assignedTo: { not: null },
+          acknowledgedAt: null,
+          assignedAt: { lt: cutoff },
+          escalationLevel: 0,
+        } as any,
+      });
+
+      for (const req of unackedRequests) {
+        logger.warn('Service request handshake timeout — escalating to broadcast', {
+          requestId: req.id,
+          branchId: req.branchId,
+        });
+
+        const updated = await prisma.serviceRequest.update({
+          where: { id: req.id },
+          data: {
+            assignedTo: null,
+            assignedAt: null,
+            escalationLevel: 1,
+            lastEscalatedAt: now,
+          } as any,
+        });
+
+        io.to(`${req.organizationId}:${req.branchId}`).emit('TASK_UNASSIGNED', {
+          type: 'SERVICE_REQUEST',
+          task: updated,
+        });
+        io.to(`${req.organizationId}:${req.branchId}`).emit('SERVICE_REQUEST_UPDATED', updated);
+      }
+    } catch (err) {
+      logger.error('Task escalation monitor failed', { err });
+    }
+  }, ESCALATION_CHECK_MS);
+
+  (interval as any).unref?.();
+}
+
 startStaleOrderMonitor();
+startTaskEscalationMonitor();
 
 // Sentry error handler must be before the custom error handler
 Sentry.setupExpressErrorHandler(app);

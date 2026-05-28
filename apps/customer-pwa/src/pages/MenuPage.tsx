@@ -22,6 +22,8 @@ interface MenuItem {
   price: number;
   image?: string;
   isAvailable?: boolean;
+  trackStock?: boolean;
+  stockCount?: number;
 }
 interface Category {
   id: string;
@@ -870,10 +872,23 @@ export function MenuPage() {
   const addToCart = (menuItem: MenuItem) => {
     setCart((prev) => {
       const existing = prev.find((i) => i.menuItem.id === menuItem.id);
-      if (existing)
+      if (existing) {
+        if (
+          menuItem.trackStock &&
+          menuItem.stockCount !== undefined &&
+          existing.quantity >= menuItem.stockCount
+        ) {
+          showToast(`Only ${menuItem.stockCount} available`, 'error');
+          return prev;
+        }
         return prev.map((i) =>
           i.menuItem.id === menuItem.id ? { ...i, quantity: i.quantity + 1 } : i,
         );
+      }
+      if (menuItem.trackStock && menuItem.stockCount !== undefined && menuItem.stockCount <= 0) {
+        showToast('Item is out of stock', 'error');
+        return prev;
+      }
       return [...prev, { menuItem, quantity: 1 }];
     });
   };
@@ -1334,6 +1349,14 @@ export function MenuPage() {
                             Sold Out
                           </span>
                         )}
+                        {!isUnavailable &&
+                          item.trackStock &&
+                          item.stockCount !== undefined &&
+                          item.stockCount <= 5 && (
+                            <span className="text-[10px] font-black uppercase tracking-widest text-amber-500 border border-amber-500/50 px-2 py-0.5 rounded-full mono">
+                              Only {item.stockCount} left
+                            </span>
+                          )}
                       </div>
                       {item.description && (
                         <p className="text-[var(--text-secondary)] text-sm mt-1 line-clamp-2 leading-relaxed">
