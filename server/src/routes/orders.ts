@@ -740,7 +740,7 @@ ordersRouter.patch(
       const result = await prisma.$transaction(async (tx) => {
         const existingOrder = await tx.order.findFirst({ where: orderWhere });
         if (!existingOrder) {
-          throw new Error('ORDER_NOT_FOUND');
+          return { error: 'ORDER_NOT_FOUND', status: 404 };
         }
 
         const updated = await tx.order.update({
@@ -758,7 +758,10 @@ ordersRouter.patch(
             req.user!.organizationId,
             updated.branchId,
             updated.tableId ?? '', // tableId is nullable after schema change; empty string skips session lookup
-          ).catch(() => null);
+          ).catch((err) => {
+            logger.error('findLeastLoadedWaiter failed in status update', { err: err.message });
+            return null;
+          });
 
           if (assignedWaiterId) {
             finalOrder = await tx.order.update({
@@ -774,11 +777,15 @@ ordersRouter.patch(
         return { finalOrder, type: 'UPDATED' };
       });
 
-      const { finalOrder } = result;
+      if ('error' in result) {
+        return res.status(result.status || 400).json({ success: false, error: result.error });
+      }
+
+      const { finalOrder } = result as any;
 
       if (status === 'READY') {
-        if (result.type === 'ASSIGNED') {
-          io.to(`waiter:${result.assignedWaiterId}`).emit('TASK_ASSIGNED', {
+        if ((result as any).type === 'ASSIGNED') {
+          io.to(`waiter:${(result as any).assignedWaiterId}`).emit('TASK_ASSIGNED', {
             type: 'ORDER_READY',
             task: finalOrder,
           });

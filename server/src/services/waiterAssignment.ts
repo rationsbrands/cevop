@@ -162,8 +162,12 @@ export async function findLeastLoadedWaiter(
   // If tableId is provided, check if it belongs to a section
   // and if any online waiters are assigned to that section
   if (tableId) {
-    const table = await prisma.table.findUnique({
-      where: { id: tableId },
+    const table = await prisma.table.findFirst({
+      where: {
+        id: tableId,
+        organizationId: orgId,
+        branchId: branchId ?? undefined,
+      },
       select: {
         sectionId: true,
         activeSessionId: true,
@@ -178,17 +182,33 @@ export async function findLeastLoadedWaiter(
       });
 
       // Find the first assigned waiter across all tasks in this session (fallback)
+      // CRITICAL: Must filter by organizationId and branchId to avoid cross-tenant data leakage or cross-branch misassignment
       const [order, call, request] = await Promise.all([
         prisma.order.findFirst({
-          where: { sessionId: table.activeSessionId, assignedWaiter: { not: null } },
+          where: {
+            organizationId: orgId,
+            branchId: branchId ?? undefined,
+            sessionId: table.activeSessionId,
+            assignedWaiter: { not: null },
+          },
           select: { assignedWaiter: true },
         }),
         prisma.waiterCall.findFirst({
-          where: { sessionId: table.activeSessionId, assignedTo: { not: null } },
+          where: {
+            organizationId: orgId,
+            branchId: branchId ?? undefined,
+            sessionId: table.activeSessionId,
+            assignedTo: { not: null },
+          },
           select: { assignedTo: true },
         }),
         prisma.serviceRequest.findFirst({
-          where: { sessionId: table.activeSessionId, assignedTo: { not: null } },
+          where: {
+            organizationId: orgId,
+            branchId: branchId ?? undefined,
+            sessionId: table.activeSessionId,
+            assignedTo: { not: null },
+          },
           select: { assignedTo: true },
         }),
       ]);
@@ -204,6 +224,8 @@ export async function findLeastLoadedWaiter(
         const waiter = await prisma.user.findFirst({
           where: {
             id: waiterId,
+            organizationId: orgId,
+            branchId: branchId ?? undefined,
             isOnShift: true,
             isActive: true,
           },
@@ -247,7 +269,8 @@ export async function claimTableSession(
     include: { assignedWaiter: { select: { id: true, name: true } } },
   });
 
-  if (!session) return { success: false, error: 'Session not found' };
+  if (!session || session.branchId !== branchId)
+    return { success: false, error: 'Session not found' };
 
   // If already assigned to this waiter, return success
   if (session.assignedWaiterId === waiterId) {
