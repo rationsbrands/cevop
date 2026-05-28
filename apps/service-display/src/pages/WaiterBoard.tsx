@@ -506,6 +506,15 @@ export function WaiterBoard() {
           </div>
         </div>
         <div className="flex items-center gap-1.5 sm:gap-3">
+          {user?.role === 'WAITER' && user?.isOnShift && (
+            <button
+              onClick={endShift}
+              disabled={shiftBusy}
+              className="px-3 py-1 bg-[var(--danger-bg)] text-[var(--danger)] border border-[var(--danger)] text-[10px] font-black uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50"
+            >
+              {shiftBusy ? 'ENDING...' : 'END SHIFT'}
+            </button>
+          )}
           <div
             className={`flex items-center gap-1.5 text-[8px] sm:text-xs px-2 py-1 border font-mono ${isOnline && socketConnected ? 'border-[var(--ready)] text-[var(--ready)]' : 'border-[var(--danger)] text-[var(--danger)]'}`}
           >
@@ -648,26 +657,38 @@ export function WaiterBoard() {
                 {tables.map((table: any) => (
                   <div
                     key={table.id}
-                    className={`p-3 border-2 flex flex-col justify-between gap-4 transition-all active:scale-95 ${table.status === 'EMPTY' ? 'border-[var(--border)] opacity-60' : 'border-[var(--accent)] bg-[var(--accent-bg)]'}`}
+                    className={`border-2 p-3 space-y-3 bg-[#0a0a0a] flex flex-col justify-between overflow-hidden transition-all active:scale-95 ${table.status === 'EMPTY' ? 'border-gray-800 opacity-60' : 'border-[var(--accent)]'}`}
                   >
-                    <div>
-                      <AutoFitText className="font-black text-lg">{table.label}</AutoFitText>
-                      <div className="text-[9px] font-black tracking-widest uppercase opacity-60">
-                        {table.status}
+                    <div className="min-w-0">
+                      <div className="flex justify-between items-start gap-2">
+                        <AutoFitText
+                          className="font-black"
+                          maxFontSize="1.5rem"
+                          minFontSize="1.125rem"
+                        >
+                          {table.label}
+                        </AutoFitText>
+                        <div className="text-[9px] font-black tracking-widest uppercase opacity-60">
+                          {table.status}
+                        </div>
+                      </div>
+                      <div className="py-2 border-t border-gray-800 mt-2">
+                        {/* Session details could go here if needed */}
                       </div>
                     </div>
+
                     <div className="flex flex-col gap-1.5">
                       {table.activeSessionId ? (
                         <>
                           <button
                             onClick={() => fetchBill(table.activeSessionId!, table.label)}
-                            className="w-full py-2 bg-[var(--foreground)] text-[var(--background)] text-[9px] font-black uppercase tracking-widest"
+                            className="w-full py-3 bg-[var(--foreground)] text-[var(--background)] text-xs font-black uppercase tracking-widest rounded-sm"
                           >
                             BILL
                           </button>
                           <button
                             onClick={() => clearTable(table.activeSessionId!)}
-                            className="w-full py-2 border border-[var(--foreground)] text-[var(--foreground)] text-[9px] font-black uppercase tracking-widest"
+                            className="w-full py-3 border border-[var(--foreground)] text-[var(--foreground)] text-xs font-black uppercase tracking-widest rounded-sm"
                           >
                             CLEAR
                           </button>
@@ -677,7 +698,7 @@ export function WaiterBoard() {
                           onClick={() =>
                             setOrderModal({ tableId: table.id, tableLabel: table.label })
                           }
-                          className="w-full py-2 bg-[var(--accent)] text-black text-[9px] font-black uppercase tracking-widest"
+                          className="w-full py-3 bg-[var(--accent)] text-black text-xs font-black uppercase tracking-widest rounded-sm"
                         >
                           OPEN
                         </button>
@@ -690,18 +711,6 @@ export function WaiterBoard() {
           </>
         )}
       </div>
-
-      {user?.role === 'WAITER' && user?.isOnShift && (
-        <div className="p-2 sm:p-4 bg-[var(--surface)] border-t border-[var(--border)] shrink-0">
-          <button
-            onClick={endShift}
-            disabled={shiftBusy}
-            className="w-full py-3 sm:py-4 border border-[var(--danger)] text-[var(--danger)] font-black text-xs sm:text-sm tracking-widest uppercase active:scale-95 transition-transform disabled:opacity-50"
-          >
-            {shiftBusy ? 'ENDING...' : 'END SHIFT'}
-          </button>
-        </div>
-      )}
 
       {showPOS && (
         <WaiterPOS
