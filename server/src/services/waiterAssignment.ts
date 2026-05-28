@@ -129,115 +129,137 @@ export async function findLeastLoadedWaiter(
   branchId: string | null,
   tableId?: string,
 ): Promise<string | null> {
-  let waiterIds = getOnlineWaiters(orgId, branchId);
-  if (waiterIds.length === 0) return null;
+  const ASSIGNMENT_TIMEOUT_MS = 5000; // 5s safety timeout for DB heavy lifting
 
-  // Filter out waiters who have reached their table limit
-  const branch = branchId
-    ? await prisma.branch.findUnique({
-        where: { id: branchId },
-        select: { maxTablesPerWaiter: true },
-      })
-    : null;
+  try {
+    const result = await Promise.race([
+      (async () => {
+        let waiterIds = getOnlineWaiters(orgId, branchId);
+        if (waiterIds.length === 0) return null;
 
-  if (branch && branch.maxTablesPerWaiter !== null) {
-    const validWaiterIds: string[] = [];
-    for (const wid of waiterIds) {
-      const activeOwnedCount = await prisma.tableSession.count({
-        where: {
-          assignedWaiterId: wid,
-          closedAt: null,
-          table: { activeSessionId: { not: null } },
-        },
-      });
-      if (activeOwnedCount < branch.maxTablesPerWaiter) {
-        validWaiterIds.push(wid);
-      }
-    }
-    waiterIds = validWaiterIds;
+        // Filter out waiters who have reached their table limit
+        const branch = branchId
+          ? await prisma.branch.findUnique({
+              where: { id: branchId },
+              select: { maxTablesPerWaiter: true },
+            })
+          : null;
+
+        if (branch && branch.maxTablesPerWaiter !== null) {
+          const validWaiterIds: string[] = [];
+          for (const wid of waiterIds) {
+            const activeOwnedCount = await prisma.tableSession.count({
+              where: {
+                assignedWaiterId: wid,
+                closedAt: null,
+                table: { activeSessionId: { not: null } },
+              },
+            });
+            if (activeOwnedCount < branch.maxTablesPerWaiter) {
+              validWaiterIds.push(wid);
+            }
+          }
+          waiterIds = validWaiterIds;
+        }
+
+        if (waiterIds.length === 0) return null;
+
+        // If tableId is provided, check if it belongs to a section
+        // and if any online waiters are assigned to that section
+        if (tableId) {
+          const table = await prisma.table.findFirst({
+            where: {
+              id: tableId,
+              organizationId: orgId,
+              branchId: branchId ?? undefined,
+            },
+            select: {
+              sectionId: true,
+              activeSessionId: true,
+            },
+          });
+
+          if (table?.activeSessionId) {
+            // First check if the session itself is claimed
+            const session = await prisma.tableSession.findUnique({
+              where: { id: table.activeSessionId },
+              select: { assignedWaiterId: true },
+            });
+
+            // Find the first assigned waiter across all tasks in this session (fallback)
+            // CRITICAL: Must filter by organizationId and branchId to avoid cross-tenant data leakage or cross-branch misassignment
+            const [order, call, request] = await Promise.all([
+              prisma.order.findFirst({
+                where: {
+                  organizationId: orgId,
+                  branchId: branchId ?? undefined,
+                  sessionId: table.activeSessionId,
+                  assignedWaiter: { not: null },
+                },
+                select: { assignedWaiter: true },
+              }),
+              prisma.waiterCall.findFirst({
+                where: {
+                  organizationId: orgId,
+                  branchId: branchId ?? undefined,
+                  sessionId: table.activeSessionId,
+                  assignedTo: { not: null },
+                },
+                select: { assignedTo: true },
+              }),
+              prisma.serviceRequest.findFirst({
+                where: {
+                  organizationId: orgId,
+                  branchId: branchId ?? undefined,
+                  sessionId: table.activeSessionId,
+                  assignedTo: { not: null },
+                },
+                select: { assignedTo: true },
+              }),
+            ]);
+
+            const waiterId =
+              session?.assignedWaiterId ||
+              order?.assignedWaiter ||
+              call?.assignedTo ||
+              request?.assignedTo;
+
+            if (waiterId) {
+              // Check if the assigned waiter is still online/active
+              const waiter = await prisma.user.findFirst({
+                where: {
+                  id: waiterId,
+                  organizationId: orgId,
+                  branchId: branchId ?? undefined,
+                  isOnShift: true,
+                  isActive: true,
+                },
+                select: { id: true },
+              });
+              if (waiter) return waiter.id;
+            }
+          }
+        }
+
+        // If the table is not already claimed, return null so the task broadcasts to all available waiters
+        return null;
+      })(),
+      new Promise<null>((resolve) =>
+        setTimeout(() => {
+          logger.warn('Waiter assignment timed out, falling back to broadcast', {
+            orgId,
+            branchId,
+            tableId,
+          });
+          resolve(null);
+        }, ASSIGNMENT_TIMEOUT_MS),
+      ),
+    ]);
+    return result;
+  } catch (err) {
+    logger.error('findLeastLoadedWaiter error:', err);
+    return null; // Fallback to broadcast on any error
   }
-
-  if (waiterIds.length === 0) return null;
-
-  // If tableId is provided, check if it belongs to a section
-  // and if any online waiters are assigned to that section
-  if (tableId) {
-    const table = await prisma.table.findFirst({
-      where: {
-        id: tableId,
-        organizationId: orgId,
-        branchId: branchId ?? undefined,
-      },
-      select: {
-        sectionId: true,
-        activeSessionId: true,
-      },
-    });
-
-    if (table?.activeSessionId) {
-      // First check if the session itself is claimed
-      const session = await prisma.tableSession.findUnique({
-        where: { id: table.activeSessionId },
-        select: { assignedWaiterId: true },
-      });
-
-      // Find the first assigned waiter across all tasks in this session (fallback)
-      // CRITICAL: Must filter by organizationId and branchId to avoid cross-tenant data leakage or cross-branch misassignment
-      const [order, call, request] = await Promise.all([
-        prisma.order.findFirst({
-          where: {
-            organizationId: orgId,
-            branchId: branchId ?? undefined,
-            sessionId: table.activeSessionId,
-            assignedWaiter: { not: null },
-          },
-          select: { assignedWaiter: true },
-        }),
-        prisma.waiterCall.findFirst({
-          where: {
-            organizationId: orgId,
-            branchId: branchId ?? undefined,
-            sessionId: table.activeSessionId,
-            assignedTo: { not: null },
-          },
-          select: { assignedTo: true },
-        }),
-        prisma.serviceRequest.findFirst({
-          where: {
-            organizationId: orgId,
-            branchId: branchId ?? undefined,
-            sessionId: table.activeSessionId,
-            assignedTo: { not: null },
-          },
-          select: { assignedTo: true },
-        }),
-      ]);
-
-      const waiterId =
-        session?.assignedWaiterId ||
-        order?.assignedWaiter ||
-        call?.assignedTo ||
-        request?.assignedTo;
-
-      if (waiterId) {
-        // Check if the assigned waiter is still online/active
-        const waiter = await prisma.user.findFirst({
-          where: {
-            id: waiterId,
-            organizationId: orgId,
-            branchId: branchId ?? undefined,
-            isOnShift: true,
-            isActive: true,
-          },
-          select: { id: true },
-        });
-        if (waiter) return waiter.id;
-      }
-    }
-  }
-
-  // If the table is not already claimed, return null so the task broadcasts to all available waiters
-  return null;
 }
 
 // Get waiter availability summary for admin dashboard

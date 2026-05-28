@@ -269,6 +269,7 @@ model TableSession {
   @@index([tableId, closedAt])
   @@index([branchId, closedAt])
   @@index([organizationId])
+  @@index([assignedWaiterId])
   @@index([branchId, openedAt(sort: Desc)])
   @@map("table_sessions")
 }
