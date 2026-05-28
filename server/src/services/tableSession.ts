@@ -165,11 +165,6 @@ export async function closeSession(
   });
 
   // Global sync signal for the branch
-  io.to(orgBranch).emit('SYNC_REQUIRED', {
-    type: 'SESSION_CLOSED',
-    tableId: session.tableId,
-    sessionId,
-  });
 
   logger.info('Table session closed', { sessionId, tableId: session.tableId });
 }

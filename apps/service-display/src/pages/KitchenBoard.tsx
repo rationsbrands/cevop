@@ -184,19 +184,31 @@ export function KitchenBoard() {
     });
     socket.on('disconnect', () => setSocketConnected(false));
 
-    socket.on('ORDER_CREATED', () => {
+    socket.on('ORDER_CREATED', (order: any) => {
       playAlert();
-      queryClient.invalidateQueries({ queryKey: ['kitchen-orders'] });
+      queryClient.setQueryData(
+        ['kitchen-orders', user?.organizationId, user?.branchId, selectedStationId],
+        (prev: any) => {
+          if (!prev || !prev.success) return prev;
+          if (prev.data.some((o: any) => o.id === order.id)) return prev;
+          return { ...prev, data: [order, ...prev.data] };
+        },
+      );
     });
-    socket.on('ORDER_UPDATED', () =>
-      queryClient.invalidateQueries({ queryKey: ['kitchen-orders'] }),
-    );
 
-    socket.on('SYNC_REQUIRED', () => {
-      const now = Date.now();
-      if (now - lastSyncAtRef.current < 2000) return;
-      lastSyncAtRef.current = now;
-      refreshNowRef.current().catch(() => void 0);
+    socket.on('ORDER_UPDATED', (order: any) => {
+      queryClient.setQueryData(
+        ['kitchen-orders', user?.organizationId, user?.branchId, selectedStationId],
+        (prev: any) => {
+          if (!prev || !prev.success) return prev;
+          // Note: if order.status moves to READY, it will be filtered out by useMemo orders
+          const exists = prev.data.some((o: any) => o.id === order.id);
+          if (exists) {
+            return { ...prev, data: prev.data.map((o: any) => (o.id === order.id ? order : o)) };
+          }
+          return { ...prev, data: [order, ...prev.data] };
+        },
+      );
     });
 
     return () => {

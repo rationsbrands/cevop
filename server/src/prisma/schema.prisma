@@ -7,79 +7,86 @@ datasource db {
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
+
 model Organization {
-  id               String            @id @default(cuid())
-  name             String
-  slug             String            @unique
-  logo             String?
-  whatsappNumber   String?
-  slackWebhook     String?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  timezone         String            @default("Africa/Lagos")
-  currency         String            @default("NGN")
-  isActive         Boolean           @default(true)
-  plan             String            @default("free")
-  planStatus       String            @default("active")
-  trialEndsAt      DateTime?
-  verifiedAt       DateTime?
-  verifiedBy       String?
-  selfSignup       Boolean           @default(false)
-  contactPhone     String?
-  contactEmail     String?
-  notes            String?
-  notifyNewOrders       Boolean @default(true)
-  notifyWaiterCalls     Boolean @default(true)
-  notifyServiceRequests Boolean @default(true)
+  id                     String             @id @default(cuid())
+  name                   String
+  slug                   String             @unique
+  logo                   String?
+  whatsappNumber         String?
+  slackWebhook           String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  timezone               String             @default("Africa/Lagos")
+  currency               String             @default("NGN")
+  isActive               Boolean            @default(true)
+  plan                   String             @default("free")
+  planStatus             String             @default("active")
+  trialEndsAt            DateTime?
+  verifiedAt             DateTime?
+  verifiedBy             String?
+  selfSignup             Boolean            @default(false)
+  contactPhone           String?
+  contactEmail           String?
+  notes                  String?
+  taxRate                Decimal            @default(0.00) @db.Decimal(5, 2)
+  serviceChargeRate      Decimal            @default(0.00) @db.Decimal(5, 2)
+  notifyNewOrders        Boolean            @default(true)
+  notifyWaiterCalls      Boolean            @default(true)
+  notifyServiceRequests  Boolean            @default(true)
   scheduledForDeletionAt DateTime?
-  auditLogs        AuditLog[]
-  branches         Branch[]
-  categories       Category[]
-  helpOptions      HelpOption[]
-  inviteTokens     InviteToken[]
-  menuItems        MenuItem[]
-  onboardingTokens OnboardingToken[]
-  orders           Order[]
-  serviceRequests  ServiceRequest[]
-  tables           Table[]
-  users            User[]
-  waiterCalls      WaiterCall[]
-  tableSessions    TableSession[]
-  sections         Section[]
-  stations         Station[]
-  pushSubscriptions PushSubscription[]
-  payments         Payment[]
+  auditLogs              AuditLog[]
+  branches               Branch[]
+  categories             Category[]
+  helpOptions            HelpOption[]
+  inviteTokens           InviteToken[]
+  menuItems              MenuItem[]
+  onboardingTokens       OnboardingToken[]
+  orders                 Order[]
+  serviceRequests        ServiceRequest[]
+  tables                 Table[]
+  users                  User[]
+  waiterCalls            WaiterCall[]
+  tableSessions          TableSession[]
+  sections               Section[]
+  stations               Station[]
+  pushSubscriptions      PushSubscription[]
+  payments               Payment[]
+  StaffShift             StaffShift[]
 
   @@map("organizations")
 }
 
 model Branch {
-  id              String           @id @default(cuid())
-  organizationId  String
-  name            String
-  slug            String
-  address         String?
-  phone           String?
-  isActive        Boolean          @default(true)
-  useOrgMenu      Boolean          @default(true)
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  email           String?
+  id                 String           @id @default(cuid())
+  organizationId     String
+  name               String
+  slug               String
+  address            String?
+  phone              String?
+  isActive           Boolean          @default(true)
+  useOrgMenu         Boolean          @default(true)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  email              String?
   maxTablesPerWaiter Int?
-  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  categories      Category[]
-  helpOptions     HelpOption[]
-  inviteTokens    InviteToken[]
-  menuItems       MenuItem[]
-  orders          Order[]
-  serviceRequests ServiceRequest[]
-  tables          Table[]
-  users           User[]
-  waiterCalls     WaiterCall[]
-  tableSessions   TableSession[]
-  sections        Section[]
-  payments        Payment[]
-  stations        Station[]
+  taxRate            Decimal?         @db.Decimal(5, 2)
+  serviceChargeRate  Decimal?         @db.Decimal(5, 2)
+  organization       Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  categories         Category[]
+  helpOptions        HelpOption[]
+  inviteTokens       InviteToken[]
+  menuItems          MenuItem[]
+  orders             Order[]
+  serviceRequests    ServiceRequest[]
+  tables             Table[]
+  users              User[]
+  waiterCalls        WaiterCall[]
+  tableSessions      TableSession[]
+  sections           Section[]
+  payments           Payment[]
+  stations           Station[]
+  StaffShift         StaffShift[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -87,18 +94,18 @@ model Branch {
 }
 
 model Station {
-  id             String       @id @default(cuid())
+  id             String   @id @default(cuid())
   organizationId String
   branchId       String
-  name           String       // e.g. "Kitchen", "Bar", "Grill"
-  isActive       Boolean      @default(true)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  name           String // e.g. "Kitchen", "Bar", "Grill"
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  branch         Branch       @relation(fields: [branchId], references: [id])
-  menuItems      MenuItem[]
-  orderItems     OrderItem[]
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch       @relation(fields: [branchId], references: [id])
+  menuItems    MenuItem[]
+  orderItems   OrderItem[]
 
   @@index([organizationId])
   @@index([branchId])
@@ -125,44 +132,45 @@ model HelpOption {
 }
 
 model User {
-  id                  String         @id @default(cuid())
-  organizationId      String
-  name                String
-  email               String
-  passwordHash        String
-  role                UserRole       @default(WAITER)
-  isActive            Boolean        @default(true)
-  isOnShift           Boolean        @default(false)
-  shiftStartedAt      DateTime?
-  shiftEndedAt        DateTime?
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
-  branchId            String?
-  loginAttempts       Int            @default(0)
-  lockedUntil         DateTime?
-  lastLoginAt         DateTime?
-  lastLoginIp         String?
-  passwordResetToken  String?        @unique
-  passwordResetExpiry DateTime?
-  mustChangePassword  Boolean        @default(false)
-  opsRole             OpsRole?
-  staffCode           String?
-  emailVerified       DateTime?
-  emailVerificationToken String?     @unique
-  waiterCallAssignments    WaiterCall[]     @relation("WaiterCallAssignments")
-  serviceRequestAssignments ServiceRequest[] @relation("ServiceRequestAssignments")
-  orderWaiterAssignments   Order[]          @relation("OrderWaiterAssignments")
-  sessionAssignments    TableSession[]   @relation("SessionWaiterAssignments")
-  sectionAssignments  SectionStaff[]
-  auditLogs           AuditLog[]
-  refreshTokens       RefreshToken[]
-  pushSubscriptions   PushSubscription[]
-  processedPayments   Payment[]        @relation("PaymentProcessor")
-  orderItemCancellations OrderItem[]   @relation("OrderItemCancellations")
-  resolvedWaiterCalls   WaiterCall[]     @relation("WaiterCallResolutions")
-  resolvedServiceRequests ServiceRequest[] @relation("ServiceRequestResolutions")
-  branch              Branch?        @relation(fields: [branchId], references: [id])
-  organization        Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  id                        String             @id @default(cuid())
+  organizationId            String
+  name                      String
+  email                     String
+  passwordHash              String
+  role                      UserRole           @default(WAITER)
+  isActive                  Boolean            @default(true)
+  isOnShift                 Boolean            @default(false)
+  shiftStartedAt            DateTime?
+  shiftEndedAt              DateTime?
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+  branchId                  String?
+  loginAttempts             Int                @default(0)
+  lockedUntil               DateTime?
+  lastLoginAt               DateTime?
+  lastLoginIp               String?
+  passwordResetToken        String?            @unique
+  passwordResetExpiry       DateTime?
+  mustChangePassword        Boolean            @default(false)
+  opsRole                   OpsRole?
+  staffCode                 String?
+  emailVerified             DateTime?
+  emailVerificationToken    String?            @unique
+  waiterCallAssignments     WaiterCall[]       @relation("WaiterCallAssignments")
+  serviceRequestAssignments ServiceRequest[]   @relation("ServiceRequestAssignments")
+  orderWaiterAssignments    Order[]            @relation("OrderWaiterAssignments")
+  sessionAssignments        TableSession[]     @relation("SessionWaiterAssignments")
+  sectionAssignments        SectionStaff[]
+  auditLogs                 AuditLog[]
+  refreshTokens             RefreshToken[]
+  pushSubscriptions         PushSubscription[]
+  processedPayments         Payment[]          @relation("PaymentProcessor")
+  orderItemCancellations    OrderItem[]        @relation("OrderItemCancellations")
+  resolvedWaiterCalls       WaiterCall[]       @relation("WaiterCallResolutions")
+  resolvedServiceRequests   ServiceRequest[]   @relation("ServiceRequestResolutions")
+  shifts                    StaffShift[]
+  branch                    Branch?            @relation(fields: [branchId], references: [id])
+  organization              Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([email, organizationId])
   @@unique([branchId, staffCode])
@@ -265,27 +273,27 @@ model Table {
 }
 
 model TableSession {
-  id             String    @id @default(cuid())
-  organizationId String
-  branchId       String
-  tableId        String?
-  openedAt       DateTime  @default(now())
-  closedAt       DateTime?
-  closedBy       String?
+  id               String    @id @default(cuid())
+  organizationId   String
+  branchId         String
+  tableId          String?
+  openedAt         DateTime  @default(now())
+  closedAt         DateTime?
+  closedBy         String?
   assignedWaiterId String?
   assignedWaiterAt DateTime?
-  claimedAt      DateTime?
-  guestCount     Int?
-  notes          String?
+  claimedAt        DateTime?
+  guestCount       Int?
+  notes            String?
 
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  branch         Branch           @relation(fields: [branchId], references: [id])
-  table          Table?            @relation(fields: [tableId], references: [id], onDelete: SetNull)
-  assignedWaiter User?            @relation("SessionWaiterAssignments", fields: [assignedWaiterId], references: [id], onDelete: SetNull)
-  orders         Order[]
-  waiterCalls    WaiterCall[]
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch          Branch           @relation(fields: [branchId], references: [id])
+  table           Table?           @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  assignedWaiter  User?            @relation("SessionWaiterAssignments", fields: [assignedWaiterId], references: [id], onDelete: SetNull)
+  orders          Order[]
+  waiterCalls     WaiterCall[]
   serviceRequests ServiceRequest[]
-  payments       Payment[]
+  payments        Payment[]
 
   @@index([tableId, closedAt])
   @@index([branchId, closedAt])
@@ -302,49 +310,52 @@ enum PaymentMethod {
 }
 
 model Payment {
-  id             String        @id @default(cuid())
-  sessionId      String
-  organizationId String
-  branchId       String
-  amount         Decimal       @db.Decimal(10, 2)
-  currency       String        @default("NGN")
-  method         PaymentMethod
-  reference      String?
-  note           String?
-  ordersTotal    Decimal       @db.Decimal(10, 2)
-  processedBy    String?
-  processedAt    DateTime      @default(now())
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @default(now()) @updatedAt
+  id                  String        @id @default(cuid())
+  sessionId           String
+  organizationId      String
+  branchId            String
+  amount              Decimal       @db.Decimal(10, 2)
+  subtotal            Decimal       @default(0.00) @db.Decimal(10, 2)
+  taxAmount           Decimal       @default(0.00) @db.Decimal(10, 2)
+  serviceChargeAmount Decimal       @default(0.00) @db.Decimal(10, 2)
+  currency            String        @default("NGN")
+  method              PaymentMethod
+  reference           String?
+  note                String?
+  ordersTotal         Decimal       @db.Decimal(10, 2)
+  processedBy         String?
+  processedAt         DateTime      @default(now())
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @default(now()) @updatedAt
 
-  session        TableSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  branch         Branch        @relation(fields: [branchId], references: [id])
-  processor      User?         @relation("PaymentProcessor", fields: [processedBy], references: [id])
-  orderItems     OrderItem[]   @relation("PaymentOrderItems")
+  session      TableSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch       @relation(fields: [branchId], references: [id])
+  processor    User?        @relation("PaymentProcessor", fields: [processedBy], references: [id])
+  orderItems   OrderItem[]  @relation("PaymentOrderItems")
 
   @@index([sessionId])
   @@index([branchId, processedAt])
-  @@index([branchId, processedAt(sort: Desc)],map: "payments_branchId_processedAt_desc_idx")
+  @@index([branchId, processedAt(sort: Desc)], map: "payments_branchId_processedAt_desc_idx")
   @@index([organizationId])
   @@map("payments")
 }
 
 model Section {
-  id             String        @id @default(cuid())
+  id             String   @id @default(cuid())
   organizationId String
   branchId       String
-  name           String        // e.g. "Main Floor", "Patio", "Bar"
-  colour         String?       // hex colour for visual floor map — optional
-  sortOrder      Int           @default(0)
-  isActive       Boolean       @default(true)
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  name           String // e.g. "Main Floor", "Patio", "Bar"
+  colour         String? // hex colour for visual floor map — optional
+  sortOrder      Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  branch         Branch        @relation(fields: [branchId], references: [id])
-  tables         Table[]
-  staff          SectionStaff[]
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch         @relation(fields: [branchId], references: [id])
+  tables       Table[]
+  staff        SectionStaff[]
 
   @@unique([branchId, name])
   @@index([organizationId])
@@ -419,29 +430,32 @@ model MenuItem {
 }
 
 model Order {
-  id             String       @id @default(cuid())
-  organizationId String
-  tableId        String?
-  idempotencyKey String       @unique
-  status         OrderStatus  @default(RECEIVED)
-  total          Decimal      @db.Decimal(10, 2)
-  notes          String?
-  cancellationReason String?
-  sessionId      String?
-  session        TableSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
-  assignedWaiter     String?
-  assignedWaiterAt   DateTime?
-  assignedWaiterUser User?    @relation("OrderWaiterAssignments", fields: [assignedWaiter], references: [id], onDelete: SetNull)
-  acknowledgedAt     DateTime?
-  escalationLevel    Int          @default(0)
-  lastEscalatedAt    DateTime?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  branchId       String
-  items          OrderItem[]
-  branch         Branch       @relation(fields: [branchId], references: [id])
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  table          Table?        @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  id                  String        @id @default(cuid())
+  organizationId      String
+  tableId             String?
+  idempotencyKey      String        @unique
+  status              OrderStatus   @default(RECEIVED)
+  subtotal            Decimal       @default(0.00) @db.Decimal(10, 2)
+  taxAmount           Decimal       @default(0.00) @db.Decimal(10, 2)
+  serviceChargeAmount Decimal       @default(0.00) @db.Decimal(10, 2)
+  total               Decimal       @db.Decimal(10, 2)
+  notes               String?
+  cancellationReason  String?
+  sessionId           String?
+  session             TableSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  assignedWaiter      String?
+  assignedWaiterAt    DateTime?
+  assignedWaiterUser  User?         @relation("OrderWaiterAssignments", fields: [assignedWaiter], references: [id], onDelete: SetNull)
+  acknowledgedAt      DateTime?
+  escalationLevel     Int           @default(0)
+  lastEscalatedAt     DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  branchId            String
+  items               OrderItem[]
+  branch              Branch        @relation(fields: [branchId], references: [id])
+  organization        Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  table               Table?        @relation(fields: [tableId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([branchId])
@@ -457,23 +471,23 @@ model Order {
 }
 
 model OrderItem {
-  id         String   @id @default(cuid())
-  orderId    String
-  menuItemId String
-  stationId  String?
-  paymentId  String?
-  quantity   Int
-  unitPrice  Decimal  @db.Decimal(10, 2)
-  notes      String?
-  status     OrderItemStatus @default(PENDING)
-  cancelledAt   DateTime?
-  cancelReason  String?
-  cancelledBy   String?
-  cancelledByUser User?   @relation("OrderItemCancellations", fields: [cancelledBy], references: [id], onDelete: SetNull)
-  menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
-  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  station    Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
-  payment    Payment? @relation("PaymentOrderItems", fields: [paymentId], references: [id])
+  id              String          @id @default(cuid())
+  orderId         String
+  menuItemId      String
+  stationId       String?
+  paymentId       String?
+  quantity        Int
+  unitPrice       Decimal         @db.Decimal(10, 2)
+  notes           String?
+  status          OrderItemStatus @default(PENDING)
+  cancelledAt     DateTime?
+  cancelReason    String?
+  cancelledBy     String?
+  cancelledByUser User?           @relation("OrderItemCancellations", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  menuItem        MenuItem        @relation(fields: [menuItemId], references: [id])
+  order           Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  station         Station?        @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  payment         Payment?        @relation("PaymentOrderItems", fields: [paymentId], references: [id])
 
   @@index([orderId])
   @@index([stationId])
@@ -482,29 +496,29 @@ model OrderItem {
 }
 
 model WaiterCall {
-  id             String           @id @default(cuid())
-  organizationId String
-  tableId        String?
-  reason         String?
-  status         WaiterCallStatus @default(PENDING)
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  branchId       String
-  notes          String?
-  resolvedBy     String?
-  resolvedByUser User?     @relation("WaiterCallResolutions", fields: [resolvedBy], references: [id], onDelete: SetNull)
-  resolvedAt     DateTime?
-  assignedTo   String?
-  assignedAt   DateTime?
-  acknowledgedAt DateTime?
-  escalationLevel Int          @default(0)
+  id              String           @id @default(cuid())
+  organizationId  String
+  tableId         String?
+  reason          String?
+  status          WaiterCallStatus @default(PENDING)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  branchId        String
+  notes           String?
+  resolvedBy      String?
+  resolvedByUser  User?            @relation("WaiterCallResolutions", fields: [resolvedBy], references: [id], onDelete: SetNull)
+  resolvedAt      DateTime?
+  assignedTo      String?
+  assignedAt      DateTime?
+  acknowledgedAt  DateTime?
+  escalationLevel Int              @default(0)
   lastEscalatedAt DateTime?
-  sessionId    String?
-  session      TableSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
-  assignedUser User?    @relation("WaiterCallAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
-  branch         Branch           @relation(fields: [branchId], references: [id])
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  table          Table?            @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  sessionId       String?
+  session         TableSession?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  assignedUser    User?            @relation("WaiterCallAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
+  branch          Branch           @relation(fields: [branchId], references: [id])
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  table           Table?           @relation(fields: [tableId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([branchId])
@@ -516,30 +530,30 @@ model WaiterCall {
 }
 
 model ServiceRequest {
-  id             String               @id @default(cuid())
-  organizationId String
-  tableId        String?
-  serviceType    String
-  notes          String?
-  status         ServiceRequestStatus @default(PENDING)
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
-  branchId       String
-  adminNotes     String?
-  resolvedBy     String?
-  resolvedByUser User?     @relation("ServiceRequestResolutions", fields: [resolvedBy], references: [id], onDelete: SetNull)
-  resolvedAt     DateTime?
-  assignedTo   String?
-  assignedAt   DateTime?
-  acknowledgedAt DateTime?
-  escalationLevel Int          @default(0)
+  id              String               @id @default(cuid())
+  organizationId  String
+  tableId         String?
+  serviceType     String
+  notes           String?
+  status          ServiceRequestStatus @default(PENDING)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  branchId        String
+  adminNotes      String?
+  resolvedBy      String?
+  resolvedByUser  User?                @relation("ServiceRequestResolutions", fields: [resolvedBy], references: [id], onDelete: SetNull)
+  resolvedAt      DateTime?
+  assignedTo      String?
+  assignedAt      DateTime?
+  acknowledgedAt  DateTime?
+  escalationLevel Int                  @default(0)
   lastEscalatedAt DateTime?
-  sessionId    String?
-  session      TableSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
-  assignedUser User?    @relation("ServiceRequestAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
-  branch         Branch               @relation(fields: [branchId], references: [id])
-  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  table          Table?                @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  sessionId       String?
+  session         TableSession?        @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  assignedUser    User?                @relation("ServiceRequestAssignments", fields: [assignedTo], references: [id], onDelete: SetNull)
+  branch          Branch               @relation(fields: [branchId], references: [id])
+  organization    Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  table           Table?               @relation(fields: [tableId], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([branchId])
@@ -571,13 +585,13 @@ model AuditLog {
 model NotificationLog {
   id             String   @id @default(cuid())
   organizationId String
-  type           String   // 'whatsapp' | 'push' | 'email'
-  recipient      String   // phone or userId
-  event          String   // 'NEW_ORDER' | 'WAITER_CALL' etc
-  status         String   // 'sent' | 'failed' | 'delivered'
+  type           String // 'whatsapp' | 'push' | 'email'
+  recipient      String // phone or userId
+  event          String // 'NEW_ORDER' | 'WAITER_CALL' etc
+  status         String // 'sent' | 'failed' | 'delivered'
   error          String?
   sentAt         DateTime @default(now())
-  
+
   @@index([organizationId, sentAt])
   @@map("notification_logs")
 }
@@ -588,7 +602,29 @@ enum HelpOptionType {
   BILL
 }
 
+model StaffShift {
+  id              String    @id @default(cuid())
+  organizationId  String
+  branchId        String?
+  userId          String
+  clockedInAt     DateTime
+  clockedOutAt    DateTime?
+  durationMinutes Int?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch       Branch?      @relation(fields: [branchId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([userId])
+  @@map("staff_shifts")
+}
+
 enum UserRole {
+  BAR
   SUPERADMIN
   ORG_OWNER
   ADMIN
@@ -621,6 +657,9 @@ enum OrderStatus {
 
 enum OrderItemStatus {
   PENDING
+  PREPARING
+  READY
+  SERVED
   PAID
   CANCELLED
 }

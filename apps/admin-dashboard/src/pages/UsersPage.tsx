@@ -28,6 +28,7 @@ const ROLE_NAMES: Record<string, string> = {
   BRANCH_FINANCE: 'Finance',
   SERVICE: 'Service',
   WAITER: 'Waiter',
+  BAR: 'Bar',
   KITCHEN: 'Kitchen',
   CASHIER: 'Cashier',
   HOST: 'Host',
@@ -44,6 +45,7 @@ const ROLE_SELECT_LABELS: Record<string, string> = {
   BRANCH_FINANCE: 'Branch Finance',
   SERVICE: 'Service',
   WAITER: 'Waiter',
+  BAR: 'Bar',
   KITCHEN: 'Kitchen',
   CASHIER: 'Cashier',
   HOST: 'Host',
@@ -149,7 +151,7 @@ export function UsersPage() {
   const canCreateOrgAdmin =
     me?.role === 'ORG_OWNER' || me?.role === 'ADMIN' || me?.role === 'SUPERADMIN';
   const availableRoles = isBranchAdmin
-    ? ['SERVICE', 'WAITER', 'KITCHEN', 'CASHIER', 'HOST']
+    ? ['SERVICE', 'WAITER', 'BAR', 'KITCHEN', 'CASHIER', 'HOST']
     : [
         ...(canCreateOrgOwner ? ['ORG_OWNER'] : []),
         ...(canCreateOrgAdmin ? ['ADMIN'] : []),
@@ -160,12 +162,13 @@ export function UsersPage() {
         'BRANCH_FINANCE',
         'SERVICE',
         'WAITER',
+        'BAR',
         'KITCHEN',
         'CASHIER',
         'HOST',
       ];
   const inviteRoles = isBranchAdmin
-    ? ['SERVICE', 'WAITER', 'KITCHEN', 'CASHIER', 'HOST']
+    ? ['SERVICE', 'WAITER', 'BAR', 'KITCHEN', 'CASHIER', 'HOST']
     : [
         'ORG_MANAGER',
         'ORG_FINANCE',
@@ -174,6 +177,7 @@ export function UsersPage() {
         'BRANCH_FINANCE',
         'SERVICE',
         'WAITER',
+        'BAR',
         'KITCHEN',
         'CASHIER',
         'HOST',
@@ -330,6 +334,7 @@ export function UsersPage() {
         role === 'BRANCH_FINANCE' ||
         role === 'WAITER' ||
         role === 'SERVICE' ||
+        role === 'BAR' ||
         role === 'KITCHEN' ||
         role === 'HOST' ||
         role === 'CASHIER';
@@ -568,6 +573,7 @@ export function UsersPage() {
                         'BRANCH_FINANCE',
                         'WAITER',
                         'SERVICE',
+                        'BAR',
                         'KITCHEN',
                         'HOST',
                         'CASHIER',
@@ -591,6 +597,7 @@ export function UsersPage() {
                   'BRANCH_FINANCE',
                   'WAITER',
                   'SERVICE',
+                  'BAR',
                   'KITCHEN',
                   'HOST',
                   'CASHIER',
@@ -673,6 +680,7 @@ export function UsersPage() {
                         'BRANCH_FINANCE',
                         'WAITER',
                         'SERVICE',
+                        'BAR',
                         'KITCHEN',
                         'HOST',
                         'CASHIER',
@@ -696,6 +704,7 @@ export function UsersPage() {
                   'BRANCH_FINANCE',
                   'WAITER',
                   'SERVICE',
+                  'BAR',
                   'KITCHEN',
                   'HOST',
                   'CASHIER',
@@ -1030,6 +1039,7 @@ export function UsersPage() {
                         'BRANCH_FINANCE',
                         'WAITER',
                         'SERVICE',
+                        'BAR',
                         'KITCHEN',
                         'HOST',
                         'CASHIER',
@@ -1055,6 +1065,7 @@ export function UsersPage() {
                   'BRANCH_FINANCE',
                   'WAITER',
                   'SERVICE',
+                  'BAR',
                   'KITCHEN',
                   'HOST',
                   'CASHIER',

@@ -332,6 +332,8 @@ const menuItemSchema = z.object({
   price: z.number().positive(),
   image: z.string().url().optional(),
   isAvailable: z.boolean().default(true),
+  trackStock: z.boolean().default(false),
+  stockCount: z.number().int().min(0).default(0),
   sortOrder: z.number().int().default(0),
   branchId: z.string().nullable().optional(),
 });
@@ -432,6 +434,31 @@ menuRouter.put(
         data,
         include: { category: true },
       });
+
+      // Audit Logging for Stock Adjustments
+      if (
+        (data.stockCount !== undefined && existing.stockCount !== data.stockCount) ||
+        (data.trackStock !== undefined && existing.trackStock !== data.trackStock)
+      ) {
+        await prisma.auditLog.create({
+          data: {
+            organizationId: req.user!.organizationId,
+            userId: req.user!.userId,
+            action: 'STOCK_MANUALLY_ADJUSTED',
+            entity: 'MenuItem',
+            entityId: item.id,
+            metadata: {
+              itemName: item.name,
+              oldStock: existing.stockCount,
+              newStock: item.stockCount,
+              oldTrackStock: existing.trackStock,
+              newTrackStock: item.trackStock,
+            },
+            ipAddress: req.ip,
+          },
+        });
+      }
+
       io.to(`${req.user!.organizationId}:${req.branchScope!}`).emit('MENU_UPDATED', {
         action: 'item_updated',
         item,
@@ -526,6 +553,19 @@ menuRouter.delete(
         return;
       }
       await prisma.menuItem.delete({ where: { id: req.params.id } });
+
+      await prisma.auditLog.create({
+        data: {
+          organizationId: req.user!.organizationId,
+          userId: req.user!.userId,
+          action: 'MENU_ITEM_DELETED',
+          entity: 'MenuItem',
+          entityId: req.params.id,
+          metadata: { itemName: existingItem.name },
+          ipAddress: req.ip,
+        },
+      });
+
       io.to(`${req.user!.organizationId}:${req.branchScope!}`).emit('MENU_UPDATED', {
         action: 'item_deleted',
         id: req.params.id,

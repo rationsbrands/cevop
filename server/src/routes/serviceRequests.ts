@@ -127,10 +127,6 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
     }
 
     io.to(`${table.organizationId}:${actualBranchId}`).emit('SERVICE_REQUESTED', finalRequest);
-    io.to(`${table.organizationId}:${actualBranchId}`).emit('SYNC_REQUIRED', {
-      type: 'SERVICE_REQUEST_CREATED',
-      requestId: finalRequest.id,
-    });
 
     const org = await prisma.organization.findUnique({ where: { id: table.organizationId } });
     if (org && (org as any).notifyServiceRequests) {
@@ -277,10 +273,6 @@ serviceRequestsRouter.patch(
           });
         });
       }
-
-      io.to(`${req.user!.organizationId}:${req.branchScope!}`).emit('SYNC_REQUIRED', {
-        type: 'SERVICE_REQUEST_UPDATED',
-      });
       io.to(`${req.user!.organizationId}:${req.branchScope!}`).emit(
         'SERVICE_REQUEST_UPDATED',
         request,
@@ -461,9 +453,6 @@ serviceRequestsRouter.patch(
           task: updated,
         });
       }
-      io.to(`${req.user!.organizationId}:${req.branchScope!}`).emit('SYNC_REQUIRED', {
-        type: 'SERVICE_REQUEST_ASSIGNED',
-      });
 
       res.json({ success: true, data: updated });
     } catch (err) {

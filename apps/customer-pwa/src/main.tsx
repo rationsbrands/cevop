@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App.tsx';
 import { ThemeProvider } from './context/theme.tsx';
 import './index.css';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const RootWrapper = import.meta.env.DEV ? React.Fragment : React.StrictMode;
 
@@ -36,14 +37,25 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 }
 
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      staleTime: 60 * 1000,
+    },
+  },
+});
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <RootWrapper>
-    <ThemeProvider>
-      <ErrorBoundary>
-        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-          <App />
-        </BrowserRouter>
-      </ErrorBoundary>
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <ErrorBoundary>
+          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <App />
+          </BrowserRouter>
+        </ErrorBoundary>
+      </ThemeProvider>
+    </QueryClientProvider>
   </RootWrapper>,
 );

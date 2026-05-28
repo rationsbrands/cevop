@@ -20,6 +20,8 @@ const branchSchema = z.object({
   phone: z.string().optional(),
   isActive: z.boolean().optional(),
   useOrgMenu: z.boolean().optional(),
+  taxRate: z.coerce.number().min(0).max(100).nullable().optional(),
+  serviceChargeRate: z.coerce.number().min(0).max(100).nullable().optional(),
 });
 
 // GET / — list all branches for org (org-wide admin)
@@ -160,6 +162,8 @@ branchesRouter.put('/:branchId', async (req: AuthRequest, res: Response) => {
         phone: z.string().optional(),
         useOrgMenu: z.boolean().optional(),
         maxTablesPerWaiter: z.number().nullable().optional(),
+        taxRate: z.coerce.number().min(0).max(100).nullable().optional(),
+        serviceChargeRate: z.coerce.number().min(0).max(100).nullable().optional(),
       });
       const data = safeSchema.parse(req.body);
       const existing = await prisma.branch.findFirst({

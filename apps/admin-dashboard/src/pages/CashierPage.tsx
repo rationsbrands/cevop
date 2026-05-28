@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApi, useAuth } from '../context/auth';
 import { useSocket } from '../context/socket';
 import { formatPrice } from '../../../../shared/utils/currency';
+import { printReceipt } from '../utils/printReceipt';
 
 interface OpenSession {
   sessionId: string;
@@ -27,16 +29,22 @@ interface BillDetails {
   orders: {
     id: string;
     status: string;
+    subtotal: number;
+    taxAmount: number;
+    serviceChargeAmount: number;
     total: number;
     createdAt: string;
     items: {
       name: string;
       quantity: number;
       unitPrice: number;
-      notes: string;
+      notes: string | null;
       lineTotal: number;
     }[];
   }[];
+  grandSubtotal: number;
+  grandTax: number;
+  grandServiceCharge: number;
   grandTotal: number;
   amountPaid: number;
   balance: number;
@@ -59,9 +67,7 @@ export function CashierPage() {
   const currency = user?.organization?.currency ?? 'NGN';
 
   const [tab, setTab] = useState<'open' | 'history'>('open');
-  const [sessions, setSessions] = useState<OpenSession[]>([]);
-  const [historySessions, setHistorySessions] = useState<OpenSession[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [selectedSession, setSelectedSession] = useState<OpenSession | null>(null);
   const [form, setForm] = useState<PaymentForm>({
     method: 'CASH',
@@ -81,74 +87,58 @@ export function CashierPage() {
   const [endDate, setEndDate] = useState(today);
   const [syncing, setSyncing] = useState(false);
 
-  const load = useCallback(
-    async (isSilent = false, cancelled = false) => {
-      if (!isSilent) setLoading(true);
-      else setSyncing(true);
+  const {
+    data: sessionsData,
+    refetch: refetchSessions,
+    isLoading: sessionsLoading,
+  } = useQuery({
+    queryKey: ['cashier-open-sessions', api.effectiveBranchId],
+    queryFn: async () => {
+      if (!api.effectiveBranchId) return [];
+      const res = await api.get('/api/payments/open-sessions');
+      return res.success ? (res.data as OpenSession[]) : [];
+    },
+    enabled: !!api.effectiveBranchId,
+  });
 
-      if (!api.effectiveBranchId) {
-        if (!cancelled) {
-          setSessions([]);
-          setHistorySessions([]);
-          setLoading(false);
-          setSyncing(false);
-        }
-        return;
-      }
+  const {
+    data: historySessionsData,
+    refetch: refetchHistory,
+    isLoading: historyLoading,
+  } = useQuery({
+    queryKey: ['cashier-history', api.effectiveBranchId, startDate, endDate],
+    queryFn: async () => {
+      if (!api.effectiveBranchId) return [];
+      const res = await api.get(`/api/payments/history?startDate=${startDate}&endDate=${endDate}`);
+      return res.success ? (res.data as OpenSession[]) : [];
+    },
+    enabled: !!api.effectiveBranchId,
+  });
+
+  const sessions = sessionsData || [];
+  const historySessions = historySessionsData || [];
+  const loading = sessionsLoading || historyLoading;
+
+  const load = useCallback(
+    async (isSilent = false) => {
+      if (!api.effectiveBranchId) return;
+      if (isSilent) setSyncing(true);
       try {
-        const [openRes, histRes] = await Promise.all([
-          api.get('/api/payments/open-sessions'),
-          api.get(`/api/payments/history?startDate=${startDate}&endDate=${endDate}`),
-        ]);
-        if (!cancelled) {
-          if (openRes.success) setSessions(openRes.data);
-          if (histRes.success) setHistorySessions(histRes.data);
-        }
+        await Promise.all([refetchSessions(), refetchHistory()]);
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-          setSyncing(false);
-        }
+        if (isSilent) setSyncing(false);
       }
     },
-    [api, startDate, endDate],
+    [api.effectiveBranchId, refetchSessions, refetchHistory],
   );
-
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.resolve().then(() => {
-      if (!cancelled) void load(false, cancelled).catch(() => void 0);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [load]);
-
-  // Re-fetch whenever server signals sync needed (payments, session changes)
-  useEffect(() => {
-    if (syncSignal === 0) return;
-    const t = window.setTimeout(() => {
-      void load(true).catch(() => void 0);
-    }, 0);
-    return () => window.clearTimeout(t);
-  }, [syncSignal, load]);
-
-  // Background Heartbeat Sync
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible' && navigator.onLine) {
-        load(true);
-      }
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [load]);
 
   // Real-time synchronization
   useEffect(() => {
     if (!socket) return;
 
     const handleUpdate = () => {
-      void load(true);
+      queryClient.invalidateQueries({ queryKey: ['cashier-open-sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['cashier-history'] });
     };
 
     socket.on('SESSION_CLOSED', handleUpdate);
@@ -189,6 +179,47 @@ export function CashierPage() {
     setBillLoading(false);
   }
 
+  async function triggerPrint(sessionId: string) {
+    const res = await api.get(`/api/sessions/${sessionId}/bill`);
+    if (!res.success) return;
+    const bill = res.data as BillDetails;
+
+    const items = [];
+    for (const order of bill.orders) {
+      for (const item of order.items) {
+        items.push({
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          lineTotal: item.lineTotal,
+        });
+      }
+    }
+
+    printReceipt({
+      organization: {
+        name: user?.organization?.name || 'Cevop',
+        currency: currency,
+      },
+      branch: {
+        name: user?.branch?.name || '',
+      },
+      session: {
+        id: bill.sessionId,
+        table: bill.table,
+        assignedWaiter: bill.assignedWaiter,
+        openedAt: bill.openedAt,
+        closedAt: bill.closedAt,
+      },
+      items,
+      totals: {
+        grandTotal: bill.grandTotal,
+        amountPaid: bill.amountPaid,
+        balance: bill.balance,
+      },
+    });
+  }
+
   async function voidPayment(paymentId: string) {
     if (!confirm('Are you sure you want to void this payment?')) return;
     const res = await api.patch(`/api/payments/${paymentId}/void`, {});
@@ -221,8 +252,10 @@ export function CashierPage() {
     });
     setSubmitting(false);
     if (res.success) {
+      const idToPrint = selectedSession.sessionId;
       setSelectedSession(null);
       void load();
+      triggerPrint(idToPrint);
     } else {
       setError(res.error ?? 'Payment failed');
     }
@@ -396,11 +429,22 @@ export function CashierPage() {
                 </div>
 
                 {/* Actions */}
-                {!s.isPaid && (
-                  <button className="btn btn-primary btn-sm w-full" onClick={() => openPayModal(s)}>
-                    Record Payment
+                <div className="flex gap-2 w-full">
+                  {!s.isPaid && (
+                    <button
+                      className="btn btn-primary btn-sm flex-1"
+                      onClick={() => openPayModal(s)}
+                    >
+                      Record Payment
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-secondary btn-sm flex-1"
+                    onClick={() => triggerPrint(s.sessionId)}
+                  >
+                    Print Receipt
                   </button>
-                )}
+                </div>
               </div>
             ))}
           </div>
@@ -722,7 +766,32 @@ export function CashierPage() {
                 </div>
 
                 <div className="border-t border-[var(--border)] print:border-black/20 pt-4 space-y-1">
-                  <div className="flex justify-between font-bold text-lg">
+                  <div className="flex justify-between text-sm text-[var(--muted)]">
+                    <span>Subtotal</span>
+                    <span>
+                      {formatPrice(selectedHistoryBill.grandSubtotal, selectedHistoryBill.currency)}
+                    </span>
+                  </div>
+                  {selectedHistoryBill.grandTax > 0 && (
+                    <div className="flex justify-between text-sm text-[var(--muted)]">
+                      <span>Tax</span>
+                      <span>
+                        {formatPrice(selectedHistoryBill.grandTax, selectedHistoryBill.currency)}
+                      </span>
+                    </div>
+                  )}
+                  {selectedHistoryBill.grandServiceCharge > 0 && (
+                    <div className="flex justify-between text-sm text-[var(--muted)]">
+                      <span>Service Charge</span>
+                      <span>
+                        {formatPrice(
+                          selectedHistoryBill.grandServiceCharge,
+                          selectedHistoryBill.currency,
+                        )}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-bold text-lg mt-2 pt-2 border-t border-[var(--border)] print:border-black/20">
                     <span>Total</span>
                     <span>
                       {formatPrice(selectedHistoryBill.grandTotal, selectedHistoryBill.currency)}

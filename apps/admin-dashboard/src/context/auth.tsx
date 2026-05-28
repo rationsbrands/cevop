@@ -173,6 +173,7 @@ export interface AuthUser {
   name: string;
   email: string;
   role: string;
+  isOnShift: boolean;
   emailVerified: boolean;
   organizationId: string;
   branchId: string | null;
@@ -182,6 +183,7 @@ export interface AuthUser {
 
 interface AuthContextType {
   user: AuthUser | null;
+  updateUser: (data: Partial<AuthUser>) => void;
   token: string | null;
   setToken: (token: string) => void;
   activeBranchFilter: BranchInfo | null;
@@ -641,10 +643,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setActiveBranchFilter(null);
   }
 
+  const updateUser = useCallback((data: Partial<AuthUser>) => {
+    setUser((prev) => (prev ? { ...prev, ...data } : prev));
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
         user,
+        updateUser,
         token,
         setToken: setTokenInMemory,
         activeBranchFilter,

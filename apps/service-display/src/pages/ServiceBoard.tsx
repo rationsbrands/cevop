@@ -272,33 +272,87 @@ export function ServiceBoard() {
     });
     socket.on('disconnect', () => setSocketConnected(false));
 
-    socket.on('ORDER_CREATED', () => {
+    socket.on('ORDER_CREATED', (order: any) => {
       playAlert();
-      queryClient.invalidateQueries({ queryKey: ['service-orders'] });
+      queryClient.setQueryData(
+        ['service-orders', user?.organizationId, user?.branchId],
+        (prev: any) => {
+          if (!prev || !prev.success) return prev;
+          if (prev.data.some((o: any) => o.id === order.id)) return prev;
+          return { ...prev, data: [order, ...prev.data] };
+        },
+      );
     });
-    socket.on('ORDER_UPDATED', () =>
-      queryClient.invalidateQueries({ queryKey: ['service-orders'] }),
-    );
+
+    socket.on('ORDER_UPDATED', (order: any) => {
+      queryClient.setQueryData(
+        ['service-orders', user?.organizationId, user?.branchId],
+        (prev: any) => {
+          if (!prev || !prev.success) return prev;
+          const exists = prev.data.some((o: any) => o.id === order.id);
+          if (exists) {
+            return { ...prev, data: prev.data.map((o: any) => (o.id === order.id ? order : o)) };
+          }
+          return { ...prev, data: [order, ...prev.data] };
+        },
+      );
+    });
+
     socket.on('WAITER_ONLINE', () =>
       queryClient.invalidateQueries({ queryKey: ['online-waiters'] }),
     );
     socket.on('WAITER_OFFLINE', () =>
       queryClient.invalidateQueries({ queryKey: ['online-waiters'] }),
     );
-    socket.on('WAITER_CALLED', () => {
+
+    socket.on('WAITER_CALLED', (call: any) => {
       playAlert();
-      queryClient.invalidateQueries({ queryKey: ['service-calls'] });
+      queryClient.setQueryData(
+        ['service-calls', user?.organizationId, user?.branchId],
+        (prev: any[]) => {
+          if (!prev) return prev;
+          if (prev.some((c: any) => c.id === call.id)) return prev;
+          return [call, ...prev];
+        },
+      );
     });
-    socket.on('WAITER_CALL_UPDATED', () =>
-      queryClient.invalidateQueries({ queryKey: ['service-calls'] }),
-    );
-    socket.on('SERVICE_REQUESTED', () => {
+
+    socket.on('WAITER_CALL_UPDATED', (call: any) => {
+      queryClient.setQueryData(
+        ['service-calls', user?.organizationId, user?.branchId],
+        (prev: any[]) => {
+          if (!prev) return prev;
+          const exists = prev.some((c: any) => c.id === call.id);
+          if (exists) return prev.map((c: any) => (c.id === call.id ? call : c));
+          return [call, ...prev];
+        },
+      );
+    });
+
+    socket.on('SERVICE_REQUESTED', (req: any) => {
       playAlert();
-      queryClient.invalidateQueries({ queryKey: ['service-requests'] });
+      queryClient.setQueryData(
+        ['service-requests', user?.organizationId, user?.branchId],
+        (prev: any[]) => {
+          if (!prev) return prev;
+          if (prev.some((r: any) => r.id === req.id)) return prev;
+          return [req, ...prev];
+        },
+      );
     });
-    socket.on('SERVICE_REQUEST_UPDATED', () =>
-      queryClient.invalidateQueries({ queryKey: ['service-requests'] }),
-    );
+
+    socket.on('SERVICE_REQUEST_UPDATED', (req: any) => {
+      queryClient.setQueryData(
+        ['service-requests', user?.organizationId, user?.branchId],
+        (prev: any[]) => {
+          if (!prev) return prev;
+          const exists = prev.some((r: any) => r.id === req.id);
+          if (exists) return prev.map((r: any) => (r.id === req.id ? req : r));
+          return [req, ...prev];
+        },
+      );
+    });
+
     socket.on('TABLE_STATUS_CHANGED', () =>
       queryClient.invalidateQueries({ queryKey: ['tables'] }),
     );
@@ -307,13 +361,6 @@ export function ServiceBoard() {
       queryClient.invalidateQueries({ queryKey: ['tables'] });
       queryClient.invalidateQueries({ queryKey: ['service-calls'] });
       queryClient.invalidateQueries({ queryKey: ['service-requests'] });
-    });
-
-    socket.on('SYNC_REQUIRED', () => {
-      const now = Date.now();
-      if (now - lastSyncAtRef.current < 2000) return;
-      lastSyncAtRef.current = now;
-      refreshNowRef.current().catch(() => void 0);
     });
 
     return () => {

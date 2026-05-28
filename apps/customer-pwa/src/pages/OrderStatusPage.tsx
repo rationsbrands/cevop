@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { fetchOrderStatus, API_BASE } from '../services/api';
@@ -47,10 +48,36 @@ const STATUS_COLORS: Record<string, string> = {
 export function OrderStatusPage() {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
-  const [order, setOrder] = useState<Order | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const queryClient = useQueryClient();
   const [cancelledItemAlert, setCancelledItemAlert] = useState<string | null>(null);
+
+  const {
+    data: order,
+    isLoading: loading,
+    error: queryError,
+  } = useQuery<Order>({
+    queryKey: ['order-status', orderId],
+    queryFn: async () => {
+      if (!orderId) throw new Error('No order ID');
+      const data = await fetchOrderStatus(orderId);
+
+      // If order is already complete, clear it from localStorage
+      if (data.status === 'SERVED' || data.status === 'CANCELLED') {
+        try {
+          localStorage.removeItem('lastOrderId');
+          localStorage.removeItem('lastOrderOrgId');
+          localStorage.removeItem('lastOrderTableId');
+          removeOrderFromHistory(orderId);
+        } catch {
+          /* ignore */
+        }
+      }
+      return data;
+    },
+    enabled: !!orderId,
+  });
+
+  const error = queryError ? 'Order not found' : '';
 
   function removeOrderFromHistory(id: string) {
     try {
@@ -72,32 +99,6 @@ export function OrderStatusPage() {
   }
 
   useEffect(() => {
-    async function load() {
-      if (!orderId) return;
-      try {
-        const data = await fetchOrderStatus(orderId);
-        setOrder(data);
-        // If order is already complete, clear it from localStorage
-        if (data.status === 'SERVED' || data.status === 'CANCELLED') {
-          try {
-            localStorage.removeItem('lastOrderId');
-            localStorage.removeItem('lastOrderOrgId');
-            localStorage.removeItem('lastOrderTableId');
-            removeOrderFromHistory(orderId);
-          } catch {
-            /* ignore */
-          }
-        }
-      } catch {
-        setError('Order not found');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [orderId]);
-
-  useEffect(() => {
     if (!orderId) return;
 
     const SOCKET_URL = API_BASE || window.location.origin;
@@ -109,7 +110,7 @@ export function OrderStatusPage() {
 
     socket.on('ORDER_UPDATED', (updated: Order) => {
       if (updated.id === orderId) {
-        setOrder(updated);
+        queryClient.setQueryData(['order-status', orderId], updated);
         // Clear saved order when it's done — no need to show banner anymore
         if (updated.status === 'SERVED' || updated.status === 'CANCELLED') {
           try {
@@ -142,9 +143,7 @@ export function OrderStatusPage() {
         );
         // Refresh the order to get updated total and items
         if (orderId) {
-          fetchOrderStatus(orderId)
-            .then(setOrder)
-            .catch(() => {});
+          queryClient.invalidateQueries({ queryKey: ['order-status', orderId] });
         }
         // Auto-dismiss after 8 seconds
         setTimeout(() => setCancelledItemAlert(null), 8000);

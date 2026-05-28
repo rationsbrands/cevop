@@ -14,6 +14,8 @@ export function SettingsPage() {
     notifyNewOrders: true,
     notifyWaiterCalls: true,
     notifyServiceRequests: true,
+    taxRate: '0.00',
+    serviceChargeRate: '0.00',
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -47,6 +49,8 @@ export function SettingsPage() {
           notifyNewOrders: o.notifyNewOrders ?? true,
           notifyWaiterCalls: o.notifyWaiterCalls ?? true,
           notifyServiceRequests: o.notifyServiceRequests ?? true,
+          taxRate: o.taxRate?.toString() || '0.00',
+          serviceChargeRate: o.serviceChargeRate?.toString() || '0.00',
         });
       }
       setLoading(false);
@@ -144,6 +148,40 @@ export function SettingsPage() {
             onChange={(e) => setForm({ ...form, logo: e.target.value })}
             placeholder="e.g. https://..."
           />
+        </div>
+      </div>
+
+      <div className="card p-6 space-y-5">
+        <h2 className="font-semibold text-sm text-[var(--muted)] uppercase tracking-wider border-b border-[var(--border)] pb-2 mt-2">
+          Fiscal & Compliance
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label htmlFor="settings_org_tax">Default Tax Rate (%)</label>
+            <input
+              id="settings_org_tax"
+              name="taxRate"
+              type="number"
+              step="0.01"
+              min="0"
+              max="100"
+              value={form.taxRate}
+              onChange={(e) => setForm({ ...form, taxRate: e.target.value })}
+            />
+          </div>
+          <div>
+            <label htmlFor="settings_org_service">Default Service Charge (%)</label>
+            <input
+              id="settings_org_service"
+              name="serviceChargeRate"
+              type="number"
+              step="0.01"
+              min="0"
+              max="100"
+              value={form.serviceChargeRate}
+              onChange={(e) => setForm({ ...form, serviceChargeRate: e.target.value })}
+            />
+          </div>
         </div>
       </div>
 

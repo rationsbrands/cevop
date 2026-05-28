@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth, useApi } from '../context/auth';
 import { useSocket } from '../context/socket';
 import { formatPrice } from '../../../../shared/utils/currency';
@@ -45,12 +46,31 @@ export function OrdersPage() {
   const canReconcile =
     user && ['SUPERADMIN', 'ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(user.role);
   const currency = user?.organization?.currency ?? 'NGN';
-  const [orders, setOrders] = useState<any[]>([]);
-  const [ordersHasMore, setOrdersHasMore] = useState(false);
-  const [ordersCursor, setOrdersCursor] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
-  const [waiterCalls, setWaiterCalls] = useState<WaiterCall[]>([]);
-  const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
+
+  const { data: callsData, refetch: refetchCalls } = useQuery({
+    queryKey: ['admin-waiter-calls', activeBranchFilter, api.effectiveBranchId],
+    queryFn: async () => {
+      if (!api.effectiveBranchId) return [];
+      const res = await api.get('/api/waiter-calls');
+      return res.success ? res.data : [];
+    },
+    enabled: !!api.effectiveBranchId,
+  });
+
+  const { data: serviceData, refetch: refetchService } = useQuery({
+    queryKey: ['admin-service-requests', activeBranchFilter, api.effectiveBranchId],
+    queryFn: async () => {
+      if (!api.effectiveBranchId) return [];
+      const res = await api.get('/api/service-requests');
+      return res.success ? res.data : [];
+    },
+    enabled: !!api.effectiveBranchId,
+  });
+
+  // Filters
+
   const [statusFilter, setStatusFilter] = useState('');
   const today = new Date().toISOString().slice(0, 10);
   const [dateFilter, setDateFilter] = useState(today);
@@ -116,50 +136,61 @@ export function OrdersPage() {
     };
   }, [socket]);
 
+  const {
+    data: ordersQueryData,
+    refetch: refetchOrders,
+    isFetching: ordersFetching,
+  } = useQuery({
+    queryKey: [
+      'admin-orders',
+      activeBranchFilter,
+      api.effectiveBranchId,
+      dateFilter,
+      statusFilter,
+      searchFilter,
+    ],
+    queryFn: async () => {
+      if (!api.effectiveBranchId) return { data: [], hasMore: false, nextCursor: null };
+      const params = new URLSearchParams({ limit: '100', date: dateFilter });
+      if (statusFilter) params.set('status', statusFilter);
+      if (searchFilter) params.set('search', searchFilter);
+      const res = await api.get(`/api/orders?${params.toString()}`);
+      if (res.success) {
+        return {
+          data: res.data,
+          hasMore: Boolean(res.pagination?.hasMore),
+          nextCursor: res.pagination?.nextCursor ?? null,
+        };
+      }
+      return { data: [], hasMore: false, nextCursor: null };
+    },
+    enabled: !!api.effectiveBranchId,
+  });
+
   const load = useCallback(
     async (isSilent = false) => {
       if (!isSilent) setLoading(true);
       else setSyncing(true);
-
       try {
-        if (!api.effectiveBranchId) {
-          setOrders([]);
-          setOrdersHasMore(false);
-          setOrdersCursor(null);
-          setWaiterCalls([]);
-          setServiceRequests([]);
-          return;
-        }
-        const params = new URLSearchParams({ limit: '100', date: dateFilter });
-        if (statusFilter) params.set('status', statusFilter);
-        if (searchFilter) params.set('search', searchFilter);
-        const [ordersRes, callsRes, serviceRes] = await Promise.all([
-          api.get(`/api/orders?${params.toString()}`),
-          api.get('/api/waiter-calls'),
-          api.get('/api/service-requests'),
-        ]);
-        if (ordersRes.success) {
-          setOrders(ordersRes.data);
-          setOrdersHasMore(Boolean(ordersRes.pagination?.hasMore));
-          setOrdersCursor(ordersRes.pagination?.nextCursor ?? null);
-        }
-        if (callsRes.success) setWaiterCalls(callsRes.data);
-        if (serviceRes.success) setServiceRequests(serviceRes.data);
+        await Promise.all([refetchOrders(), refetchCalls(), refetchService()]);
       } finally {
         setLoading(false);
         setSyncing(false);
       }
     },
-    [api, statusFilter, dateFilter, searchFilter],
+    [refetchOrders, refetchCalls, refetchService],
   );
 
-  // Re-fetch whenever server signals a sync is needed (SYNC_REQUIRED event)
-  useEffect(() => {
-    if (syncSignal === 0) return; // skip initial mount
-    const t = window.setTimeout(() => load(true), 0);
-    return () => window.clearTimeout(t);
-  }, [syncSignal, load]);
+  const orders = ordersQueryData?.data || [];
+  const ordersHasMore = ordersQueryData?.hasMore || false;
+  const ordersCursor = ordersQueryData?.nextCursor || null;
+  const waiterCalls = callsData || [];
+  const serviceRequests = serviceData || [];
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(ordersFetching);
+  }, [ordersFetching]);
   // Background Heartbeat Sync
   useEffect(() => {
     const interval = setInterval(() => {
@@ -183,91 +214,134 @@ export function OrdersPage() {
       if (!res?.success) return;
 
       const newOrders: any[] = Array.isArray(res.data) ? res.data : [];
-      setOrders((prev) => {
-        const seen = new Set(prev.map((o) => o.id));
-        const merged = [...prev];
-        for (const o of newOrders) {
-          if (o?.id && !seen.has(o.id)) {
-            merged.push(o);
-            seen.add(o.id);
+      queryClient.setQueryData(
+        [
+          'admin-orders',
+          activeBranchFilter,
+          api.effectiveBranchId,
+          dateFilter,
+          statusFilter,
+          searchFilter,
+        ],
+        (prev: any) => {
+          if (!prev) return prev;
+          const seen = new Set(prev.data.map((o: any) => o.id));
+          const merged = [...prev.data];
+          for (const o of newOrders) {
+            if (o?.id && !seen.has(o.id)) {
+              merged.push(o);
+              seen.add(o.id);
+            }
           }
-        }
-        return merged;
-      });
-      setOrdersHasMore(Boolean(res.pagination?.hasMore));
-      setOrdersCursor(res.pagination?.nextCursor ?? null);
+          return {
+            ...prev,
+            data: merged,
+            hasMore: Boolean(res.pagination?.hasMore),
+            nextCursor: res.pagination?.nextCursor ?? null,
+          };
+        },
+      );
     } finally {
       setOrdersLoadingMore(false);
     }
   }, [api, ordersCursor, ordersHasMore, ordersLoadingMore, statusFilter, dateFilter, searchFilter]);
 
   useEffect(() => {
-    const t = window.setTimeout(() => {
-      setOrders([]);
-      setOrdersCursor(null);
-      setOrdersHasMore(false);
-      void load();
-    }, 0);
-    return () => window.clearTimeout(t);
-  }, [activeBranchFilter, load]);
-
-  useEffect(() => {
     if (!socket) return;
 
     function handleOrderCreated(order: any) {
-      // Only inject if the order's date matches what's currently displayed
       const orderDate = order.createdAt
         ? new Date(order.createdAt).toISOString().slice(0, 10)
         : null;
-      setOrders((prev) => {
-        if (statusFilter && order.status !== statusFilter) return prev;
-        if (orderDate && orderDate !== dateFilter) return prev;
-        if (prev.some((o) => o.id === order.id)) return prev;
-        return [order, ...prev];
-      });
+      queryClient.setQueryData(
+        [
+          'admin-orders',
+          activeBranchFilter,
+          api.effectiveBranchId,
+          dateFilter,
+          statusFilter,
+          searchFilter,
+        ],
+        (prev: any) => {
+          if (!prev) return prev;
+          if (statusFilter && order.status !== statusFilter) return prev;
+          if (orderDate && orderDate !== dateFilter) return prev;
+          if (prev.data.some((o: any) => o.id === order.id)) return prev;
+          return { ...prev, data: [order, ...prev.data] };
+        },
+      );
     }
 
     function handleOrderUpdated(order: any) {
-      setOrders((prev) => {
-        if (statusFilter && order.status !== statusFilter) {
-          return prev.filter((o) => o.id !== order.id);
-        }
-        const exists = prev.some((o) => o.id === order.id);
-        if (exists) return prev.map((o) => (o.id === order.id ? order : o));
-        return [order, ...prev];
-      });
+      queryClient.setQueryData(
+        [
+          'admin-orders',
+          activeBranchFilter,
+          api.effectiveBranchId,
+          dateFilter,
+          statusFilter,
+          searchFilter,
+        ],
+        (prev: any) => {
+          if (!prev) return prev;
+          if (statusFilter && order.status !== statusFilter) {
+            return { ...prev, data: prev.data.filter((o: any) => o.id !== order.id) };
+          }
+          const exists = prev.data.some((o: any) => o.id === order.id);
+          if (exists) {
+            return { ...prev, data: prev.data.map((o: any) => (o.id === order.id ? order : o)) };
+          }
+          return { ...prev, data: [order, ...prev.data] };
+        },
+      );
     }
 
     function handleWaiterCalled(call: any) {
-      setWaiterCalls((prev) => {
-        if (prev.some((c) => c.id === call.id)) return prev;
-        return [call, ...prev];
-      });
+      queryClient.setQueryData(
+        ['admin-waiter-calls', activeBranchFilter, api.effectiveBranchId],
+        (prev: WaiterCall[] | undefined) => {
+          if (!prev) return prev;
+          if (prev.some((c) => c.id === call.id)) return prev;
+          return [call, ...prev];
+        },
+      );
     }
 
     function handleWaiterCallUpdated(call: WaiterCall) {
-      setWaiterCalls((prev) => {
-        if (call.status === 'RESOLVED') return prev.filter((c) => c.id !== call.id);
-        const exists = prev.some((c) => c.id === call.id);
-        if (exists) return prev.map((c) => (c.id === call.id ? call : c));
-        return [call, ...prev];
-      });
+      queryClient.setQueryData(
+        ['admin-waiter-calls', activeBranchFilter, api.effectiveBranchId],
+        (prev: WaiterCall[] | undefined) => {
+          if (!prev) return prev;
+          if (call.status === 'RESOLVED') return prev.filter((c) => c.id !== call.id);
+          const exists = prev.some((c) => c.id === call.id);
+          if (exists) return prev.map((c) => (c.id === call.id ? call : c));
+          return [call, ...prev];
+        },
+      );
     }
 
     function handleServiceRequested(req: any) {
-      setServiceRequests((prev) => {
-        if (prev.some((r) => r.id === req.id)) return prev;
-        return [req, ...prev];
-      });
+      queryClient.setQueryData(
+        ['admin-service-requests', activeBranchFilter, api.effectiveBranchId],
+        (prev: ServiceRequest[] | undefined) => {
+          if (!prev) return prev;
+          if (prev.some((r) => r.id === req.id)) return prev;
+          return [req, ...prev];
+        },
+      );
     }
 
     function handleServiceRequestUpdated(req: ServiceRequest) {
-      setServiceRequests((prev) => {
-        if (req.status === 'RESOLVED') return prev.filter((r) => r.id !== req.id);
-        const exists = prev.some((r) => r.id === req.id);
-        if (exists) return prev.map((r) => (r.id === req.id ? req : r));
-        return [req, ...prev];
-      });
+      queryClient.setQueryData(
+        ['admin-service-requests', activeBranchFilter, api.effectiveBranchId],
+        (prev: ServiceRequest[] | undefined) => {
+          if (!prev) return prev;
+          if (req.status === 'RESOLVED') return prev.filter((r) => r.id !== req.id);
+          const exists = prev.some((r) => r.id === req.id);
+          if (exists) return prev.map((r) => (r.id === req.id ? req : r));
+          return [req, ...prev];
+        },
+      );
     }
 
     function handleStaleOrders(payload: { count: number; minAgeMinutes: number }) {
@@ -456,8 +530,8 @@ export function OrdersPage() {
     load();
   }
 
-  const pendingCalls = waiterCalls.filter((c) => c.status === 'PENDING').length;
-  const pendingService = serviceRequests.filter((s) => s.status === 'PENDING').length;
+  const pendingCalls = waiterCalls.filter((c: any) => c.status === 'PENDING').length;
+  const pendingService = serviceRequests.filter((s: any) => s.status === 'PENDING').length;
 
   if (!api.effectiveBranchId)
     return (
@@ -663,7 +737,7 @@ export function OrdersPage() {
                   </td>
                 </tr>
               )}
-              {orders.map((o) => (
+              {orders.map((o: any) => (
                 <React.Fragment key={o.id}>
                   <tr
                     className="cursor-pointer"
@@ -748,6 +822,30 @@ export function OrdersPage() {
                             Note: {o.notes}
                           </p>
                         )}
+                        {o.taxAmount > 0 || o.serviceChargeAmount > 0 ? (
+                          <div className="mt-3 pt-3 border-t border-[var(--border)] space-y-1 w-1/2 ml-auto">
+                            <div className="flex justify-between text-xs text-[var(--muted)]">
+                              <span>Subtotal</span>
+                              <span>{formatPrice(o.subtotal, currency)}</span>
+                            </div>
+                            {o.taxAmount > 0 && (
+                              <div className="flex justify-between text-xs text-[var(--muted)]">
+                                <span>Tax</span>
+                                <span>{formatPrice(o.taxAmount, currency)}</span>
+                              </div>
+                            )}
+                            {o.serviceChargeAmount > 0 && (
+                              <div className="flex justify-between text-xs text-[var(--muted)]">
+                                <span>Service Charge</span>
+                                <span>{formatPrice(o.serviceChargeAmount, currency)}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between text-sm font-bold pt-1 border-t border-[var(--border)]">
+                              <span>Total</span>
+                              <span>{formatPrice(o.total, currency)}</span>
+                            </div>
+                          </div>
+                        ) : null}
 
                         {o.status === 'READY' && (
                           <div className="mt-3 pt-3 border-t border-[var(--border)]">

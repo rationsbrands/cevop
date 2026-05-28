@@ -10,6 +10,8 @@ interface Branch {
   phone?: string;
   maxTablesPerWaiter?: number | null;
   isActive: boolean;
+  taxRate?: string | number | null;
+  serviceChargeRate?: string | number | null;
   createdAt: string;
   _count?: { users: number; tables: number };
 }
@@ -47,6 +49,8 @@ export function BranchesPage() {
     address: '',
     phone: '',
     maxTablesPerWaiter: '',
+    taxRate: '',
+    serviceChargeRate: '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -137,6 +141,9 @@ export function BranchesPage() {
         maxTablesPerWaiter: editForm.maxTablesPerWaiter
           ? parseInt(editForm.maxTablesPerWaiter, 10)
           : null,
+        taxRate: editForm.taxRate === '' ? null : Number(editForm.taxRate),
+        serviceChargeRate:
+          editForm.serviceChargeRate === '' ? null : Number(editForm.serviceChargeRate),
       };
       const { success, data } = await api.put(`/api/branches/${id}`, payload);
       if (success) {
@@ -427,6 +434,46 @@ export function BranchesPage() {
                         placeholder="Unlimited"
                       />
                     </div>
+                    <div>
+                      <label
+                        htmlFor={`branch_edit_tax_${branch.id}`}
+                        className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                      >
+                        Tax Rate (%)
+                      </label>
+                      <input
+                        id={`branch_edit_tax_${branch.id}`}
+                        name="taxRate"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={editForm.taxRate}
+                        onChange={(e) => setEditForm((f) => ({ ...f, taxRate: e.target.value }))}
+                        placeholder="Org Default"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor={`branch_edit_service_${branch.id}`}
+                        className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                      >
+                        Service Chg (%)
+                      </label>
+                      <input
+                        id={`branch_edit_service_${branch.id}`}
+                        name="serviceChargeRate"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={editForm.serviceChargeRate}
+                        onChange={(e) =>
+                          setEditForm((f) => ({ ...f, serviceChargeRate: e.target.value }))
+                        }
+                        placeholder="Org Default"
+                      />
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -479,6 +526,8 @@ export function BranchesPage() {
                           address: branch.address ?? '',
                           phone: branch.phone ?? '',
                           maxTablesPerWaiter: branch.maxTablesPerWaiter?.toString() ?? '',
+                          taxRate: branch.taxRate?.toString() ?? '',
+                          serviceChargeRate: branch.serviceChargeRate?.toString() ?? '',
                         });
                       }}
                       className="flex-1 sm:flex-none text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2.5 py-1.5 transition-colors"

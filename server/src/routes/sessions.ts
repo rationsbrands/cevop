@@ -32,6 +32,9 @@ sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response
           select: {
             id: true,
             status: true,
+            subtotal: true,
+            taxAmount: true,
+            serviceChargeAmount: true,
             total: true,
             createdAt: true,
             items: {
@@ -54,6 +57,12 @@ sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response
       return;
     }
 
+    const grandSubtotal = session.orders.reduce((sum, o) => sum + Number(o.subtotal), 0);
+    const grandTax = session.orders.reduce((sum, o) => sum + Number(o.taxAmount), 0);
+    const grandServiceCharge = session.orders.reduce(
+      (sum, o) => sum + Number(o.serviceChargeAmount),
+      0,
+    );
     const grandTotal = session.orders.reduce((sum, o) => sum + Number(o.total), 0);
 
     res.json({
@@ -66,6 +75,9 @@ sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response
         orders: session.orders.map((o) => ({
           id: o.id,
           status: o.status,
+          subtotal: Number(o.subtotal),
+          taxAmount: Number(o.taxAmount),
+          serviceChargeAmount: Number(o.serviceChargeAmount),
           total: Number(o.total),
           createdAt: o.createdAt,
           items: o.items.map((i) => ({
@@ -76,6 +88,9 @@ sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response
             lineTotal: i.quantity * Number(i.unitPrice),
           })),
         })),
+        grandSubtotal,
+        grandTax,
+        grandServiceCharge,
         grandTotal,
         orderCount: session.orders.length,
       },
@@ -125,6 +140,9 @@ sessionsRouter.get(
             select: {
               id: true,
               status: true,
+              subtotal: true,
+              taxAmount: true,
+              serviceChargeAmount: true,
               total: true,
               createdAt: true,
               assignedWaiter: true,
@@ -151,6 +169,12 @@ sessionsRouter.get(
         return;
       }
 
+      const grandSubtotal = session.orders.reduce((sum, o) => sum + Number(o.subtotal), 0);
+      const grandTax = session.orders.reduce((sum, o) => sum + Number(o.taxAmount), 0);
+      const grandServiceCharge = session.orders.reduce(
+        (sum, o) => sum + Number(o.serviceChargeAmount),
+        0,
+      );
       const grandTotal = session.orders.reduce((sum, o) => sum + Number(o.total), 0);
       const amountPaid = session.payments.reduce((sum, p) => sum + Number(p.amount), 0);
 
@@ -166,6 +190,9 @@ sessionsRouter.get(
           orders: session.orders.map((o) => ({
             id: o.id,
             status: o.status,
+            subtotal: Number(o.subtotal),
+            taxAmount: Number(o.taxAmount),
+            serviceChargeAmount: Number(o.serviceChargeAmount),
             total: Number(o.total),
             createdAt: o.createdAt,
             items: o.items.map((i) => ({
@@ -176,6 +203,9 @@ sessionsRouter.get(
               lineTotal: i.quantity * Number(i.unitPrice),
             })),
           })),
+          grandSubtotal,
+          grandTax,
+          grandServiceCharge,
           grandTotal,
           amountPaid,
           balance: Math.max(0, grandTotal - amountPaid),

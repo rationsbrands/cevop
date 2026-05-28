@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApi, useAuth } from '../context/auth';
 import { useSocket } from '../context/socket';
 import { ConfirmDialog, showToast } from '../components/Popup';
@@ -40,13 +41,12 @@ export function TablesPage() {
   const { user } = useAuth();
   const api = useApi();
   const { socket, syncSignal } = useSocket();
-  const [tables, setTables] = useState<Table[]>([]);
-  const [sections, setSections] = useState<{ id: string; name: string }[]>([]);
+  const queryClient = useQueryClient();
+
   const [qrCodes, setQrCodes] = useState<QREntry[]>([]);
   const [qrCardCache, setQrCardCache] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
-  const [staffList, setStaffStaffList] = useState<any[]>([]);
   const [assignModal, setAssignModal] = useState<{ sessionId: string; tableLabel: string } | null>(
     null,
   );
@@ -103,29 +103,56 @@ export function TablesPage() {
     }
   }
 
+  const {
+    data: tablesData,
+    refetch: refetchTables,
+    isLoading: tablesLoading,
+  } = useQuery({
+    queryKey: ['admin-tables', api.effectiveBranchId],
+    queryFn: async () => {
+      if (!api.effectiveBranchId) return [];
+      const res = await api.get('/api/tables');
+      return res.success ? (res.data as Table[]) : [];
+    },
+    enabled: !!api.effectiveBranchId,
+  });
+
+  const { data: sectionsData, refetch: refetchSections } = useQuery({
+    queryKey: ['admin-sections', api.effectiveBranchId],
+    queryFn: async () => {
+      if (!api.effectiveBranchId) return [];
+      const res = await api.get('/api/sections');
+      return res.success ? res.data : [];
+    },
+    enabled: !!api.effectiveBranchId,
+  });
+
+  const { data: staffData, refetch: refetchStaff } = useQuery({
+    queryKey: ['admin-staff-waiters', api.effectiveBranchId],
+    queryFn: async () => {
+      if (!api.effectiveBranchId) return [];
+      const res = await api.get('/api/users');
+      return res.success
+        ? res.data.filter(
+            (u: any) => ['WAITER', 'SERVICE', 'CASHIER', 'HOST'].includes(u.role) && u.isActive,
+          )
+        : [];
+    },
+    enabled: !!api.effectiveBranchId,
+  });
+
+  const tables = tablesData || [];
+  const sections = sectionsData || [];
+  const staffList = staffData || [];
+
   const load = useCallback(async () => {
-    setLoading(true);
-    if (!api.effectiveBranchId) {
-      setTables([]);
-      setLoading(false);
-      return;
-    }
-    const [res, secRes, staffRes] = await Promise.all([
-      api.get('/api/tables'),
-      api.get('/api/sections'),
-      api.get('/api/users'),
-    ]);
-    if (res.success) setTables(res.data);
-    if (secRes.success) setSections(secRes.data);
-    if (staffRes.success) {
-      setStaffStaffList(
-        staffRes.data.filter(
-          (u: any) => ['WAITER', 'SERVICE', 'CASHIER', 'HOST'].includes(u.role) && u.isActive,
-        ),
-      );
-    }
-    setLoading(false);
-  }, [api]);
+    await Promise.all([refetchTables(), refetchSections(), refetchStaff()]);
+  }, [refetchTables, refetchSections, refetchStaff]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(tablesLoading);
+  }, [tablesLoading]);
 
   async function loadQR() {
     setQrLoading(true);
@@ -134,24 +161,18 @@ export function TablesPage() {
     setQrLoading(false);
   }
 
-  useEffect(() => {
-    const t = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(t);
-  }, [load]);
-
-  // Re-fetch whenever server signals sync needed
-  useEffect(() => {
-    if (syncSignal === 0) return;
-    const t = setTimeout(() => void load(), 0);
-    return () => clearTimeout(t);
-  }, [syncSignal]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Real-time updates
   useEffect(() => {
     if (!socket) return;
 
     const handleTableStatusChanged = ({ tableId, status }: { tableId: string; status: string }) => {
-      setTables((prev) => prev.map((t) => (t.id === tableId ? { ...t, status } : t)));
+      queryClient.setQueryData(
+        ['admin-tables', api.effectiveBranchId],
+        (prev: Table[] | undefined) => {
+          if (!prev) return prev;
+          return prev.map((t) => (t.id === tableId ? { ...t, status } : t));
+        },
+      );
     };
 
     const handleSessionOpened = ({
@@ -161,18 +182,26 @@ export function TablesPage() {
       tableId: string;
       sessionId: string;
     }) => {
-      setTables((prev) =>
-        prev.map((t) =>
-          t.id === tableId ? { ...t, activeSessionId: sessionId, status: 'OCCUPIED' } : t,
-        ),
+      queryClient.setQueryData(
+        ['admin-tables', api.effectiveBranchId],
+        (prev: Table[] | undefined) => {
+          if (!prev) return prev;
+          return prev.map((t) =>
+            t.id === tableId ? { ...t, activeSessionId: sessionId, status: 'OCCUPIED' } : t,
+          );
+        },
       );
     };
 
     const handleSessionClosed = ({ tableId }: { tableId: string }) => {
-      setTables((prev) =>
-        prev.map((t) =>
-          t.id === tableId ? { ...t, activeSessionId: null, activeSession: null } : t,
-        ),
+      queryClient.setQueryData(
+        ['admin-tables', api.effectiveBranchId],
+        (prev: Table[] | undefined) => {
+          if (!prev) return prev;
+          return prev.map((t) =>
+            t.id === tableId ? { ...t, activeSessionId: null, activeSession: null } : t,
+          );
+        },
       );
     };
 
@@ -189,24 +218,28 @@ export function TablesPage() {
       staffCode?: string | null;
       sessionId: string;
     }) => {
-      setTables((prev) =>
-        prev.map((t) => {
-          if (t.id === tableId) {
-            return {
-              ...t,
-              activeSessionId: sessionId,
-              activeSession: {
-                id: sessionId,
-                assignedWaiter: {
-                  id: waiterId,
-                  name: waiterName,
-                  staffCode,
+      queryClient.setQueryData(
+        ['admin-tables', api.effectiveBranchId],
+        (prev: Table[] | undefined) => {
+          if (!prev) return prev;
+          return prev.map((t) => {
+            if (t.id === tableId) {
+              return {
+                ...t,
+                activeSessionId: sessionId,
+                activeSession: {
+                  id: sessionId,
+                  assignedWaiter: {
+                    id: waiterId,
+                    name: waiterName,
+                    staffCode,
+                  },
                 },
-              },
-            };
-          }
-          return t;
-        }),
+              };
+            }
+            return t;
+          });
+        },
       );
     };
 
@@ -799,7 +832,7 @@ export function TablesPage() {
                 Remove Current Assignment
               </button>
               <div className="h-px bg-[var(--border)] my-4 opacity-50" />
-              {staffList.map((staff) => (
+              {staffList.map((staff: any) => (
                 <button
                   key={staff.id}
                   disabled={assigning}
@@ -876,7 +909,7 @@ export function TablesPage() {
                 onChange={(e) => setForm({ ...form, sectionId: e.target.value })}
               >
                 <option value="">No Section (Unassigned)</option>
-                {sections.map((s) => (
+                {sections.map((s: any) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
                   </option>

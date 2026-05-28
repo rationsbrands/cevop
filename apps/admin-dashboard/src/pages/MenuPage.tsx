@@ -18,6 +18,8 @@ interface MenuItem {
   description?: string;
   price: number;
   isAvailable: boolean;
+  trackStock: boolean;
+  stockCount: number;
   sortOrder: number;
   categoryId: string;
   branchId: string | null;
@@ -49,6 +51,8 @@ export function MenuPage() {
     categoryId: '',
     sortOrder: 0,
     isAvailable: true,
+    trackStock: false,
+    stockCount: '0',
     scope: 'branch',
   });
   const [saving, setSaving] = useState(false);
@@ -210,6 +214,8 @@ export function MenuPage() {
       categoryId: catId,
       sortOrder: nextSort,
       isAvailable: true,
+      trackStock: false,
+      stockCount: '0',
       scope: 'branch',
     });
     setModal('add-item');
@@ -223,6 +229,8 @@ export function MenuPage() {
       categoryId: item.categoryId,
       sortOrder: item.sortOrder,
       isAvailable: item.isAvailable,
+      trackStock: item.trackStock,
+      stockCount: String(item.stockCount),
       scope: item.branchId === null ? 'org' : 'branch',
     });
     setEditTarget(item);
@@ -281,6 +289,8 @@ export function MenuPage() {
         description: itemForm.description,
         categoryId: itemForm.categoryId,
         isAvailable: itemForm.isAvailable,
+        trackStock: itemForm.trackStock,
+        stockCount: parseInt(itemForm.stockCount, 10) || 0,
         price: parseFloat(itemForm.price),
         sortOrder: Number(itemForm.sortOrder),
         branchId: itemForm.scope === 'org' ? null : api.effectiveBranchId,
@@ -568,6 +578,7 @@ export function MenuPage() {
                       <th className="w-[40%]">Name</th>
                       <th className="w-[25%]">Description</th>
                       <th>Price</th>
+                      <th>Stock</th>
                       <th>Available</th>
                       <th>Actions</th>
                     </tr>
@@ -660,6 +671,17 @@ export function MenuPage() {
                         </td>
                         <td className="text-[var(--accent)] font-semibold">
                           {formatPrice(item.price, currency)}
+                        </td>
+                        <td className="text-sm">
+                          {item.trackStock ? (
+                            <span
+                              className={`font-bold ${item.stockCount <= 5 ? 'text-red-500' : 'text-[var(--text)]'}`}
+                            >
+                              {item.stockCount}
+                            </span>
+                          ) : (
+                            <span className="text-[var(--muted)]">—</span>
+                          )}
                         </td>
                         <td>
                           <button
@@ -847,19 +869,49 @@ export function MenuPage() {
                     ))}
                   </select>
                 </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="ia"
-                    name="isAvailable"
-                    checked={itemForm.isAvailable}
-                    onChange={(e) => setItemForm({ ...itemForm, isAvailable: e.target.checked })}
-                    className="w-auto"
-                  />
-                  <label htmlFor="ia" className="mb-0 normal-case text-sm text-[var(--text)]">
-                    Available
-                  </label>
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="ia"
+                      name="isAvailable"
+                      checked={itemForm.isAvailable}
+                      onChange={(e) => setItemForm({ ...itemForm, isAvailable: e.target.checked })}
+                      className="w-auto"
+                    />
+                    <label htmlFor="ia" className="mb-0 normal-case text-sm text-[var(--text)]">
+                      Available
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-2 border-l border-[var(--border)] pl-4">
+                    <input
+                      type="checkbox"
+                      id="ts"
+                      name="trackStock"
+                      checked={itemForm.trackStock}
+                      onChange={(e) => setItemForm({ ...itemForm, trackStock: e.target.checked })}
+                      className="w-auto"
+                    />
+                    <label htmlFor="ts" className="mb-0 normal-case text-sm text-[var(--text)]">
+                      Track Stock
+                    </label>
+                  </div>
                 </div>
+                {itemForm.trackStock && (
+                  <div>
+                    <label htmlFor="menu_item_stockCount">Current Stock *</label>
+                    <input
+                      id="menu_item_stockCount"
+                      name="stockCount"
+                      type="number"
+                      step="1"
+                      min="0"
+                      value={itemForm.stockCount}
+                      onChange={(e) => setItemForm({ ...itemForm, stockCount: e.target.value })}
+                      autoComplete="off"
+                    />
+                  </div>
+                )}
                 {canManageOrgWide && (
                   <div>
                     <label className="label">Scope</label>

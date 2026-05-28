@@ -103,11 +103,21 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
       return;
     }
 
-    // Fetch the branch to check useOrgMenu setting
+    // Fetch the branch to check useOrgMenu setting and rates
     const branch = await prisma.branch.findFirst({
       where: { id: actualBranchId as string, organizationId: actualOrgId, isActive: true },
-      select: { useOrgMenu: true },
+      select: { useOrgMenu: true, taxRate: true, serviceChargeRate: true },
     });
+
+    const orgRates = await prisma.organization.findUnique({
+      where: { id: actualOrgId },
+      select: { taxRate: true, serviceChargeRate: true },
+    });
+
+    const effectiveTaxRate = Number(branch?.taxRate ?? orgRates?.taxRate ?? 0);
+    const effectiveServiceChargeRate = Number(
+      branch?.serviceChargeRate ?? orgRates?.serviceChargeRate ?? 0,
+    );
 
     const branchFilter =
       branch?.useOrgMenu || !actualBranchId
@@ -164,11 +174,11 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
       }
     }
 
-    let total = 0;
+    let subtotal = 0;
     const orderItems = data.items.map((item) => {
       const menuItem = itemMap.get(item.menuItemId)!;
       const unitPrice = Number(menuItem.price);
-      total += unitPrice * item.quantity;
+      subtotal += unitPrice * item.quantity;
       return {
         menuItemId: item.menuItemId,
         quantity: item.quantity,
@@ -177,6 +187,10 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
         stationId: menuItem.stationId,
       };
     });
+
+    const taxAmount = Number(((subtotal * effectiveTaxRate) / 100).toFixed(2));
+    const serviceChargeAmount = Number(((subtotal * effectiveServiceChargeRate) / 100).toFixed(2));
+    const total = subtotal + taxAmount + serviceChargeAmount;
 
     const sessionId = await getOrCreateSession(actualTableId, actualOrgId, actualBranchId);
 
@@ -227,6 +241,9 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
           tableId: actualTableId,
           sessionId,
           idempotencyKey: data.idempotencyKey,
+          subtotal: Number(subtotal.toFixed(2)),
+          taxAmount: Number(taxAmount.toFixed(2)),
+          serviceChargeAmount: Number(serviceChargeAmount.toFixed(2)),
           total: Number(total.toFixed(2)), // Prisma accepts numbers for Decimal
           notes: data.notes || null,
           items: { create: orderItems },
@@ -786,18 +803,54 @@ ordersRouter.patch(
         })
         .parse(req.body);
 
-      // 1. Update order status first
+      // 1. Fetch existing order to check previous status
+      const existingOrder = await prisma.order.findUnique({
+        where: { id: req.params.id },
+        include: { items: { include: { menuItem: true } } },
+      });
+
+      if (!existingOrder) {
+        return res.status(404).json({ success: false, error: 'ORDER_NOT_FOUND' });
+      }
+
+      // 2. Update order status
       const updatedOrder = await prisma.order.update({
         where: { id: req.params.id },
         data: {
           status,
           ...(status === 'CANCELLED' && cancellationReason ? { cancellationReason } : {}),
+          ...(status === 'CANCELLED'
+            ? { subtotal: 0, taxAmount: 0, serviceChargeAmount: 0, total: 0 }
+            : {}),
         },
         include: { items: { include: { menuItem: true } }, table: true },
       });
 
-      if (!updatedOrder) {
-        return res.status(404).json({ success: false, error: 'ORDER_NOT_FOUND' });
+      // 3. Stock Replenishment Engine & Audit Log
+      if (status === 'CANCELLED' && existingOrder.status !== 'CANCELLED') {
+        for (const item of updatedOrder.items) {
+          if (!(item as any).cancelledAt && item.menuItem?.trackStock) {
+            await prisma.menuItem.update({
+              where: { id: item.menuItemId },
+              data: {
+                stockCount: { increment: item.quantity },
+                isAvailable: true,
+              },
+            });
+          }
+        }
+
+        await prisma.auditLog.create({
+          data: {
+            organizationId: req.user!.organizationId,
+            userId: req.user!.userId,
+            action: 'ORDER_CANCELLED',
+            entity: 'Order',
+            entityId: updatedOrder.id,
+            metadata: { cancellationReason: cancellationReason || 'N/A' },
+            ipAddress: req.ip,
+          },
+        });
       }
 
       let finalOrder = updatedOrder;
@@ -859,11 +912,6 @@ ordersRouter.patch(
       io.to(`order:${finalOrder.id}`).emit('ORDER_UPDATED', finalOrder);
 
       // Emit sync signal for status changes
-      io.to(`${req.user!.organizationId}:${finalOrder.branchId}`).emit('SYNC_REQUIRED', {
-        type: 'ORDER_STATUS_CHANGED',
-        orderId: finalOrder.id,
-        status,
-      });
 
       analyticsCache.delete(`${req.user!.organizationId}:${req.branchScope || 'all'}`);
 
@@ -1073,15 +1121,68 @@ ordersRouter.patch(
         },
       });
 
+      // Stock Replenishment Engine
+      if (item.menuItem?.trackStock) {
+        await prisma.menuItem.update({
+          where: { id: item.menuItem.id },
+          data: {
+            stockCount: { increment: item.quantity },
+            isAvailable: true,
+          },
+        });
+      }
+
+      await prisma.auditLog.create({
+        data: {
+          organizationId: req.user!.organizationId,
+          userId: req.user!.userId,
+          action: 'ITEM_CANCELLED',
+          entity: 'OrderItem',
+          entityId: item.id,
+          metadata: {
+            orderId: order.id,
+            menuItemId: item.menuItem?.id,
+            menuItemName: item.menuItem?.name,
+            cancelReason: reason || 'Item unavailable',
+            quantity: item.quantity,
+          },
+          ipAddress: req.ip,
+        },
+      });
+
+      const branch = await prisma.branch.findFirst({
+        where: { id: order.branchId, organizationId: order.organizationId },
+        select: { taxRate: true, serviceChargeRate: true },
+      });
+      const orgRates = await prisma.organization.findUnique({
+        where: { id: order.organizationId },
+        select: { taxRate: true, serviceChargeRate: true },
+      });
+      const effectiveTaxRate = Number(branch?.taxRate ?? orgRates?.taxRate ?? 0);
+      const effectiveServiceChargeRate = Number(
+        branch?.serviceChargeRate ?? orgRates?.serviceChargeRate ?? 0,
+      );
+
       const remainingItems = order.items.filter(
         (i: any) => i.id !== item.id && !(i as any).cancelledAt,
       );
-      const newTotal = remainingItems.reduce((sum, i) => sum + Number(i.unitPrice) * i.quantity, 0);
+      const newSubtotal = remainingItems.reduce(
+        (sum, i) => sum + Number(i.unitPrice) * i.quantity,
+        0,
+      );
+      const newTaxAmount = Number(((newSubtotal * effectiveTaxRate) / 100).toFixed(2));
+      const newServiceChargeAmount = Number(
+        ((newSubtotal * effectiveServiceChargeRate) / 100).toFixed(2),
+      );
+      const newTotal = newSubtotal + newTaxAmount + newServiceChargeAmount;
       const allCancelled = remainingItems.length === 0;
 
       const updatedOrder = await prisma.order.update({
         where: { id: order.id },
         data: {
+          subtotal: newSubtotal,
+          taxAmount: newTaxAmount,
+          serviceChargeAmount: newServiceChargeAmount,
           total: newTotal,
           ...(allCancelled
             ? { status: 'CANCELLED', cancellationReason: 'All items unavailable' }
@@ -1438,14 +1539,6 @@ ordersRouter.post(
       const ipAddress =
         (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
         req.socket?.remoteAddress;
-
-      io.to(`${orgId}:${branchId}`).emit('SYNC_REQUIRED', {
-        scope: 'branch',
-        orgId,
-        branchId,
-        reason: reason ?? 'Manual resync',
-        at: new Date().toISOString(),
-      });
 
       await prisma.auditLog
         .create({

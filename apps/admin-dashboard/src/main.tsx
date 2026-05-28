@@ -26,6 +26,7 @@ import { ThemeProvider } from './context/theme';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './index.css';
 import * as Sentry from '@sentry/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 try {
   if (import.meta.env.PROD && 'serviceWorker' in navigator) {
@@ -50,8 +51,15 @@ const SectionsPage = React.lazy(() =>
 const OrdersPage = React.lazy(() =>
   import('./pages/OrdersPage').then((m) => ({ default: m.OrdersPage })),
 );
+const KDSPage = React.lazy(() => import('./pages/KDSPage').then((m) => ({ default: m.KDSPage })));
 const UsersPage = React.lazy(() =>
   import('./pages/UsersPage').then((m) => ({ default: m.UsersPage })),
+);
+const StationsPage = React.lazy(() =>
+  import('./pages/StationsPage').then((m) => ({ default: m.StationsPage })),
+);
+const PaymentsPage = React.lazy(() =>
+  import('./pages/PaymentsPage').then((m) => ({ default: m.PaymentsPage })),
 );
 const HelpOptionsPage = React.lazy(() =>
   import('./pages/HelpOptionsPage').then((m) => ({ default: m.HelpOptionsPage })),
@@ -67,6 +75,15 @@ const ReportsPage = React.lazy(() =>
 );
 const AuditLogsPage = React.lazy(() =>
   import('./pages/AuditLogsPage').then((m) => ({ default: m.AuditLogsPage })),
+);
+const NotificationsPage = React.lazy(() =>
+  import('./pages/NotificationsPage').then((m) => ({ default: m.NotificationsPage })),
+);
+const TimesheetsPage = React.lazy(() =>
+  import('./pages/TimesheetsPage').then((m) => ({ default: m.TimesheetsPage })),
+);
+const ServiceDeskPage = React.lazy(() =>
+  import('./pages/ServiceDeskPage').then((m) => ({ default: m.ServiceDeskPage })),
 );
 const CashierPage = React.lazy(() =>
   import('./pages/CashierPage').then((m) => ({ default: m.CashierPage })),
@@ -167,10 +184,39 @@ function AppRoutes() {
             }
           />
           <Route
+            path="kds"
+            element={
+              <RequireRole
+                roles={[
+                  'ORG_OWNER',
+                  'ADMIN',
+                  'ORG_MANAGER',
+                  'BRANCH_ADMIN',
+                  'KITCHEN',
+                  'BAR',
+                  'WAITER',
+                  'SUPERADMIN',
+                ]}
+              >
+                <KDSPage />
+              </RequireRole>
+            }
+          />
+          <Route
             path="/cashier"
             element={
               <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER']}>
                 <CashierPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/service-desk"
+            element={
+              <RequireRole
+                roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'HOST', 'WAITER']}
+              >
+                <ServiceDeskPage />
               </RequireRole>
             }
           />
@@ -199,6 +245,14 @@ function AppRoutes() {
             }
           />
           <Route
+            path="stations"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
+                <StationsPage />
+              </RequireRole>
+            }
+          />
+          <Route
             path="users"
             element={
               <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
@@ -220,6 +274,30 @@ function AppRoutes() {
               <RequireOrgAdmin>
                 <SettingsPage />
               </RequireOrgAdmin>
+            }
+          />
+          <Route
+            path="audit-logs"
+            element={
+              <RequireOrgAdmin>
+                <AuditLogsPage />
+              </RequireOrgAdmin>
+            }
+          />
+          <Route
+            path="notifications"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER']}>
+                <NotificationsPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="timesheets"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER']}>
+                <TimesheetsPage />
+              </RequireRole>
             }
           />
           <Route
@@ -250,6 +328,24 @@ function AppRoutes() {
             }
           />
           <Route
+            path="payments"
+            element={
+              <RequireRole
+                roles={[
+                  'ORG_OWNER',
+                  'ADMIN',
+                  'ORG_MANAGER',
+                  'BRANCH_ADMIN',
+                  'CASHIER',
+                  'WAITER',
+                  'SUPERADMIN',
+                ]}
+              >
+                <PaymentsPage />
+              </RequireRole>
+            }
+          />
+          <Route
             path="audit-logs"
             element={
               <RequireRole
@@ -276,16 +372,27 @@ Sentry.init({
   enabled: !!import.meta.env.VITE_SENTRY_DSN,
 });
 
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      staleTime: 60 * 1000,
+    },
+  },
+});
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <RootWrapper>
-    <ThemeProvider>
-      <ErrorBoundary>
-        <AuthProvider>
-          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-            <AppRoutes />
-          </BrowserRouter>
-        </AuthProvider>
-      </ErrorBoundary>
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <ErrorBoundary>
+          <AuthProvider>
+            <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+              <AppRoutes />
+            </BrowserRouter>
+          </AuthProvider>
+        </ErrorBoundary>
+      </ThemeProvider>
+    </QueryClientProvider>
   </RootWrapper>,
 );

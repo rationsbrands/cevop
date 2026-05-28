@@ -87,10 +87,27 @@ export function Shell() {
   const canViewOrders = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'HOST'].includes(
     role,
   );
+  const canViewKDS = [
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'BRANCH_ADMIN',
+    'KITCHEN',
+    'BAR',
+    'WAITER',
+  ].includes(role);
   const canViewFloor = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'HOST'].includes(role);
   const canViewCashier = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER'].includes(
     role,
   );
+  const canViewServiceDesk = [
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'BRANCH_ADMIN',
+    'HOST',
+    'WAITER',
+  ].includes(role);
 
   useEffect(() => {
     const updateInstallState = () => {
@@ -145,6 +162,18 @@ export function Shell() {
 
   const NAV = [
     { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true, show: true },
+    {
+      to: '/service-desk',
+      label: 'Service Desk',
+      Icon: IconOrders,
+      show: canViewServiceDesk && hasBranchContext,
+    },
+    {
+      to: '/kds',
+      label: 'Kitchen Display',
+      Icon: IconOrders,
+      show: canViewKDS && hasBranchContext,
+    },
     { to: '/orders', label: 'Orders', Icon: IconOrders, show: canViewOrders && hasBranchContext },
     {
       to: '/cashier',
@@ -153,6 +182,12 @@ export function Shell() {
       show: canViewCashier && hasBranchContext,
     },
     { to: '/reports', label: 'Reports', Icon: IconOverview, show: canViewReports },
+    {
+      to: '/payments',
+      label: 'Transactions',
+      Icon: IconOrders,
+      show: canViewCashier && hasBranchContext,
+    },
     { to: '/menu', label: 'Menu', Icon: IconMenu, show: canManageOperations && hasBranchContext },
     {
       to: '/sections',
@@ -161,12 +196,19 @@ export function Shell() {
       show: canViewFloor && hasBranchContext,
     },
     {
+      to: '/stations',
+      label: 'Stations',
+      Icon: IconSections,
+      show: canManageOperations && hasBranchContext,
+    },
+    {
       to: '/tables',
       label: 'Tables & QR',
       Icon: IconTables,
       show: canViewFloor && hasBranchContext,
     },
     { to: '/users', label: 'Staff', Icon: IconStaff, show: canManageStaff },
+    { to: '/timesheets', label: 'Timesheets & Payroll', Icon: IconStaff, show: canManageStaff },
     {
       to: '/help-options',
       label: 'Help Options',
@@ -175,8 +217,31 @@ export function Shell() {
     },
     { to: '/branches', label: 'Branches', Icon: IconBranches, show: canManageOrg },
     { to: '/audit-logs', label: 'Audit Logs', Icon: IconSettings, show: canViewAuditLogs },
+    {
+      to: '/notifications',
+      label: 'Communication Logs',
+      Icon: IconSettings,
+      show: canViewAuditLogs,
+    },
     { to: '/settings', label: 'Settings', Icon: IconSettings, show: canManageOrg },
   ].filter((n) => n.show);
+
+  const [togglingShift, setTogglingShift] = useState(false);
+  const { updateUser } = useAuth();
+
+  async function handleToggleShift() {
+    setTogglingShift(true);
+    try {
+      const { success, data } = await api.patch('/api/shifts/toggle', {});
+      if (success && data) {
+        updateUser({ isOnShift: data.isOnShift });
+      }
+    } catch {
+      // toast error
+    } finally {
+      setTogglingShift(false);
+    }
+  }
 
   async function handleLogout() {
     await logout();
@@ -467,6 +532,17 @@ export function Shell() {
           </div>
 
           <div className="flex items-center gap-4 shrink-0">
+            {['WAITER', 'CASHIER', 'SERVICE'].includes(role) && (
+              <button
+                onClick={handleToggleShift}
+                disabled={togglingShift}
+                className={`flex items-center gap-2 btn btn-sm font-bold tracking-widest text-[10px] ${
+                  user?.isOnShift ? 'btn-danger' : 'btn-primary'
+                }`}
+              >
+                {togglingShift ? '...' : user?.isOnShift ? 'END SHIFT' : 'START SHIFT'}
+              </button>
+            )}
             {installAvailable && (
               <button
                 className="hidden sm:block btn btn-secondary btn-sm font-bold tracking-widest text-[10px]"

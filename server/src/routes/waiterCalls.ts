@@ -100,10 +100,6 @@ waiterCallsRouter.post('/public', async (req: Request, res: Response) => {
     }
 
     io.to(`${table.organizationId}:${actualBranchId}`).emit('WAITER_CALLED', finalCall);
-    io.to(`${table.organizationId}:${actualBranchId}`).emit('SYNC_REQUIRED', {
-      type: 'WAITER_CALL_CREATED',
-      callId: finalCall.id,
-    });
 
     const org = await prisma.organization.findUnique({ where: { id: table.organizationId } });
     if (org && (org as any).notifyWaiterCalls) {
@@ -239,10 +235,6 @@ waiterCallsRouter.patch(
       });
 
       io.to(`${req.user!.organizationId}:${call.branchId}`).emit('WAITER_CALL_UPDATED', call);
-      io.to(`${req.user!.organizationId}:${call.branchId}`).emit('SYNC_REQUIRED', {
-        type: 'WAITER_CALL_UPDATED',
-        callId: call.id,
-      });
 
       res.json({ success: true, data: call });
     } catch (err: unknown) {
@@ -391,10 +383,6 @@ waiterCallsRouter.patch(
       });
 
       io.to(`${req.user!.organizationId}:${updated.branchId}`).emit('WAITER_CALL_UPDATED', updated);
-      io.to(`${req.user!.organizationId}:${updated.branchId}`).emit('SYNC_REQUIRED', {
-        type: 'WAITER_CALL_ASSIGNED',
-        callId: updated.id,
-      });
 
       // If assigning to a specific waiter, send them a direct notification
       if (waiterId) {

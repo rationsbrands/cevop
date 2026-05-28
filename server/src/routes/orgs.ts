@@ -45,6 +45,8 @@ orgsRouter.get('/me', async (req: AuthRequest, res: Response) => {
         notifyNewOrders: true,
         notifyWaiterCalls: true,
         notifyServiceRequests: true,
+        taxRate: true,
+        serviceChargeRate: true,
         createdAt: true,
       } as any,
     });
@@ -73,6 +75,8 @@ const orgSchema = z.object({
   notifyNewOrders: z.boolean().optional(),
   notifyWaiterCalls: z.boolean().optional(),
   notifyServiceRequests: z.boolean().optional(),
+  taxRate: z.coerce.number().min(0).max(100).optional(),
+  serviceChargeRate: z.coerce.number().min(0).max(100).optional(),
 });
 
 // Superadmin: create org
