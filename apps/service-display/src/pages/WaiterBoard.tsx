@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../services/auth';
 import { useTheme } from '../context/theme';
@@ -99,10 +100,8 @@ export function WaiterBoard() {
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
   const [showPOS, setShowPOS] = useState(false);
   const [activeTab, setActiveTab] = useState<'tasks' | 'tables'>('tasks');
-  const [tables, setTables] = useState<any[]>([]);
+  const queryClient = useQueryClient();
   const tablesRef = useRef<any[]>([]);
-  const [myTasks, setMyTasks] = useState<TaskItem[]>([]);
-  const [unassignedTasks, setUnassignedTasks] = useState<TaskItem[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [offlineSnapshotTs, setOfflineSnapshotTs] = useState<number | null>(null);
@@ -174,10 +173,6 @@ export function WaiterBoard() {
   useEffect(() => {
     onShiftRef.current = !!user?.isOnShift;
   }, [user?.isOnShift]);
-
-  useEffect(() => {
-    tablesRef.current = tables;
-  }, [tables]);
 
   const isWaiter = user?.role === 'WAITER';
   const isOnShift = !!user?.isOnShift;
@@ -252,7 +247,7 @@ export function WaiterBoard() {
     }
     const tableId = data.table?.id ?? data.tableId;
     const section =
-      data.table?.section ?? tablesRef.current.find((t) => t.id === tableId)?.section ?? null;
+      data.table?.section ?? tablesRef.current.find((t: any) => t.id === tableId)?.section ?? null;
     return {
       id: data.id,
       type,
@@ -267,57 +262,78 @@ export function WaiterBoard() {
     };
   }, []);
 
-  const loadTasks = useCallback(async () => {
-    if (isWaiter && !isOnShift) {
-      setMyTasks([]);
-      setUnassignedTasks([]);
-      setOfflineSnapshotTs(null);
-      return;
-    }
-    if (!token) return;
-    const cacheKey = waiterSnapshotKey({
-      organizationId: user?.organizationId,
-      branchId: userBranchId,
-      userId,
-    });
-
-    if (!navigator.onLine && cacheKey) {
-      const snap = readWaiterSnapshot(cacheKey);
-      if (snap) {
-        tablesRef.current = snap.tables;
-        setTables(snap.tables);
-        setMyTasks(snap.tasks.filter((t) => t.assignedTo === userId));
-        setUnassignedTasks(snap.tasks.filter((t) => t.assignedTo === null));
-        setOfflineSnapshotTs(snap.ts);
+  const { data: tablesData } = useQuery({
+    queryKey: ['waiter-tables', user?.organizationId, userBranchId],
+    queryFn: async () => {
+      if (!navigator.onLine) {
+        const cacheKey = waiterSnapshotKey({
+          organizationId: user?.organizationId,
+          branchId: userBranchId,
+          userId,
+        });
+        if (cacheKey) {
+          const snap = readWaiterSnapshot(cacheKey);
+          if (snap) return snap.tables;
+        }
       }
-      return;
-    }
-
-    try {
       const h = { Authorization: `Bearer ${tokenRef.current}` };
       const bq = userBranchId ? `?branchId=${userBranchId}` : '';
+      const res = await fetch(`${API_BASE}/api/tables?_=${Date.now()}${bq}`, { headers: h });
+      if (!res.ok) throw new Error('Network error');
+      const json = await res.json();
+      const tables = json.success ? json.data : [];
 
-      const [tasksRes, tablesRes] = await Promise.all([
-        fetch(`${API_BASE}/api/waiter-tasks${bq}`, { headers: h }),
-        fetch(`${API_BASE}/api/tables?_=${Date.now()}${bq}`, { headers: h }),
-      ]);
-
-      if (!tasksRes.ok || !tablesRes.ok) {
-        throw new Error('Network error');
+      const cacheKey = waiterSnapshotKey({
+        organizationId: user?.organizationId,
+        branchId: userBranchId,
+        userId,
+      });
+      if (cacheKey) {
+        const snap = readWaiterSnapshot(cacheKey);
+        writeWaiterSnapshot(cacheKey, { ts: Date.now(), tables, tasks: snap?.tasks || [] });
       }
 
-      const [tasksData, tablesData] = await Promise.all([tasksRes.json(), tablesRes.json()]);
+      return tables;
+    },
+    enabled: !!token,
+    staleTime: 5000,
+  });
 
-      const nextTables = tablesData?.success ? tablesData.data : tablesRef.current;
-      if (tablesData?.success) {
-        tablesRef.current = nextTables;
-        setTables(nextTables);
+  const { data: tasksData, refetch: refetchTasks } = useQuery({
+    queryKey: ['waiter-tasks', user?.organizationId, userBranchId, userId],
+    queryFn: async () => {
+      if (isWaiter && !isOnShift) {
+        setOfflineSnapshotTs(null);
+        return { myTasks: [], unassignedTasks: [] };
       }
+
+      if (!navigator.onLine) {
+        const cacheKey = waiterSnapshotKey({
+          organizationId: user?.organizationId,
+          branchId: userBranchId,
+          userId,
+        });
+        if (cacheKey) {
+          const snap = readWaiterSnapshot(cacheKey);
+          if (snap) {
+            setOfflineSnapshotTs(snap.ts);
+            return {
+              myTasks: snap.tasks.filter((t) => t.assignedTo === userId),
+              unassignedTasks: snap.tasks.filter((t) => t.assignedTo === null),
+            };
+          }
+        }
+      }
+
+      const h = { Authorization: `Bearer ${tokenRef.current}` };
+      const bq = userBranchId ? `?branchId=${userBranchId}` : '';
+      const res = await fetch(`${API_BASE}/api/waiter-tasks${bq}`, { headers: h });
+      if (!res.ok) throw new Error('Network error');
+      const json = await res.json();
 
       const allTasks: TaskItem[] = [];
-      if (tasksData?.success) {
-        const { mine, unassigned } = tasksData.data;
-
+      if (json.success) {
+        const { mine, unassigned } = json.data;
         mine.waiterCalls.forEach((c: any) => allTasks.push(normaliseTask('WAITER_CALL', c)));
         mine.serviceRequests.forEach((s: any) =>
           allTasks.push(normaliseTask('SERVICE_REQUEST', s)),
@@ -332,58 +348,54 @@ export function WaiterBoard() {
       }
 
       const uniqueTasks = Array.from(new Map(allTasks.map((t) => [t.id, t])).values());
-      setMyTasks(uniqueTasks.filter((t) => t.assignedTo === userId));
-      setUnassignedTasks(uniqueTasks.filter((t) => t.assignedTo === null));
-      setOfflineSnapshotTs(null);
-
-      if (cacheKey) {
-        writeWaiterSnapshot(cacheKey, { ts: Date.now(), tables: nextTables, tasks: uniqueTasks });
-      }
-    } catch {
+      const cacheKey = waiterSnapshotKey({
+        organizationId: user?.organizationId,
+        branchId: userBranchId,
+        userId,
+      });
       if (cacheKey) {
         const snap = readWaiterSnapshot(cacheKey);
-        if (snap) {
-          tablesRef.current = snap.tables;
-          setTables(snap.tables);
-          setMyTasks(snap.tasks.filter((t) => t.assignedTo === userId));
-          setUnassignedTasks(snap.tasks.filter((t) => t.assignedTo === null));
-          setOfflineSnapshotTs(snap.ts);
-        }
+        writeWaiterSnapshot(cacheKey, {
+          ts: Date.now(),
+          tables: snap?.tables || [],
+          tasks: uniqueTasks,
+        });
       }
-    }
-  }, [isOnShift, isWaiter, normaliseTask, token, user, userBranchId, userId]);
+      setOfflineSnapshotTs(null);
 
-  const loadTasksRef = useRef(loadTasks);
+      return {
+        myTasks: uniqueTasks.filter((t) => t.assignedTo === userId),
+        unassignedTasks: uniqueTasks.filter((t) => t.assignedTo === null),
+      };
+    },
+    enabled: !!token,
+    staleTime: 5000,
+  });
+
+  const tables = tablesData || [];
   useEffect(() => {
-    loadTasksRef.current = loadTasks;
-  }, [loadTasks]);
+    tablesRef.current = tables;
+  }, [tables]);
+  const myTasks = tasksData?.myTasks || [];
+  const unassignedTasks = tasksData?.unassignedTasks || [];
 
   const refreshNow = useCallback(async () => {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      // HARD RESET: Clear local state before fetching to ensure "stuck" items are removed
-      setMyTasks([]);
-      setUnassignedTasks([]);
-
-      await loadTasksRef.current();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] }),
+        queryClient.invalidateQueries({ queryKey: ['waiter-tables'] }),
+      ]);
     } finally {
       setRefreshing(false);
     }
-  }, [refreshing]);
+  }, [refreshing, queryClient]);
 
   const refreshNowRef = useRef(refreshNow);
   useEffect(() => {
     refreshNowRef.current = refreshNow;
   }, [refreshNow]);
-
-  useEffect(() => {
-    if (!token) return;
-    const t = setTimeout(() => {
-      loadTasks().catch(() => void 0);
-    }, 0);
-    return () => clearTimeout(t);
-  }, [token, loadTasks]);
 
   // Socket setup
   useEffect(() => {
@@ -417,8 +429,7 @@ export function WaiterBoard() {
       if (isWaiter && !onShiftRef.current) return;
       playAlert();
       const normalised = normaliseTask(type, task);
-      setMyTasks((prev) => [...prev.filter((t) => t.id !== normalised.id), normalised]);
-      setUnassignedTasks((prev) => prev.filter((t) => t.id !== normalised.id));
+      queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
     });
 
     // Task available for anyone to claim
@@ -426,64 +437,46 @@ export function WaiterBoard() {
       if (isWaiter && !onShiftRef.current) return;
       playAlert();
       const normalised = normaliseTask(type, task);
-      setUnassignedTasks((prev) => [...prev.filter((t) => t.id !== normalised.id), normalised]);
+      queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
     });
 
     // Another waiter claimed a task — remove from unassigned pool
     socket.on('TASK_CLAIMED', ({ task }: { task: any }) => {
       if (isWaiter && !onShiftRef.current) return;
-      setUnassignedTasks((prev) => prev.filter((t) => t.id !== task.id));
-      // If claimed by me, move to my tasks
-      if (task.assignedTo === user.id || task.assignedWaiter === user.id) {
-        const type: TaskItem['type'] = task.items
-          ? 'ORDER_READY'
-          : task.serviceType
-            ? 'SERVICE_REQUEST'
-            : 'WAITER_CALL';
-        setMyTasks((prev) => [...prev.filter((t) => t.id !== task.id), normaliseTask(type, task)]);
-      }
+      queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
     });
 
     // Task resolved (by anyone) — remove from all lists
     socket.on('WAITER_CALL_UPDATED', (call: any) => {
       if (isWaiter && !onShiftRef.current) return;
       if (call.status === 'RESOLVED') {
-        setMyTasks((prev) => prev.filter((t) => t.id !== call.id));
-        setUnassignedTasks((prev) => prev.filter((t) => t.id !== call.id));
+        queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
       }
     });
     socket.on('SERVICE_REQUEST_UPDATED', (req: any) => {
       if (isWaiter && !onShiftRef.current) return;
       if (req.status === 'RESOLVED') {
-        setMyTasks((prev) => prev.filter((t) => t.id !== req.id));
-        setUnassignedTasks((prev) => prev.filter((t) => t.id !== req.id));
+        queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
       }
     });
     socket.on('ORDER_UPDATED', (order: any) => {
       if (isWaiter && !onShiftRef.current) return;
       if (order.status === 'SERVED' || order.status === 'CANCELLED') {
-        setMyTasks((prev) => prev.filter((t) => t.id !== order.id));
-        setUnassignedTasks((prev) => prev.filter((t) => t.id !== order.id));
+        queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
       }
     });
 
     socket.on('TABLE_STATUS_CHANGED', ({ tableId, status }) => {
-      setTables((prev) => prev.map((t) => (t.id === tableId ? { ...t, status } : t)));
+      queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
     });
 
     socket.on('SESSION_OPENED', ({ tableId, sessionId }) => {
-      setTables((prev) =>
-        prev.map((t) => (t.id === tableId ? { ...t, activeSessionId: sessionId } : t)),
-      );
+      queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
     });
 
     socket.on('SESSION_CLOSED', ({ tableId }) => {
-      setTables((prev) =>
-        prev.map((t) => (t.id === tableId ? { ...t, activeSessionId: null } : t)),
-      );
-      // DEFENSIVE: Wipe all tasks for this table immediately
-      setMyTasks((prev) => prev.filter((t) => t.originalData?.tableId !== tableId));
-      setUnassignedTasks((prev) => prev.filter((t) => t.originalData?.tableId !== tableId));
+      queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
+      queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
     });
 
     const handleSyncRequired = () => {
@@ -527,7 +520,7 @@ export function WaiterBoard() {
       }
       updateUser({ isOnShift: true });
       setShiftBusy(false);
-      loadTasks().catch(() => void 0);
+      queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
     });
   }
 
@@ -547,8 +540,10 @@ export function WaiterBoard() {
         return;
       }
       updateUser({ isOnShift: false });
-      setMyTasks([]);
-      setUnassignedTasks([]);
+      queryClient.setQueryData(['waiter-tasks', user?.organizationId, user?.branchId, userId], {
+        myTasks: [],
+        unassignedTasks: [],
+      });
       setShiftBusy(false);
     });
   }
@@ -794,10 +789,10 @@ export function WaiterBoard() {
 
       const res = await fetch(url, { method: 'PATCH', headers: h, body: JSON.stringify(body) });
       if (res.ok) {
-        setMyTasks((prev) => prev.filter((t) => t.id !== task.id));
-        setUnassignedTasks((prev) => prev.filter((t) => t.id !== task.id));
+        queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
       } else if (res.status === 404) {
-        await loadTasks();
+        await queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
+        await queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
       }
     } finally {
       setUpdatingItems((prev) => {
@@ -876,13 +871,10 @@ export function WaiterBoard() {
 
       const res = await fetch(url, { method: 'PATCH', headers: h });
       if (res.ok) {
-        setUnassignedTasks((prev) => prev.filter((t) => t.id !== task.id));
-        setMyTasks((prev) => [
-          { ...task, assignedTo: user?.id ?? null },
-          ...prev.filter((t) => t.id !== task.id),
-        ]);
+        queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
       } else if (res.status === 404) {
-        await loadTasks();
+        await queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
+        await queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
       }
     } finally {
       setUpdatingItems((prev) => {
@@ -905,7 +897,8 @@ export function WaiterBoard() {
         },
         body: JSON.stringify({ nextStatus: 'CLEANING' }),
       });
-      if (!res.ok) await loadTasks();
+      if (!res.ok) await queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
+      await queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
     } finally {
       setUpdatingItems((prev) => {
         const n = new Set(prev);
@@ -927,7 +920,8 @@ export function WaiterBoard() {
         },
         body: JSON.stringify({ status: 'EMPTY' }),
       });
-      if (!res.ok) await loadTasks();
+      if (!res.ok) await queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
+      await queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
     } finally {
       setUpdatingItems((prev) => {
         const n = new Set(prev);
@@ -1313,7 +1307,7 @@ export function WaiterBoard() {
             )}
             {(!isWaiter || isOnShift) &&
               tables
-                .filter((t) => t.isActive)
+                .filter((t: any) => t.isActive)
                 .map((t: any) => (
                   <div
                     key={t.id}
@@ -1412,7 +1406,7 @@ export function WaiterBoard() {
                     )}
                   </div>
                 ))}
-            {(!isWaiter || isOnShift) && tables.filter((t) => t.isActive).length === 0 && (
+            {(!isWaiter || isOnShift) && tables.filter((t: any) => t.isActive).length === 0 && (
               <div className="col-span-full text-center text-[var(--muted)] text-sm pt-8">
                 No tables found
               </div>
