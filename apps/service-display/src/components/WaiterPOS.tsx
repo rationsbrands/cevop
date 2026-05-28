@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { formatPrice } from '../../../../shared/utils/currency';
 import { useAuth } from '../services/auth';
@@ -13,7 +13,12 @@ interface WaiterPOSProps {
 }
 
 export function WaiterPOS({ onClose, onOrderSuccess, initialTableId }: WaiterPOSProps) {
-  const { token, user, silentRefresh } = useAuth() as any;
+  const { token, user } = useAuth() as any;
+  // Keep a ref so async query functions always use the latest token
+  const tokenRef = useRef(token);
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -28,10 +33,9 @@ export function WaiterPOS({ onClose, onOrderSuccess, initialTableId }: WaiterPOS
   const { data: tables = [] } = useQuery({
     queryKey: ['tables', user?.branchId],
     queryFn: async () => {
-      const freshToken = (await silentRefresh()) ?? token;
       const bq = user?.branchId ? `?branchId=${user.branchId}` : '';
       const res = await fetch(`${API_BASE}/api/tables${bq}`, {
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
       });
       const json = await res.json();
       return json.success ? json.data : [];
@@ -42,10 +46,9 @@ export function WaiterPOS({ onClose, onOrderSuccess, initialTableId }: WaiterPOS
   const { data: menuData = { categories: [], items: [] }, isLoading: menuLoading } = useQuery({
     queryKey: ['menu', user?.branchId],
     queryFn: async () => {
-      const freshToken = (await silentRefresh()) ?? token;
       const bq = user?.branchId ? `?branchId=${user.branchId}` : '';
       const res = await fetch(`${API_BASE}/api/menu${bq}`, {
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
       });
       const json = await res.json();
       if (json.success) {

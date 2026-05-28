@@ -207,6 +207,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const lastRefreshedAt = useRef<number>(0);
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
   const silentRefreshRef = useRef<() => Promise<string | null>>(() => Promise.resolve(null));
+  const backoffUntilRef = useRef<number>(0); // exponential backoff after 429
 
   const scheduleRefresh = useCallback((accessToken: string) => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
@@ -235,6 +236,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return refreshPromiseRef.current;
     }
 
+    // Exponential backoff: respect cooldown set after a 429
+    if (Date.now() < backoffUntilRef.current) {
+      return token;
+    }
+
     // Debounce
     if (Date.now() - lastRefreshedAt.current < 10_000) {
       return token; // Return current in-memory token
@@ -256,7 +262,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           method: 'POST',
           credentials: 'include', // Cookie is sent automatically
           headers: AUTH_HEADERS,
-          // No body
         });
         if (!res.ok) {
           if (res.status === 401) {
@@ -272,6 +277,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setActiveBranchFilter(null);
             return null;
           }
+          if (res.status === 429) {
+            // Read Retry-After from the server (set by our rate limiter)
+            // and apply exponential backoff with ±5s jitter.
+            const retryAfterHeader = res.headers.get('Retry-After');
+            const retryAfterJson = await res
+              .json()
+              .then((j: any) => j?.retryAfter)
+              .catch(() => null);
+            const retryAfterSec = Number(retryAfterHeader ?? retryAfterJson ?? 60);
+            const jitter = Math.random() * 10_000; // 0-10s jitter
+            backoffUntilRef.current = Date.now() + retryAfterSec * 1000 + jitter;
+            // Do NOT log the user out — their existing in-memory token may still be valid
+            return token;
+          }
           return token;
         }
         const { data } = await res.json();
@@ -282,6 +301,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           /* ignore */
         }
         lastRefreshedAt.current = Date.now();
+
+        // Broadcast the new token to other tabs so they don't need to refresh too
+        try {
+          const bc = new BroadcastChannel('cevop_auth_admin');
+          bc.postMessage({ type: 'TOKEN_REFRESHED', accessToken: data.accessToken });
+          bc.close();
+        } catch {
+          /* BroadcastChannel not supported — ignore */
+        }
+
         return data.accessToken;
       } catch {
         return token;
@@ -297,6 +326,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     silentRefreshRef.current = () => silentRefresh();
   }, [silentRefresh]);
+
+  // BroadcastChannel: receive token refreshed by another tab
+  // so this tab doesn't need to make its own refresh call.
+  useEffect(() => {
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('cevop_auth_admin');
+      bc.onmessage = (ev) => {
+        if (ev.data?.type === 'TOKEN_REFRESHED' && typeof ev.data.accessToken === 'string') {
+          setTokenInMemory(ev.data.accessToken);
+          lastRefreshedAt.current = Date.now();
+        }
+      };
+    } catch {
+      /* BroadcastChannel not supported */
+    }
+    return () => {
+      try {
+        bc?.close();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [setTokenInMemory]);
 
   useEffect(() => {
     async function handleWake() {
@@ -462,6 +515,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             headers: AUTH_HEADERS,
           });
           if (!res.ok) {
+            if (res.status === 429) {
+              // Rate-limited on startup — don't clear session marker, just skip loading
+              // The existing in-memory token (if any) may still be valid.
+              // Apply backoff so we don't hammer on next mount.
+              const retryAfterHeader = res.headers.get('Retry-After');
+              const retryAfterSec = Number(retryAfterHeader ?? 60);
+              const jitter = Math.random() * 10_000;
+              backoffUntilRef.current = Date.now() + retryAfterSec * 1000 + jitter;
+              setLoading(false);
+              return;
+            }
             try {
               localStorage.removeItem(SESSION_MARKER_KEY);
             } catch {

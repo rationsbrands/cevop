@@ -51,6 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRefreshedAt = useRef<number>(0);
   const silentRefreshRef = useRef<() => void>(() => void 0);
+  const backoffUntilRef = useRef<number>(0); // exponential backoff after 429
 
   const scheduleRefresh = useCallback((accessToken: string) => {
     if (timer.current) clearTimeout(timer.current);
@@ -74,6 +75,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const silentRefresh = useCallback(async (): Promise<string | null> => {
+    // Exponential backoff: respect cooldown set after a 429
+    if (Date.now() < backoffUntilRef.current) {
+      return token;
+    }
+
     if (Date.now() - lastRefreshedAt.current < 30_000) {
       return token;
     }
@@ -94,11 +100,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           doLogout();
           return null;
         }
+        if (res.status === 429) {
+          const retryAfterHeader = res.headers.get('Retry-After');
+          const retryAfterJson = await res
+            .json()
+            .then((j: any) => j?.retryAfter)
+            .catch(() => null);
+          const retryAfterSec = Number(retryAfterHeader ?? retryAfterJson ?? 60);
+          const jitter = Math.random() * 10_000;
+          backoffUntilRef.current = Date.now() + retryAfterSec * 1000 + jitter;
+          // Do NOT log out — existing token may still be valid
+          return token;
+        }
         return token;
       }
       const { data } = await res.json();
       setTokenInMemory(data.accessToken);
       lastRefreshedAt.current = Date.now();
+
+      // Broadcast the new token to other tabs
+      try {
+        const bc = new BroadcastChannel('cevop_auth_ops');
+        bc.postMessage({ type: 'TOKEN_REFRESHED', accessToken: data.accessToken });
+        bc.close();
+      } catch {
+        /* BroadcastChannel not supported */
+      }
+
       return data.accessToken;
     } catch {
       return token;
@@ -110,6 +138,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       silentRefresh().catch(() => void 0);
     };
   }, [silentRefresh]);
+
+  // BroadcastChannel: receive token refreshed by another tab
+  useEffect(() => {
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('cevop_auth_ops');
+      bc.onmessage = (ev) => {
+        if (ev.data?.type === 'TOKEN_REFRESHED' && typeof ev.data.accessToken === 'string') {
+          setTokenInMemory(ev.data.accessToken);
+          lastRefreshedAt.current = Date.now();
+        }
+      };
+    } catch {
+      /* BroadcastChannel not supported */
+    }
+    return () => {
+      try {
+        bc?.close();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [setTokenInMemory]);
 
   function doLogout() {
     setToken(null);
@@ -158,6 +209,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           headers: AUTH_HEADERS,
         });
         if (!res.ok) {
+          if (res.status === 429) {
+            // Rate-limited on startup — preserve session marker, apply backoff
+            const retryAfterHeader = res.headers.get('Retry-After');
+            const retryAfterSec = Number(retryAfterHeader ?? 60);
+            const jitter = Math.random() * 10_000;
+            backoffUntilRef.current = Date.now() + retryAfterSec * 1000 + jitter;
+            setLoading(false);
+            return;
+          }
           if (res.status === 401) doLogout();
           setLoading(false);
           return;

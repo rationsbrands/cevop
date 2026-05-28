@@ -52,7 +52,7 @@ function TimeElapsed({ createdAt, className }: { createdAt: string; className?: 
 }
 
 export function KitchenBoard() {
-  const { user, token, logout, silentRefresh } = useAuth() as any;
+  const { user, token, logout } = useAuth() as any;
   useTheme();
 
   const [socketConnected, setSocketConnected] = useState(false);
@@ -91,12 +91,11 @@ export function KitchenBoard() {
   const { data: ordersData, refetch: refetchOrders } = useQuery({
     queryKey: ['kitchen-orders', user?.organizationId, user?.branchId, selectedStationId],
     queryFn: async () => {
-      const freshToken = (await silentRefresh()) ?? token;
       const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
       const stationParam = selectedStationId ? `&stationId=${selectedStationId}` : '';
       const res = await fetch(
         `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&limit=50${branchParam}${stationParam}`,
-        { headers: { Authorization: `Bearer ${freshToken}` } },
+        { headers: { Authorization: `Bearer ${tokenRef.current}` } },
       );
       if (!res.ok) throw new Error('Failed to fetch kitchen orders');
       const json = await res.json();
@@ -115,10 +114,12 @@ export function KitchenBoard() {
 
   const updateOrderStatusMutation = useMutation({
     mutationFn: async ({ orderId, status }: { orderId: string; status: string }) => {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/orders/${orderId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({ status }),
       });
       if (!res.ok) throw new Error('Failed to update order status');
@@ -131,12 +132,11 @@ export function KitchenBoard() {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await silentRefresh();
       await refetchOrders();
     } finally {
       setRefreshing(false);
     }
-  }, [refreshing, silentRefresh, refetchOrders]);
+  }, [refreshing, refetchOrders]);
 
   const refreshNowRef = useRef(refreshNow);
   useEffect(() => {
@@ -146,10 +146,9 @@ export function KitchenBoard() {
   const { data: stationsData } = useQuery({
     queryKey: ['stations', user?.organizationId, user?.branchId],
     queryFn: async () => {
-      const freshToken = (await silentRefresh()) ?? token;
       const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
       const res = await fetch(`${API_BASE}/api/stations?${branchParam}`, {
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
       });
       if (!res.ok) throw new Error('Failed to fetch stations');
       const json = await res.json();
@@ -229,10 +228,12 @@ export function KitchenBoard() {
       itemId: string;
       reason: string;
     }) => {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/orders/${orderId}/items/${itemId}/cancel`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({ reason }),
       });
       if (!res.ok) throw new Error('Failed to cancel item');

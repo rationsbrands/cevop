@@ -71,7 +71,7 @@ function TimeElapsed({ createdAt, className }: { createdAt: string; className?: 
 }
 
 export function ServiceBoard() {
-  const { user, token, logout, silentRefresh } = useAuth() as any;
+  const { user, token, logout } = useAuth() as any;
   const { mode, setMode } = useTheme();
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
 
@@ -97,11 +97,10 @@ export function ServiceBoard() {
   const { data: ordersData, refetch: refetchOrders } = useQuery({
     queryKey: ['service-orders', user?.organizationId, user?.branchId],
     queryFn: async () => {
-      const freshToken = (await silentRefresh()) ?? token;
       const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
       const res = await fetch(
         `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&status=READY&limit=50${branchParam}`,
-        { headers: { Authorization: `Bearer ${freshToken}` } },
+        { headers: { Authorization: `Bearer ${tokenRef.current}` } },
       );
       if (!res.ok) throw new Error('Failed to fetch orders');
       const json = await res.json();
@@ -114,10 +113,9 @@ export function ServiceBoard() {
   const { data: callsData, refetch: refetchCalls } = useQuery({
     queryKey: ['service-calls', user?.organizationId, user?.branchId],
     queryFn: async () => {
-      const freshToken = (await silentRefresh()) ?? token;
       const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
       const res = await fetch(`${API_BASE}/api/waiter-calls?status=PENDING${branchParam}`, {
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
       });
       if (!res.ok) throw new Error('Failed to fetch calls');
       const json = await res.json();
@@ -130,10 +128,9 @@ export function ServiceBoard() {
   const { data: serviceRequestsData, refetch: refetchRequests } = useQuery({
     queryKey: ['service-requests', user?.organizationId, user?.branchId],
     queryFn: async () => {
-      const freshToken = (await silentRefresh()) ?? token;
       const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
       const res = await fetch(`${API_BASE}/api/service-requests?status=PENDING${branchParam}`, {
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
       });
       if (!res.ok) throw new Error('Failed to fetch service requests');
       const json = await res.json();
@@ -146,9 +143,8 @@ export function ServiceBoard() {
   const { data: tablesData, refetch: refetchTables } = useQuery({
     queryKey: ['tables', user?.organizationId, user?.branchId],
     queryFn: async () => {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/tables?_=${Date.now()}`, {
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
       });
       if (!res.ok) throw new Error('Failed to fetch tables');
       const json = await res.json();
@@ -171,10 +167,12 @@ export function ServiceBoard() {
 
   const updateOrderStatusMutation = useMutation({
     mutationFn: async ({ orderId, status }: { orderId: string; status: string }) => {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/orders/${orderId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({ status }),
       });
       if (!res.ok) throw new Error('Failed to update order');
@@ -187,10 +185,12 @@ export function ServiceBoard() {
 
   const updateCallStatusMutation = useMutation({
     mutationFn: async ({ callId, status }: { callId: string; status: string }) => {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/waiter-calls/${callId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({ status }),
       });
       if (!res.ok) throw new Error('Failed to update call');
@@ -203,10 +203,12 @@ export function ServiceBoard() {
 
   const updateRequestStatusMutation = useMutation({
     mutationFn: async ({ requestId, status }: { requestId: string; status: string }) => {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/service-requests/${requestId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({ status }),
       });
       if (!res.ok) throw new Error('Failed to update request');
@@ -221,12 +223,11 @@ export function ServiceBoard() {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await silentRefresh();
       await Promise.all([refetchOrders(), refetchCalls(), refetchRequests(), refetchTables()]);
     } finally {
       setRefreshing(false);
     }
-  }, [refreshing, silentRefresh, refetchOrders, refetchCalls, refetchRequests, refetchTables]);
+  }, [refreshing, refetchOrders, refetchCalls, refetchRequests, refetchTables]);
 
   const refreshNowRef = useRef(refreshNow);
   useEffect(() => {
@@ -322,10 +323,12 @@ export function ServiceBoard() {
 
   const closeSessionMutation = useMutation({
     mutationFn: async ({ sessionId, nextStatus }: { sessionId: string; nextStatus: string }) => {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/close`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({ nextStatus }),
       });
       if (!res.ok) throw new Error('Failed to close session');
@@ -336,10 +339,12 @@ export function ServiceBoard() {
 
   const updateTableStatusMutation = useMutation({
     mutationFn: async ({ tableId, status }: { tableId: string; status: string }) => {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/tables/${tableId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({ status }),
       });
       if (!res.ok) throw new Error('Failed to update table status');
@@ -358,7 +363,6 @@ export function ServiceBoard() {
       id: string;
       waiterId: string | null;
     }) => {
-      const freshToken = (await silentRefresh()) ?? token;
       const url =
         type === 'CALL'
           ? `${API_BASE}/api/waiter-calls/${id}/assign`
@@ -368,7 +372,10 @@ export function ServiceBoard() {
 
       const res = await fetch(url, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({ waiterId }),
       });
       if (!res.ok) throw new Error('Failed to assign waiter');
@@ -393,10 +400,12 @@ export function ServiceBoard() {
       itemId: string;
       reason: string;
     }) => {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/orders/${orderId}/items/${itemId}/cancel`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({ reason }),
       });
       if (!res.ok) throw new Error('Failed to cancel item');

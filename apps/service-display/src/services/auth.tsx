@@ -221,8 +221,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return null;
           }
           if (res.status === 429) {
-            // Server is hammering us or we are hammering it. 30s cool down.
-            coolDownUntil.current = Date.now() + 30_000;
+            // Read Retry-After header (set by our server) and apply backoff with jitter
+            const retryAfterHeader = res.headers.get('Retry-After');
+            const retryAfterJson = await res
+              .json()
+              .then((j: any) => j?.retryAfter)
+              .catch(() => null);
+            const retryAfterSec = Number(retryAfterHeader ?? retryAfterJson ?? 60);
+            const jitter = Math.random() * 10_000; // 0-10s jitter prevents thundering herd
+            coolDownUntil.current = Date.now() + retryAfterSec * 1000 + jitter;
+            // Do NOT log out — the existing in-memory token may still be valid
+            return token;
           }
           return token;
         }
@@ -236,6 +245,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch {
           void 0;
         }
+
+        // Broadcast the new token to other tabs so they don't refresh independently
+        try {
+          const bc = new BroadcastChannel('cevop_auth_service');
+          bc.postMessage({ type: 'TOKEN_REFRESHED', accessToken: data.accessToken });
+          bc.close();
+        } catch {
+          /* BroadcastChannel not supported */
+        }
+
         return data.accessToken;
       } catch {
         return token;
@@ -251,6 +270,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     silentRefreshRef.current = () => silentRefresh();
   }, [silentRefresh]);
+
+  // BroadcastChannel: receive token refreshed by another tab/device window
+  // so this context doesn't need to make its own refresh call.
+  useEffect(() => {
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('cevop_auth_service');
+      bc.onmessage = (ev) => {
+        if (ev.data?.type === 'TOKEN_REFRESHED' && typeof ev.data.accessToken === 'string') {
+          setToken(ev.data.accessToken);
+          lastRefreshedAt.current = Date.now();
+          scheduleRefresh(ev.data.accessToken);
+        }
+      };
+    } catch {
+      /* BroadcastChannel not supported */
+    }
+    return () => {
+      try {
+        bc?.close();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [scheduleRefresh]);
 
   useEffect(() => {
     async function handleWake() {
@@ -318,6 +362,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           headers: AUTH_HEADERS,
         });
         if (!res.ok) {
+          if (res.status === 429) {
+            // Rate-limited on startup — preserve session marker, apply backoff, stay logged in
+            const retryAfterHeader = res.headers.get('Retry-After');
+            const retryAfterSec = Number(retryAfterHeader ?? 60);
+            const jitter = Math.random() * 10_000;
+            coolDownUntil.current = Date.now() + retryAfterSec * 1000 + jitter;
+            setLoading(false);
+            return;
+          }
           // Clear the session marker so we don't try to refresh on every subsequent page load
           // This happens in dev when the DB is reset and tokens are wiped
           doLogout();

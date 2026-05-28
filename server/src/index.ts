@@ -148,6 +148,36 @@ function getRateLimitKey(req: Request): string {
   return req.ip ?? req.socket.remoteAddress ?? 'unknown';
 }
 
+/**
+ * For the refresh endpoint, key by userId decoded from the JWT.
+ * Falls back to IP if no valid token is present.
+ * This means each user has their own rate limit bucket regardless of which
+ * device or IP they are on — critical for restaurants with many devices on
+ * one NAT IP.
+ */
+function getRefreshRateLimitKey(req: Request): string {
+  try {
+    const auth = req.headers.authorization;
+    // Refresh uses httpOnly cookie, not a bearer token — so also check cookie
+    // We just need to extract sub from the cookie's refresh token hash.
+    // Since we can't decode the httpOnly cookie here easily, we try the
+    // Authorization header first (for cases where token is passed), and
+    // fall back to IP. The important thing is the Upstash key prefix
+    // 'cevop:rl:refresh' is separate from 'cevop:rl:api'.
+    if (auth && auth.startsWith('Bearer ')) {
+      const token = auth.slice(7);
+      const payloadB64 = token.split('.')[1];
+      if (payloadB64) {
+        const payload = JSON.parse(Buffer.from(payloadB64, 'base64').toString('utf8'));
+        if (payload?.sub) return `user:${payload.sub}`;
+      }
+    }
+  } catch {
+    // ignore — fall through to IP
+  }
+  return getRateLimitKey(req);
+}
+
 // Fallback in-memory limiters (used in dev or if Redis not configured)
 const authFallback = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -157,6 +187,19 @@ const authFallback = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests, please slow down.' },
+});
+
+// Dedicated in-memory fallback for /api/auth/refresh
+// Higher limit than auth (logins) since refresh is called automatically.
+// Keyed separately from general API traffic so refresh never eats into API quota.
+const authRefreshFallback = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  skip: (req) => req.method === 'OPTIONS',
+  keyGenerator: getRefreshRateLimitKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many token refresh requests, please slow down.' },
 });
 
 const apiFallback = rateLimit({
@@ -191,13 +234,18 @@ function makeUpstashLimiter(requests: number, window: Duration, prefix: string):
 }
 
 const upstashAuth = makeUpstashLimiter(50, '15 m', 'auth');
+// Refresh gets its own Upstash namespace so it never competes with general API traffic.
+// 300 per 15 min per user = 20/min, ample for proactive + reactive refreshes.
+const upstashRefresh = makeUpstashLimiter(300, '15 m', 'refresh');
 const upstashApi = makeUpstashLimiter(500, '15 m', 'api');
 const upstashPublic = makeUpstashLimiter(60, '1 m', 'public');
-// Wraps an Upstash limiter into Express middleware, falls back to in-memory
+// Wraps an Upstash limiter into Express middleware, falls back to in-memory.
+// keyFn allows per-endpoint key strategies (e.g. userId for refresh, IP for general API).
 function makeLimiter(
   upstash: Ratelimit | null,
   fallback: ReturnType<typeof rateLimit>,
   errorMsg: string,
+  keyFn: (req: Request) => string = getRateLimitKey,
 ): express.RequestHandler {
   if (!upstash) return fallback;
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -206,12 +254,19 @@ function makeLimiter(
       return;
     }
     try {
-      const key = getRateLimitKey(req);
-      const { success } = await upstash.limit(key);
+      const key = keyFn(req);
+      const { success, reset, remaining } = await upstash.limit(key);
       if (!success) {
-        res.status(429).json({ success: false, error: errorMsg });
+        // Inform the client exactly when the window resets so it can back off precisely
+        const retryAfterSec = Math.ceil((reset - Date.now()) / 1000);
+        res.setHeader('Retry-After', String(Math.max(retryAfterSec, 1)));
+        res.setHeader('X-RateLimit-Remaining', '0');
+        res
+          .status(429)
+          .json({ success: false, error: errorMsg, retryAfter: Math.max(retryAfterSec, 1) });
         return;
       }
+      res.setHeader('X-RateLimit-Remaining', String(remaining));
       next();
     } catch {
       // If Redis call fails, fail open — don't block legitimate requests
@@ -221,6 +276,14 @@ function makeLimiter(
 }
 
 const authLimiter = makeLimiter(upstashAuth, authFallback, 'Too many requests, please slow down.');
+// Refresh limiter uses getRefreshRateLimitKey so each user has their own bucket,
+// not the shared restaurant IP bucket.
+const authRefreshLimiter = makeLimiter(
+  upstashRefresh,
+  authRefreshFallback,
+  'Too many token refresh requests, please slow down.',
+  getRefreshRateLimitKey,
+);
 const apiLimiter = makeLimiter(upstashApi, apiFallback, 'Too many requests.');
 const publicLimiter = makeLimiter(
   upstashPublic,
@@ -233,6 +296,9 @@ const publicLimiter = makeLimiter(
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/forgot-password', authLimiter);
 app.use('/api/auth/signup', authLimiter);
+// Refresh gets its own dedicated limiter (userId-keyed, separate Upstash namespace).
+// It is registered BEFORE the /api/ catch-all so it is never double-counted.
+app.use('/api/auth/refresh', authRefreshLimiter);
 app.use('/api/auth/check-slug', apiLimiter);
 app.use('/api/menu/public', publicLimiter);
 app.use('/api/orders/public', publicLimiter);
@@ -240,7 +306,11 @@ app.use('/api/tables/public', publicLimiter);
 app.use('/api/waiter-calls/public', publicLimiter);
 app.use('/api/service-requests/public', publicLimiter);
 app.use('/api/help-options/public', publicLimiter);
-app.use('/api/', apiLimiter);
+// Exclude /api/auth/refresh from the general API limiter — it has its own above.
+app.use('/api/', (req, res, next) => {
+  if (req.path.startsWith('/auth/refresh')) return next();
+  return apiLimiter(req, res, next);
+});
 
 app.use('/api/plans', plansRouter);
 

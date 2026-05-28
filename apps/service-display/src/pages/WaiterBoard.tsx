@@ -47,7 +47,7 @@ function TimeElapsed({ createdAt, className }: { createdAt: string; className?: 
 }
 
 export function WaiterBoard() {
-  const { user, token, logout, silentRefresh, updateUser } = useAuth() as any;
+  const { user, token, logout, updateUser } = useAuth() as any;
   const { mode, setMode } = useTheme();
   const [showPOS, setShowPOS] = useState(false);
   const [activeTab, setActiveTab] = useState<'tasks' | 'tables'>('tasks');
@@ -144,10 +144,9 @@ export function WaiterBoard() {
     queryFn: async () => {
       if (!token || (user?.role === 'WAITER' && !user?.isOnShift))
         return { mine: [], unassigned: [] };
-      const freshToken = (await silentRefresh()) ?? token;
       const bq = userBranchId ? `?branchId=${userBranchId}` : '';
       const res = await fetch(`${API_BASE}/api/waiter-tasks${bq}`, {
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
       });
       if (!res.ok) throw new Error('Failed to fetch tasks');
       const json = await res.json();
@@ -165,10 +164,9 @@ export function WaiterBoard() {
     queryKey: ['tables', user?.organizationId, userBranchId],
     queryFn: async () => {
       if (!token) return [];
-      const freshToken = (await silentRefresh()) ?? token;
       const bq = userBranchId ? `?branchId=${userBranchId}` : '';
       const res = await fetch(`${API_BASE}/api/tables?_=${Date.now()}${bq}`, {
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
       });
       if (!res.ok) throw new Error('Failed to fetch tables');
       const json = await res.json();
@@ -213,15 +211,12 @@ export function WaiterBoard() {
     const promise = (async () => {
       setRefreshing(true);
       try {
-        const freshToken = (await silentRefresh()) ?? token;
-        if (freshToken) {
-          const meRes = await fetch(`${API_BASE}/api/auth/me`, {
-            headers: { Authorization: `Bearer ${freshToken}` },
-          }).catch(() => null);
-          if (meRes?.ok) {
-            const meData = await meRes.json();
-            if (meData?.data) updateUser(meData.data);
-          }
+        const meRes = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${tokenRef.current}` },
+        }).catch(() => null);
+        if (meRes?.ok) {
+          const meData = await meRes.json();
+          if (meData?.data) updateUser(meData.data);
         }
         await Promise.all([refetchTasks(), refetchTables()]);
       } finally {
@@ -231,7 +226,7 @@ export function WaiterBoard() {
     })();
     refreshLockRef.current = promise;
     return promise;
-  }, [refreshing, silentRefresh, token, updateUser, refetchTasks, refetchTables]);
+  }, [refreshing, updateUser, refetchTasks, refetchTables]);
 
   const refreshNowRef = useRef(refreshNow);
   useEffect(() => {
@@ -320,10 +315,12 @@ export function WaiterBoard() {
         await syncManager.addToQueue(url, 'PATCH', body, {});
         return { offline: true };
       }
-      const freshToken = await silentRefresh();
       const res = await fetch(url, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error('Failed');
@@ -364,10 +361,9 @@ export function WaiterBoard() {
         await syncManager.addToQueue(url, 'PATCH', {}, {});
         return { offline: true };
       }
-      const freshToken = await silentRefresh();
       const res = await fetch(url, {
         method: 'PATCH',
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
       });
       if (!res.ok) throw new Error('Failed');
       return res.json();
@@ -410,10 +406,12 @@ export function WaiterBoard() {
 
   async function clearTable(sessionId: string) {
     try {
-      const freshToken = (await silentRefresh()) ?? token;
       await fetch(`${API_BASE}/api/sessions/${sessionId}/close`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({ nextStatus: 'CLEANING' }),
       });
       queryClient.invalidateQueries({ queryKey: ['tables'] });
@@ -425,9 +423,8 @@ export function WaiterBoard() {
   async function fetchBill(sessionId: string, tableLabel: string) {
     setBillModal({ sessionId, tableLabel, data: null, loading: true });
     try {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/bill`, {
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
       });
       const data = await res.json();
       if (data.success) setBillModal({ sessionId, tableLabel, data: data.data, loading: false });
@@ -441,10 +438,12 @@ export function WaiterBoard() {
     if (!billModal?.data || paymentSubmitting) return;
     setPaymentSubmitting(true);
     try {
-      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/payments`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
         body: JSON.stringify({
           sessionId: billModal.sessionId,
           amount: billModal.data.balance,
