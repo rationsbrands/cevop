@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../services/auth';
 import { useTheme } from '../context/theme';
@@ -24,65 +25,7 @@ interface Order {
   createdAt: string;
   tableId: string;
   assignedWaiter?: string | null;
-}
-interface WaiterCall {
-  id: string;
-  status: string;
-  reason?: string;
-  assignedTo?: string | null;
-  assignedUser?: { id: string; name: string } | null;
-  table?: { label: string };
-  createdAt: string;
-  tableId: string;
-}
-interface ServiceRequest {
-  id: string;
-  status: string;
-  serviceType: string;
-  notes?: string;
-  assignedTo?: string | null;
-  assignedUser?: { id: string; name: string } | null;
-  table?: { label: string };
-  createdAt: string;
-  tableId: string;
-}
-
-type ServiceSnapshot = {
-  ts: number;
-  orders: Order[];
-  ordersHasMore: boolean;
-  ordersCursor: string | null;
-  waiterCalls: WaiterCall[];
-  serviceRequests: ServiceRequest[];
-  tables: any[];
-};
-
-function readServiceSnapshot(key: string): ServiceSnapshot | null {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as ServiceSnapshot;
-    if (!parsed || typeof parsed.ts !== 'number') return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writeServiceSnapshot(key: string, snapshot: ServiceSnapshot): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(snapshot));
-  } catch {
-    void 0;
-  }
-}
-
-function serviceSnapshotKey(
-  user: { organizationId: string; branchId?: string | null } | null,
-): string | null {
-  if (!user?.organizationId) return null;
-  const scope = user.branchId ? `branch:${user.branchId}` : 'org';
-  return `cevop_service_snapshot:service:${user.organizationId}:${scope}`;
+  branchId: string;
 }
 
 const ACTIVE_STATUSES = ['RECEIVED', 'PREPARING', 'READY'];
@@ -128,81 +71,165 @@ function TimeElapsed({ createdAt, className }: { createdAt: string; className?: 
 }
 
 export function ServiceBoard() {
-  const { user, token, logout, silentRefresh, pushStatus, enablePush } = useAuth();
+  const { user, token, logout, silentRefresh } = useAuth() as any;
   const { mode, setMode } = useTheme();
-  const [installAvailable, setInstallAvailable] = useState(false);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
 
   const themeLabel = mode === 'system' ? 'OS' : mode === 'dark' ? 'D' : 'L';
   const nextThemeMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [ordersHasMore, setOrdersHasMore] = useState(false);
-  const [ordersCursor, setOrdersCursor] = useState<string | null>(null);
-  const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
-  const [waiterCalls, setWaiterCalls] = useState<WaiterCall[]>([]);
-  const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isOnline] = useState(navigator.onLine);
   const [socketConnected, setSocketConnected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [offlineSnapshotTs, setOfflineSnapshotTs] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'orders' | 'calls' | 'tables'>('orders');
-  const [tables, setTables] = useState<any[]>([]);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const lastSyncAtRef = useRef(0);
-  const [onlineWaiters, setOnlineWaiters] = useState<
-    { id: string; name: string; online: boolean }[]
-  >([]);
-  const [assigningItems, setAssigningItems] = useState<Set<string>>(new Set());
 
-  // Track items currently being updated to prevent double-clicks
-  const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
-
-  const applyOrderUpdate = useCallback((order: Order) => {
-    setOrders((prev) => {
-      if (!ACTIVE_STATUSES.includes(order.status)) return prev.filter((o) => o.id !== order.id);
-      const exists = prev.some((o) => o.id === order.id);
-      if (exists) return prev.map((o) => (o.id === order.id ? order : o));
-      return [...prev, order];
-    });
-  }, []);
-
-  // Mutable ref for token so socket reconnects use the latest token without tearing down the connection
+  // Mutable ref for token so socket reconnects use the latest token
   const tokenRef = useRef(token);
   useEffect(() => {
     tokenRef.current = token;
   }, [token]);
 
-  const isStandalone =
-    typeof window !== 'undefined' &&
-    (window.matchMedia?.('(display-mode: standalone)')?.matches || (navigator as any)?.standalone);
-  const isIos =
-    typeof navigator !== 'undefined' &&
-    /iphone|ipad|ipod/i.test(navigator.userAgent) &&
-    !(window as any).MSStream;
-  const showInstallButton = !isStandalone && (installAvailable || isIos);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    const update = () => setInstallAvailable(!!(window as any).__cevopDeferredInstallPrompt);
-    update();
-    window.addEventListener('cevop-install-available', update as any);
-    return () => window.removeEventListener('cevop-install-available', update as any);
-  }, []);
+  // Queries
+  const { data: ordersData, refetch: refetchOrders } = useQuery({
+    queryKey: ['service-orders', user?.organizationId, user?.branchId],
+    queryFn: async () => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
+      const res = await fetch(
+        `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&status=READY&limit=50${branchParam}`,
+        { headers: { Authorization: `Bearer ${freshToken}` } },
+      );
+      if (!res.ok) throw new Error('Failed to fetch orders');
+      const json = await res.json();
+      return json;
+    },
+    enabled: !!token && !!user,
+    staleTime: 30000,
+  });
 
-  const handleInstall = useCallback(async () => {
-    const deferred = (window as any).__cevopDeferredInstallPrompt;
-    if (deferred && typeof deferred.prompt === 'function') {
-      try {
-        await deferred.prompt();
-        await deferred.userChoice.catch(() => void 0);
-      } finally {
-        (window as any).__cevopDeferredInstallPrompt = null;
-        window.dispatchEvent(new Event('cevop-install-available'));
-      }
-      return;
+  const { data: callsData, refetch: refetchCalls } = useQuery({
+    queryKey: ['service-calls', user?.organizationId, user?.branchId],
+    queryFn: async () => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
+      const res = await fetch(`${API_BASE}/api/waiter-calls?status=PENDING${branchParam}`, {
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      if (!res.ok) throw new Error('Failed to fetch calls');
+      const json = await res.json();
+      return json.data;
+    },
+    enabled: !!token && !!user,
+    staleTime: 30000,
+  });
+
+  const { data: serviceRequestsData, refetch: refetchRequests } = useQuery({
+    queryKey: ['service-requests', user?.organizationId, user?.branchId],
+    queryFn: async () => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
+      const res = await fetch(`${API_BASE}/api/service-requests?status=PENDING${branchParam}`, {
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      if (!res.ok) throw new Error('Failed to fetch service requests');
+      const json = await res.json();
+      return json.data;
+    },
+    enabled: !!token && !!user,
+    staleTime: 30000,
+  });
+
+  const { data: tablesData, refetch: refetchTables } = useQuery({
+    queryKey: ['tables', user?.organizationId, user?.branchId],
+    queryFn: async () => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const res = await fetch(`${API_BASE}/api/tables?_=${Date.now()}`, {
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      if (!res.ok) throw new Error('Failed to fetch tables');
+      const json = await res.json();
+      return json.data;
+    },
+    enabled: !!token && !!user,
+    staleTime: 30000,
+  });
+
+  const orders = useMemo(() => {
+    if (!ordersData?.success) return [];
+    return ordersData.data.filter((o: Order) => ACTIVE_STATUSES.includes(o.status));
+  }, [ordersData]);
+
+  const waiterCalls = callsData || [];
+  const serviceRequests = serviceRequestsData || [];
+  const tables = tablesData || [];
+
+  const updateOrderStatusMutation = useMutation({
+    mutationFn: async ({ orderId, status }: { orderId: string; status: string }) => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const res = await fetch(`${API_BASE}/api/orders/${orderId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error('Failed to update order');
+      return res.json();
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['service-orders'] });
+    },
+  });
+
+  const updateCallStatusMutation = useMutation({
+    mutationFn: async ({ callId, status }: { callId: string; status: string }) => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const res = await fetch(`${API_BASE}/api/waiter-calls/${callId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error('Failed to update call');
+      return res.json();
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['service-calls'] });
+    },
+  });
+
+  const updateRequestStatusMutation = useMutation({
+    mutationFn: async ({ requestId, status }: { requestId: string; status: string }) => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const res = await fetch(`${API_BASE}/api/service-requests/${requestId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error('Failed to update request');
+      return res.json();
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['service-requests'] });
+    },
+  });
+
+  const refreshNow = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await silentRefresh();
+      await Promise.all([refetchOrders(), refetchCalls(), refetchRequests(), refetchTables()]);
+    } finally {
+      setRefreshing(false);
     }
-    if (isIos) setInstallHelpOpen(true);
-  }, [isIos]);
+  }, [refreshing, silentRefresh, refetchOrders, refetchCalls, refetchRequests, refetchTables]);
+
+  const refreshNowRef = useRef(refreshNow);
+  useEffect(() => {
+    refreshNowRef.current = refreshNow;
+  }, [refreshNow]);
 
   const playAlert = useCallback(() => {
     try {
@@ -221,204 +248,13 @@ export function ServiceBoard() {
     }
   }, []);
 
-  const loadOnlineWaiters = useCallback(async () => {
-    const freshToken = await silentRefresh();
-    if (!freshToken) return;
-    const res = await fetch(`${API_BASE}/api/waiter-calls/waiters/online`, {
-      headers: { Authorization: `Bearer ${freshToken}` },
-    });
-    if (!res.ok) return;
-    const body = await res.json();
-    if (body?.success) setOnlineWaiters(body.data ?? []);
-  }, [silentRefresh]);
-
-  const loadData = useCallback(async () => {
-    if (!token) return;
-    const cacheKey = serviceSnapshotKey(user ?? null);
-    if (!navigator.onLine && cacheKey) {
-      const snap = readServiceSnapshot(cacheKey);
-      if (snap) {
-        setOrders(snap.orders);
-        setOrdersHasMore(snap.ordersHasMore);
-        setOrdersCursor(snap.ordersCursor);
-        setWaiterCalls(snap.waiterCalls);
-        setServiceRequests(snap.serviceRequests);
-        setTables(snap.tables);
-        setOfflineSnapshotTs(snap.ts);
-      }
-      return;
-    }
-
-    try {
-      const freshToken = (await silentRefresh()) ?? token;
-      if (!freshToken) return;
-      const headers = { Authorization: `Bearer ${freshToken}` };
-      const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
-      const [ordersRes, callsRes, serviceRes, tablesRes] = await Promise.all([
-        fetch(
-          `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&status=READY&limit=50${branchParam}`,
-          { headers },
-        ),
-        fetch(`${API_BASE}/api/waiter-calls?status=PENDING${branchParam}`, { headers }),
-        fetch(`${API_BASE}/api/service-requests?status=PENDING${branchParam}`, { headers }),
-        fetch(`${API_BASE}/api/tables?_=${Date.now()}`, { headers }),
-      ]);
-
-      if (!ordersRes.ok || !callsRes.ok || !serviceRes.ok || !tablesRes.ok) {
-        throw new Error('Network error');
-      }
-
-      const [ordersData, callsData, serviceData, tablesData] = await Promise.all([
-        ordersRes.json(),
-        callsRes.json(),
-        serviceRes.json(),
-        tablesRes.json(),
-      ]);
-
-      const nextOrders: Order[] = ordersData?.success
-        ? ordersData.data.filter((o: Order) => ACTIVE_STATUSES.includes(o.status))
-        : orders;
-      const nextOrdersHasMore = ordersData?.success
-        ? Boolean(ordersData.pagination?.hasMore)
-        : ordersHasMore;
-      const nextOrdersCursor = ordersData?.success
-        ? (ordersData.pagination?.nextCursor ?? null)
-        : ordersCursor;
-      const nextCalls: WaiterCall[] = callsData?.success ? callsData.data : waiterCalls;
-      const nextReqs: ServiceRequest[] = serviceData?.success ? serviceData.data : serviceRequests;
-      const nextTables: any[] = tablesData?.success ? tablesData.data : tables;
-
-      setOrders(nextOrders);
-      setOrdersHasMore(nextOrdersHasMore);
-      setOrdersCursor(nextOrdersCursor);
-      setWaiterCalls(nextCalls);
-      setServiceRequests(nextReqs);
-      setTables(nextTables);
-      setOfflineSnapshotTs(null);
-
-      if (cacheKey) {
-        writeServiceSnapshot(cacheKey, {
-          ts: Date.now(),
-          orders: nextOrders,
-          ordersHasMore: nextOrdersHasMore,
-          ordersCursor: nextOrdersCursor,
-          waiterCalls: nextCalls,
-          serviceRequests: nextReqs,
-          tables: nextTables,
-        });
-      }
-    } catch {
-      if (cacheKey) {
-        const snap = readServiceSnapshot(cacheKey);
-        if (snap) {
-          setOrders(snap.orders);
-          setOrdersHasMore(snap.ordersHasMore);
-          setOrdersCursor(snap.ordersCursor);
-          setWaiterCalls(snap.waiterCalls);
-          setServiceRequests(snap.serviceRequests);
-          setTables(snap.tables);
-          setOfflineSnapshotTs(snap.ts);
-        }
-      }
-    }
-  }, [
-    orders,
-    ordersCursor,
-    ordersHasMore,
-    serviceRequests,
-    silentRefresh,
-    tables,
-    token,
-    user,
-    waiterCalls,
-  ]);
-
-  const loadDataRef = useRef(loadData);
-  useEffect(() => {
-    loadDataRef.current = loadData;
-  }, [loadData]);
-
-  const loadOnlineWaitersRef = useRef(loadOnlineWaiters);
-  useEffect(() => {
-    loadOnlineWaitersRef.current = loadOnlineWaiters;
-  }, [loadOnlineWaiters]);
-
-  const refreshNow = useCallback(async () => {
-    if (refreshing) return;
-    setRefreshing(true);
-    try {
-      await silentRefresh();
-      await Promise.all([loadDataRef.current(), loadOnlineWaitersRef.current()]);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [refreshing, silentRefresh]);
-
-  const refreshNowRef = useRef(refreshNow);
-  useEffect(() => {
-    refreshNowRef.current = refreshNow;
-  }, [refreshNow]);
-
-  const loadMoreOrders = useCallback(async () => {
-    if (!token) return;
-    if (!ordersHasMore || !ordersCursor) return;
-    if (ordersLoadingMore) return;
-    setOrdersLoadingMore(true);
-    try {
-      const freshToken = (await silentRefresh()) ?? token;
-      if (!freshToken) return;
-      const headers = { Authorization: `Bearer ${freshToken}` };
-      const branchParam = user?.branchId ? `&branchId=${user.branchId}` : '';
-      const res = await fetch(
-        `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&status=READY&limit=50&cursor=${ordersCursor}${branchParam}`,
-        { headers },
-      );
-      const body = await res.json().catch(() => null);
-      if (!res.ok || !body?.success) return;
-
-      const pageOrders: Order[] = Array.isArray(body.data) ? body.data : [];
-      setOrders((prev) => {
-        const seen = new Set(prev.map((o) => o.id));
-        const merged = [...prev];
-        for (const o of pageOrders) {
-          if (!ACTIVE_STATUSES.includes(o.status)) continue;
-          if (!seen.has(o.id)) {
-            merged.push(o);
-            seen.add(o.id);
-          }
-        }
-        return merged;
-      });
-      setOrdersHasMore(Boolean(body.pagination?.hasMore));
-      setOrdersCursor(body.pagination?.nextCursor ?? null);
-    } finally {
-      setOrdersLoadingMore(false);
-    }
-  }, [ordersCursor, ordersHasMore, ordersLoadingMore, silentRefresh, token, user]);
-
-  useEffect(() => {
-    if (!token) return;
-    const t = setTimeout(() => {
-      loadData().catch(() => void 0);
-    }, 0);
-    return () => clearTimeout(t);
-  }, [loadData, token]);
-
   // Socket setup
   useEffect(() => {
-    if (!user) return; // Wait until user is fully loaded
-
+    if (!user) return;
     const SOCKET_URL = API_BASE || window.location.origin;
     const socket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
-      auth: (cb) => {
-        cb({ token: tokenRef.current });
-      },
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 20000,
+      auth: (cb) => cb({ token: tokenRef.current }),
     });
     socketRef.current = socket;
 
@@ -429,410 +265,166 @@ export function ServiceBoard() {
       } else {
         socket.emit('JOIN_ORG', user.organizationId);
       }
-      // Re-fetch immediately on every connect (initial + reconnect) to catch missed events
       refreshNowRef.current().catch(() => void 0);
     });
     socket.on('disconnect', () => setSocketConnected(false));
 
-    socket.on('ORDER_CREATED', (order: Order) => {
+    socket.on('ORDER_CREATED', () => {
       playAlert();
-      setOrders((prev) => [...prev.filter((o) => o.id !== order.id), order]);
+      queryClient.invalidateQueries({ queryKey: ['service-orders'] });
     });
-
-    socket.on('ORDER_UPDATED', (order: Order) => applyOrderUpdate(order));
-
-    const handleWaiterOnline = () => {
-      loadOnlineWaiters().catch(() => void 0);
-    };
-    const handleWaiterOffline = () => {
-      loadOnlineWaiters().catch(() => void 0);
-    };
-    socket.on('WAITER_ONLINE', handleWaiterOnline);
-    socket.on('WAITER_OFFLINE', handleWaiterOffline);
-
-    socket.on('WAITER_CALLED', (call: WaiterCall) => {
+    socket.on('ORDER_UPDATED', () =>
+      queryClient.invalidateQueries({ queryKey: ['service-orders'] }),
+    );
+    socket.on('WAITER_ONLINE', () =>
+      queryClient.invalidateQueries({ queryKey: ['online-waiters'] }),
+    );
+    socket.on('WAITER_OFFLINE', () =>
+      queryClient.invalidateQueries({ queryKey: ['online-waiters'] }),
+    );
+    socket.on('WAITER_CALLED', () => {
       playAlert();
-      setWaiterCalls((prev) => [...prev.filter((c) => c.id !== call.id), call]);
+      queryClient.invalidateQueries({ queryKey: ['service-calls'] });
     });
-
-    socket.on('WAITER_CALL_UPDATED', (call: WaiterCall) => {
-      setWaiterCalls((prev) => {
-        if (call.status !== 'PENDING') return prev.filter((c) => c.id !== call.id);
-        const exists = prev.some((c) => c.id === call.id);
-        if (exists) return prev.map((c) => (c.id === call.id ? call : c));
-        return [...prev, call];
-      });
-    });
-
-    socket.on('SERVICE_REQUESTED', (req: ServiceRequest) => {
+    socket.on('WAITER_CALL_UPDATED', () =>
+      queryClient.invalidateQueries({ queryKey: ['service-calls'] }),
+    );
+    socket.on('SERVICE_REQUESTED', () => {
       playAlert();
-      setServiceRequests((prev) => [...prev.filter((r) => r.id !== req.id), req]);
+      queryClient.invalidateQueries({ queryKey: ['service-requests'] });
+    });
+    socket.on('SERVICE_REQUEST_UPDATED', () =>
+      queryClient.invalidateQueries({ queryKey: ['service-requests'] }),
+    );
+    socket.on('TABLE_STATUS_CHANGED', () =>
+      queryClient.invalidateQueries({ queryKey: ['tables'] }),
+    );
+    socket.on('SESSION_OPENED', () => queryClient.invalidateQueries({ queryKey: ['tables'] }));
+    socket.on('SESSION_CLOSED', () => {
+      queryClient.invalidateQueries({ queryKey: ['tables'] });
+      queryClient.invalidateQueries({ queryKey: ['service-calls'] });
+      queryClient.invalidateQueries({ queryKey: ['service-requests'] });
     });
 
-    socket.on('SERVICE_REQUEST_UPDATED', (req: ServiceRequest) => {
-      setServiceRequests((prev) => {
-        if (req.status !== 'PENDING') return prev.filter((r) => r.id !== req.id);
-        const exists = prev.some((r) => r.id === req.id);
-        if (exists) return prev.map((r) => (r.id === req.id ? req : r));
-        return [...prev, req];
-      });
-    });
-
-    socket.on('TABLE_STATUS_CHANGED', ({ tableId, status }) => {
-      setTables((prev) => prev.map((t) => (t.id === tableId ? { ...t, status } : t)));
-    });
-
-    socket.on('SESSION_OPENED', ({ tableId, sessionId }) => {
-      setTables((prev) =>
-        prev.map((t) => (t.id === tableId ? { ...t, activeSessionId: sessionId } : t)),
-      );
-    });
-
-    socket.on('SESSION_CLOSED', ({ tableId }) => {
-      setTables((prev) =>
-        prev.map((t) => (t.id === tableId ? { ...t, activeSessionId: null } : t)),
-      );
-      // DEFENSIVE: Wipe all requests for this table immediately
-      setWaiterCalls((prev) => prev.filter((c) => c.tableId !== tableId));
-      setServiceRequests((prev) => prev.filter((r) => r.tableId !== tableId));
-    });
-
-    const handleSyncRequired = () => {
+    socket.on('SYNC_REQUIRED', () => {
       const now = Date.now();
-      // Throttle syncs to prevent "refresh loops"
-      if (now - lastSyncAtRef.current < 2000) return; // 2s throttle — tight enough to not swallow rapid mutations
+      if (now - lastSyncAtRef.current < 2000) return;
       lastSyncAtRef.current = now;
       refreshNowRef.current().catch(() => void 0);
-    };
-    socket.on('SYNC_REQUIRED', handleSyncRequired);
-
-    // Keepalive ping every 25 seconds
-    // Prevents iOS and Android from killing idle WebSocket connections
-    const keepAlive = setInterval(() => {
-      if (socket.connected) {
-        socket.emit('ping');
-      }
-    }, 25000);
+    });
 
     return () => {
-      clearInterval(keepAlive);
-      socket.off('WAITER_ONLINE', handleWaiterOnline);
-      socket.off('WAITER_OFFLINE', handleWaiterOffline);
-      socket.off('SYNC_REQUIRED', handleSyncRequired);
       socket.disconnect();
     };
-  }, [user, playAlert, applyOrderUpdate, loadOnlineWaiters]); // Omitted `token` intentionally so it doesn't reconnect on token refresh
+  }, [user, playAlert, queryClient]);
 
-  // Online/offline
-  useEffect(() => {
-    const up = () => setIsOnline(true);
-    const down = () => setIsOnline(false);
-    window.addEventListener('online', up);
-    window.addEventListener('offline', down);
-    return () => {
-      window.removeEventListener('online', up);
-      window.removeEventListener('offline', down);
-    };
-  }, []);
+  const closeSessionMutation = useMutation({
+    mutationFn: async ({ sessionId, nextStatus }: { sessionId: string; nextStatus: string }) => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/close`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ nextStatus }),
+      });
+      if (!res.ok) throw new Error('Failed to close session');
+      return res.json();
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['tables'] }),
+  });
 
-  useEffect(() => {
-    if (isOnline) {
-      refreshNowRef.current().catch(() => void 0);
-    }
-  }, [isOnline]);
-
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible') return;
-
-      // Reconnect socket immediately if it dropped while screen was off
-      // Mobile browsers (especially iOS) aggressively kill connections
-      const socket = socketRef.current;
-      if (socket && !socket.connected) {
-        socket.connect();
-      }
-
-      // Reload data to catch anything missed while screen was off
-      refreshNowRef.current().catch(() => void 0);
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, []);
-
-  // Background Heartbeat Sync
-  useEffect(() => {
-    if (!token) return;
-
-    // Periodic refresh every 60 seconds as a fallback for missed socket events
-    const interval = setInterval(() => {
-      if (navigator.onLine) {
-        refreshNowRef.current().catch(() => void 0);
-      }
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, [token]);
-
-  async function updateOrderStatus(orderId: string, status: string) {
-    if (updatingItems.has(orderId)) return;
-    setUpdatingItems((prev) => new Set(prev).add(orderId));
-    try {
-      const freshToken = await silentRefresh();
-      if (!freshToken) return;
-      const res = await fetch(`${API_BASE}/api/orders/${orderId}/status`, {
+  const updateTableStatusMutation = useMutation({
+    mutationFn: async ({ tableId, status }: { tableId: string; status: string }) => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const res = await fetch(`${API_BASE}/api/tables/${tableId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
         body: JSON.stringify({ status }),
       });
-      let body: any = null;
-      try {
-        body = await res.json();
-      } catch {
-        body = null;
-      }
-      if (!res.ok || !body?.success) {
-        await loadData();
-        return;
-      }
-      if (body?.data) applyOrderUpdate(body.data);
-    } finally {
-      setUpdatingItems((prev) => {
-        const n = new Set(prev);
-        n.delete(orderId);
-        return n;
-      });
-    }
-  }
+      if (!res.ok) throw new Error('Failed to update table status');
+      return res.json();
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['tables'] }),
+  });
 
-  async function toggleItemAvailability(menuItemId: string) {
-    try {
+  const assignWaiterMutation = useMutation({
+    mutationFn: async ({
+      type,
+      id,
+      waiterId,
+    }: {
+      type: 'ORDER' | 'CALL' | 'REQUEST';
+      id: string;
+      waiterId: string | null;
+    }) => {
       const freshToken = (await silentRefresh()) ?? token;
-      if (!freshToken) return;
+      const url =
+        type === 'CALL'
+          ? `${API_BASE}/api/waiter-calls/${id}/assign`
+          : type === 'REQUEST'
+            ? `${API_BASE}/api/service-requests/${id}/assign`
+            : `${API_BASE}/api/orders/${id}/assign-waiter`;
 
-      await fetch(`${API_BASE}/api/menu/items/${menuItemId}/toggle`, {
+      const res = await fetch(url, {
         method: 'PATCH',
-        headers: { Authorization: `Bearer ${freshToken}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ waiterId }),
       });
-      // Socket event will update other clients — no need to reload locally
-    } catch {
-      void 0;
-    }
-  }
+      if (!res.ok) throw new Error('Failed to assign waiter');
+      return res.json();
+    },
+    onSettled: (data, err, variables) => {
+      if (variables.type === 'ORDER')
+        queryClient.invalidateQueries({ queryKey: ['service-orders'] });
+      else if (variables.type === 'CALL')
+        queryClient.invalidateQueries({ queryKey: ['service-calls'] });
+      else queryClient.invalidateQueries({ queryKey: ['service-requests'] });
+    },
+  });
 
-  async function cancelOrderItem(orderId: string, itemId: string, itemName: string) {
-    const reason = `${itemName} unavailable`;
-    try {
+  const cancelItemMutation = useMutation({
+    mutationFn: async ({
+      orderId,
+      itemId,
+      reason,
+    }: {
+      orderId: string;
+      itemId: string;
+      reason: string;
+    }) => {
       const freshToken = (await silentRefresh()) ?? token;
-      if (!freshToken) return;
-
       const res = await fetch(`${API_BASE}/api/orders/${orderId}/items/${itemId}/cancel`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
         body: JSON.stringify({ reason }),
       });
+      if (!res.ok) throw new Error('Failed to cancel item');
+      return res.json();
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['service-orders'] }),
+  });
 
-      if (!res.ok) {
-        // Handle error quietly
-      }
-      // ORDER_UPDATED socket event will refresh the board automatically
-    } catch {
-      void 0;
-    }
+  async function updateOrderStatus(orderId: string, status: string) {
+    updateOrderStatusMutation.mutate({ orderId, status });
   }
 
   async function acknowledgeWaiterCall(callId: string) {
-    if (updatingItems.has(callId)) return;
-    setUpdatingItems((prev) => new Set(prev).add(callId));
-    try {
-      const freshToken = await silentRefresh();
-      if (!freshToken) return;
-      const res = await fetch(`${API_BASE}/api/waiter-calls/${callId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
-        body: JSON.stringify({ status: 'RESOLVED' }),
-      });
-      if (!res.ok) await loadData();
-    } finally {
-      setUpdatingItems((prev) => {
-        const n = new Set(prev);
-        n.delete(callId);
-        return n;
-      });
-    }
-  }
-
-  async function acknowledgeService(reqId: string) {
-    if (updatingItems.has(reqId)) return;
-    setUpdatingItems((prev) => new Set(prev).add(reqId));
-    try {
-      const freshToken = await silentRefresh();
-      if (!freshToken) return;
-      const res = await fetch(`${API_BASE}/api/service-requests/${reqId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
-        body: JSON.stringify({ status: 'RESOLVED' }),
-      });
-      if (!res.ok) await loadData();
-    } finally {
-      setUpdatingItems((prev) => {
-        const n = new Set(prev);
-        n.delete(reqId);
-        return n;
-      });
-    }
-  }
-
-  async function clearTable(sessionId: string) {
-    if (updatingItems.has(sessionId)) return;
-    setUpdatingItems((prev) => new Set(prev).add(sessionId));
-    try {
-      const freshToken = await silentRefresh();
-      if (!freshToken) return;
-      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/close`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
-        body: JSON.stringify({ nextStatus: 'CLEANING' }),
-      });
-      if (!res.ok) await loadData();
-    } finally {
-      setUpdatingItems((prev) => {
-        const n = new Set(prev);
-        n.delete(sessionId);
-        return n;
-      });
-    }
-  }
-
-  async function markTableEmpty(tableId: string) {
-    if (updatingItems.has(tableId)) return;
-    setUpdatingItems((prev) => new Set(prev).add(tableId));
-    try {
-      const freshToken = await silentRefresh();
-      if (!freshToken) return;
-      const res = await fetch(`${API_BASE}/api/tables/${tableId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
-        body: JSON.stringify({ status: 'EMPTY' }),
-      });
-      if (!res.ok) await loadData();
-    } finally {
-      setUpdatingItems((prev) => {
-        const n = new Set(prev);
-        n.delete(tableId);
-        return n;
-      });
-    }
-  }
-
-  useEffect(() => {
-    if (!user) return;
-    const t = setTimeout(() => {
-      loadOnlineWaiters().catch(() => void 0);
-    }, 0);
-    return () => clearTimeout(t);
-  }, [user, activeTab, loadOnlineWaiters]);
-
-  async function assignWaiterCall(callId: string, waiterId: string | null) {
-    if (assigningItems.has(callId)) return;
-    setAssigningItems((prev) => new Set(prev).add(callId));
-    try {
-      const freshToken = await silentRefresh();
-      if (!freshToken) return;
-      const res = await fetch(`${API_BASE}/api/waiter-calls/${callId}/assign`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
-        body: JSON.stringify({ waiterId }),
-      });
-      if (!res.ok) return;
-      const body = await res.json();
-      if (body?.success && body?.data) {
-        setWaiterCalls((prev) => prev.map((c) => (c.id === callId ? body.data : c)));
-      }
-    } finally {
-      setAssigningItems((prev) => {
-        const n = new Set(prev);
-        n.delete(callId);
-        return n;
-      });
-    }
-  }
-
-  async function assignServiceRequest(reqId: string, waiterId: string | null) {
-    if (assigningItems.has(reqId)) return;
-    setAssigningItems((prev) => new Set(prev).add(reqId));
-    try {
-      const freshToken = await silentRefresh();
-      if (!freshToken) return;
-      const res = await fetch(`${API_BASE}/api/service-requests/${reqId}/assign`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
-        body: JSON.stringify({ waiterId }),
-      });
-      if (!res.ok) return;
-      const body = await res.json();
-      if (body?.success && body?.data) {
-        setServiceRequests((prev) => prev.map((r) => (r.id === reqId ? body.data : r)));
-      }
-    } finally {
-      setAssigningItems((prev) => {
-        const n = new Set(prev);
-        n.delete(reqId);
-        return n;
-      });
-    }
-  }
-
-  async function assignOrder(orderId: string, waiterId: string | null) {
-    if (assigningItems.has(orderId)) return;
-    setAssigningItems((prev) => new Set(prev).add(orderId));
-    try {
-      const freshToken = await silentRefresh();
-      if (!freshToken) return;
-      const res = await fetch(`${API_BASE}/api/orders/${orderId}/assign-waiter`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
-        body: JSON.stringify({ waiterId }),
-      });
-      if (!res.ok) return;
-      const body = await res.json();
-      if (body?.success && body?.data) {
-        applyOrderUpdate(body.data);
-      }
-    } finally {
-      setAssigningItems((prev) => {
-        const n = new Set(prev);
-        n.delete(orderId);
-        return n;
-      });
-    }
+    updateCallStatusMutation.mutate({ callId, status: 'RESOLVED' });
   }
 
   const pendingCallsCount = waiterCalls.length + serviceRequests.length;
   const activeOrdersByStatus = {
-    RECEIVED: orders.filter((o) => o.status === 'RECEIVED'),
-    PREPARING: orders.filter((o) => o.status === 'PREPARING'),
-    READY: orders.filter((o) => o.status === 'READY'),
-  };
-
-  const unlockAudio = () => {
-    try {
-      const ctx = new AudioContext();
-      ctx.resume().then(() => setAudioUnlocked(true));
-    } catch {
-      setAudioUnlocked(true);
-    }
+    RECEIVED: orders.filter((o: any) => o.status === 'RECEIVED'),
+    PREPARING: orders.filter((o: any) => o.status === 'PREPARING'),
+    READY: orders.filter((o: any) => o.status === 'READY'),
   };
 
   if (!audioUnlocked) {
     return (
       <div className="h-dvh flex flex-col items-center justify-center bg-[var(--bg)] text-[var(--text)] space-y-6">
-        <div className="text-center space-y-2">
-          <h1 className="font-display text-4xl text-[var(--accent)]">SERVICE DISPLAY</h1>
-          <p className="text-[var(--muted)]">Audio alerts must be enabled to start.</p>
-        </div>
+        <h1 className="font-display text-4xl text-[var(--accent)]">SERVICE DISPLAY</h1>
         <button
-          onClick={unlockAudio}
-          className="px-8 py-4 bg-[var(--accent)] text-black font-bold tracking-widest text-lg transition-transform active:scale-95 hover:brightness-110"
+          onClick={() => setAudioUnlocked(true)}
+          className="px-8 py-4 bg-[var(--accent)] text-black font-bold tracking-widest text-lg transition-transform active:scale-95"
         >
           START DISPLAY
         </button>
@@ -849,21 +441,17 @@ export function ServiceBoard() {
               Install on iPhone
             </div>
             <div className="mt-2 text-xs text-[var(--muted)] leading-relaxed">
-              Tap Share, then Add to Home Screen. Open Cevop from the Home Screen to receive alerts
-              while the phone is asleep.
+              Tap Share, then Add to Home Screen.
             </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                onClick={() => setInstallHelpOpen(false)}
-                className="text-xs border border-[var(--border)] px-3 py-1.5 text-[var(--muted)] hover:text-[var(--text)]"
-              >
-                Close
-              </button>
-            </div>
+            <button
+              onClick={() => setInstallHelpOpen(false)}
+              className="mt-4 text-xs border border-[var(--border)] px-3 py-1.5"
+            >
+              Close
+            </button>
           </div>
         </div>
       )}
-      {/* Header */}
       <header className="flex flex-col sm:flex-row items-center justify-between px-2 sm:px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-1.5 overflow-hidden relative z-20">
         <div className="flex items-center justify-between w-full sm:w-auto gap-1.5 sm:gap-4 shrink-0 min-w-0">
           <h1 className="text-sm sm:text-xl flex items-center gap-2 shrink-0">
@@ -874,95 +462,30 @@ export function ServiceBoard() {
           </h1>
           <div className="flex items-center gap-1.5">
             <div
-              className={`flex items-center gap-1 sm:gap-1.5 text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 font-mono ${
-                isOnline && socketConnected
-                  ? 'border-[var(--ready)] text-[var(--ready)] bg-[var(--surface2)]'
-                  : 'border-[var(--danger)] text-[var(--danger)] bg-[var(--surface2)]'
-              }`}
+              className={`flex items-center gap-1 sm:gap-1.5 text-[8px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 border shrink-0 font-mono ${isOnline && socketConnected ? 'border-[var(--ready)] text-[var(--ready)]' : 'border-[var(--danger)] text-[var(--danger)]'}`}
             >
               <span
-                className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${
-                  isOnline && socketConnected ? 'bg-[var(--ready)]' : 'bg-[var(--danger)]'
-                }`}
+                className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${isOnline && socketConnected ? 'bg-[var(--ready)]' : 'bg-[var(--danger)]'}`}
               />
               {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
             </div>
-            {/* Mobile-only Refresh button */}
-            <button
-              onClick={() => refreshNow().catch(() => void 0)}
-              disabled={refreshing}
-              className="sm:hidden text-[9px] text-[var(--muted)] border border-[var(--border)] px-2 py-1 transition-colors shrink-0 disabled:opacity-50 uppercase font-bold"
-            >
-              {refreshing ? '...' : '⟳'}
-            </button>
-            <button
-              onClick={logout}
-              className="sm:hidden text-[9px] text-[var(--muted)] border border-[var(--border)] px-2 py-1 transition-colors shrink-0 uppercase font-bold"
-            >
-              OUT
-            </button>
           </div>
         </div>
-
-        <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto gap-1 sm:gap-3 shrink-0">
-          <div className="hidden lg:flex flex-col items-end">
-            <span className="text-[var(--text)] text-[10px] sm:text-xs font-bold truncate max-w-[150px]">
-              {user?.name}
-            </span>
-            <span className="text-[var(--muted)] text-[9px] sm:text-[10px] truncate max-w-[150px]">
-              {user?.organization?.name}
-              {user?.branch ? ` — ${user.branch.name}` : ''}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => refreshNow().catch(() => void 0)}
-              disabled={refreshing}
-              className="hidden sm:block text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 transition-colors shrink-0 disabled:opacity-50 uppercase font-bold rounded-full"
-            >
-              {refreshing ? '...' : 'REFRESH'}
-            </button>
-            {pushStatus !== 'unsupported' && pushStatus !== 'on' && (
-              <button
-                onClick={() => enablePush().catch(() => void 0)}
-                disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
-                className="hidden xs:block text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 transition-colors shrink-0 disabled:opacity-50 uppercase font-bold rounded-full"
-              >
-                {pushStatus === 'loading' ? '...' : pushStatus === 'blocked' ? 'BLOCKED' : 'ALERTS'}
-              </button>
-            )}
-            {showInstallButton && (
-              <button
-                onClick={() => handleInstall().catch(() => void 0)}
-                className="hidden sm:block text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 transition-colors shrink-0 uppercase font-bold rounded-full"
-              >
-                INSTALL
-              </button>
-            )}
-            <button
-              onClick={() => setMode(nextThemeMode)}
-              className="w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-[var(--border)] flex items-center justify-center text-[9px] sm:text-[10px] font-black shrink-0 font-display transition-colors"
-              title={`Theme: ${themeLabel}`}
-            >
-              {themeLabel}
-            </button>
-            <button
-              onClick={logout}
-              className="hidden sm:block text-[9px] sm:text-xs text-[var(--muted)] hover:text-[var(--text)] border border-[var(--border)] px-2 sm:px-3 py-1 transition-colors shrink-0 uppercase font-bold rounded-full"
-            >
-              OUT
-            </button>
-          </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setMode(nextThemeMode)}
+            className="w-8 h-8 rounded-full border border-[var(--border)] flex items-center justify-center text-[10px] font-black"
+          >
+            {themeLabel}
+          </button>
+          <button
+            onClick={logout}
+            className="px-3 py-1 border border-[var(--border)] text-xs font-bold uppercase rounded-full"
+          >
+            OUT
+          </button>
         </div>
       </header>
-      {(!isOnline || !socketConnected) && offlineSnapshotTs && (
-        <div className="px-2 sm:px-4 py-1 text-[10px] sm:text-xs text-[var(--muted)] border-b border-[var(--border)] bg-[var(--surface)]">
-          Showing last saved snapshot — {new Date(offlineSnapshotTs).toLocaleString()}
-        </div>
-      )}
-
-      {/* Tabs */}
       <div className="flex border-b border-[var(--border)] bg-[var(--surface)] shrink-0 overflow-x-auto no-scrollbar">
         <button
           onClick={() => setActiveTab('orders')}
@@ -974,8 +497,7 @@ export function ServiceBoard() {
           onClick={() => setActiveTab('calls')}
           className={`px-4 sm:px-6 py-2.5 text-[10px] sm:text-xs font-bold tracking-wider transition-all relative whitespace-nowrap ${activeTab === 'calls' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}`}
         >
-          <span className="sm:hidden">CALLS</span>
-          <span className="hidden sm:inline">CALLS & REQUESTS</span>
+          CALLS & REQUESTS{' '}
           {pendingCallsCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[9px] w-3.5 h-3.5 rounded-full flex items-center justify-center font-bold">
               {pendingCallsCount}
@@ -989,25 +511,9 @@ export function ServiceBoard() {
           TABLES
         </button>
       </div>
-
-      {/* Content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === 'orders' && (
           <div className="h-full overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between px-3 sm:px-4 py-1.5 border-b border-[var(--border)] bg-[var(--surface)] shrink-0 gap-2">
-              <div className="text-[10px] text-[var(--muted)] truncate">
-                {orders.length} active orders{ordersHasMore ? ' · older available' : ''}
-              </div>
-              {ordersHasMore && (
-                <button
-                  className="px-2 py-1 text-[10px] font-bold tracking-wider border border-[var(--border)] bg-[var(--surface2)] hover:brightness-110 disabled:opacity-50 rounded-sm"
-                  onClick={() => loadMoreOrders().catch(() => void 0)}
-                  disabled={ordersLoadingMore}
-                >
-                  {ordersLoadingMore ? '...' : 'LOAD OLDER'}
-                </button>
-              )}
-            </div>
             <div className="flex-1 overflow-y-auto md:overflow-hidden grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-[var(--border)]">
               {(['RECEIVED', 'PREPARING', 'READY'] as const).map((status) => (
                 <div key={status} className="flex flex-col min-h-[400px] md:min-h-0">
@@ -1021,16 +527,11 @@ export function ServiceBoard() {
                       ({activeOrdersByStatus[status].length})
                     </span>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-2 sm:space-y-3">
-                    {activeOrdersByStatus[status].length === 0 && (
-                      <div className="text-center text-[var(--muted)] text-[10px] pt-12 uppercase tracking-widest opacity-50">
-                        — Empty —
-                      </div>
-                    )}
-                    {activeOrdersByStatus[status].map((order) => (
+                  <div className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-3">
+                    {activeOrdersByStatus[status].map((order: any) => (
                       <div
                         key={order.id}
-                        className={`border p-2.5 sm:p-3 space-y-2.5 sm:space-y-3 animate-slide-in shadow-sm ${STATUS_COLOR[order.status]}`}
+                        className={`border p-3 space-y-3 shadow-sm ${STATUS_COLOR[order.status]}`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0 flex-1">
@@ -1045,98 +546,32 @@ export function ServiceBoard() {
                               {order.id.slice(-6).toUpperCase()}
                             </div>
                           </div>
-                          <div className="text-right shrink-0 mt-0.5">
-                            <TimeElapsed
-                              createdAt={order.createdAt}
-                              className="text-[10px] font-bold"
-                            />
-                          </div>
+                          <TimeElapsed
+                            createdAt={order.createdAt}
+                            className="text-[10px] font-bold"
+                          />
                         </div>
-                        <div className="space-y-1.5 border-t border-[var(--border)] pt-2.5 overflow-hidden">
-                          {order.items.map((item) => (
-                            <React.Fragment key={item.id}>
-                              <div
-                                className={`flex items-start gap-2 ${item.cancelledAt ? 'opacity-40 line-through text-[10px]' : 'text-xs sm:text-sm'}`}
-                              >
-                                <span className="font-bold text-[var(--accent)] shrink-0">
-                                  {item.quantity}×
-                                </span>
-                                <div className="flex-1 min-w-0 flex items-center justify-between gap-1">
-                                  <span className="text-[var(--text)] font-medium leading-tight">
-                                    {item.menuItem?.name || '—'}
-                                  </span>
-                                  <div className="flex items-center gap-1 shrink-0">
-                                    {user?.role === 'SERVICE' && item.menuItemId && (
-                                      <button
-                                        onClick={() => toggleItemAvailability(item.menuItemId)}
-                                        className="text-[8px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors ml-1 shrink-0"
-                                      >
-                                        86
-                                      </button>
-                                    )}
-                                    {!item.cancelledAt &&
-                                      order.status !== 'READY' &&
-                                      order.status !== 'SERVED' && (
-                                        <button
-                                          onClick={() =>
-                                            cancelOrderItem(
-                                              order.id,
-                                              item.id,
-                                              item.menuItem?.name ?? 'Item',
-                                            )
-                                          }
-                                          className="text-[8px] uppercase tracking-wider text-[var(--muted)] hover:text-[var(--danger)] transition-colors shrink-0"
-                                        >
-                                          ✕
-                                        </button>
-                                      )}
-                                  </div>
-                                </div>
-                              </div>
-                              {item.notes && (
-                                <div className="text-[var(--muted)] italic text-[10px] pl-5 leading-tight">
-                                  "{item.notes}"
-                                </div>
-                              )}
-                            </React.Fragment>
-                          ))}
-                        </div>
-                        {status === 'READY' && onlineWaiters.length > 0 && (
-                          <div className="pt-2 border-t border-[var(--border)] space-y-2">
-                            <div className="text-[10px] text-[var(--muted)] flex justify-between">
-                              <span>Assigned:</span>
-                              <span className="text-[var(--text)] font-bold truncate max-w-[100px]">
-                                {order.assignedWaiter
-                                  ? onlineWaiters.find((w) => w.id === order.assignedWaiter)
-                                      ?.name || 'Waiter'
-                                  : '—'}
+                        <div className="space-y-1.5 border-t border-[var(--border)] pt-2.5">
+                          {order.items.map((item: any) => (
+                            <div
+                              key={item.id}
+                              className={`flex items-start gap-2 ${item.cancelledAt ? 'opacity-40 line-through text-[10px]' : 'text-xs sm:text-sm'}`}
+                            >
+                              <span className="font-bold text-[var(--accent)] shrink-0">
+                                {item.quantity}×
+                              </span>
+                              <span className="text-[var(--text)] font-medium leading-tight">
+                                {item.menuItem?.name || '—'}
                               </span>
                             </div>
-                            <select
-                              id={`service_order_assign_${order.id}`}
-                              className="w-full text-[10px] py-1 bg-[var(--surface2)] border-[var(--border)]"
-                              value={order.assignedWaiter ?? ''}
-                              onChange={(e) =>
-                                assignOrder(order.id, e.target.value ? e.target.value : null)
-                              }
-                              disabled={assigningItems.has(order.id)}
-                            >
-                              <option value="">— Unassigned —</option>
-                              {onlineWaiters.map((w) => (
-                                <option key={w.id} value={w.id}>
-                                  {w.name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
+                          ))}
+                        </div>
                         {NEXT_STATUS[order.status] && (
                           <button
                             onClick={() => updateOrderStatus(order.id, NEXT_STATUS[order.status])}
-                            disabled={updatingItems.has(order.id)}
-                            className="w-full text-[10px] py-2 font-bold tracking-widest uppercase border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all rounded-sm active:scale-95"
+                            className="w-full text-[10px] py-2 font-bold tracking-widest uppercase border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all rounded-sm"
                           >
-                            {updatingItems.has(order.id) ? '...' : NEXT_LABEL[order.status]}
+                            {NEXT_LABEL[order.status]}
                           </button>
                         )}
                       </div>
@@ -1147,207 +582,44 @@ export function ServiceBoard() {
             </div>
           </div>
         )}
-
         {activeTab === 'calls' && (
-          <div className="h-full overflow-y-auto p-2 sm:p-4 grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-4 content-start">
-            {/* Waiter Calls */}
-            <div className="col-span-full">
-              <h2 className="font-bold text-[10px] tracking-widest text-[var(--muted)] mb-3 uppercase">
-                Waiter Calls ({waiterCalls.length})
-              </h2>
-              <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
-                {waiterCalls.length === 0 && (
-                  <div className="text-[var(--muted)] text-[10px] py-4 uppercase opacity-50 tracking-widest">
-                    No pending calls
+          <div className="h-full overflow-y-auto p-4 space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {waiterCalls.map((call: any) => (
+                <div key={call.id} className="border border-[var(--preparing)] p-3 space-y-3">
+                  <div className="flex justify-between items-start">
+                    <AutoFitText className="font-bold text-[var(--preparing)]">
+                      {call.table?.label || call.tableId}
+                    </AutoFitText>
+                    <TimeElapsed
+                      createdAt={call.createdAt}
+                      className="text-[var(--muted)] text-[9px] font-bold"
+                    />
                   </div>
-                )}
-                {waiterCalls.map((call) => (
-                  <div
-                    key={call.id}
-                    className="border border-[var(--preparing)] bg-[var(--surface2)] p-3 space-y-2.5 shadow-sm"
+                  <button
+                    onClick={() => acknowledgeWaiterCall(call.id)}
+                    className="w-full text-[10px] py-2 font-bold uppercase border border-[var(--preparing)]"
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <AutoFitText
-                          className="font-bold text-[var(--preparing)]"
-                          maxFontSize="1.125rem"
-                          minFontSize="0.875rem"
-                        >
-                          {call.table?.label || call.tableId}
-                        </AutoFitText>
-                        <TimeElapsed
-                          createdAt={call.createdAt}
-                          className="text-[var(--muted)] text-[9px] font-bold"
-                        />
-                      </div>
-                    </div>
-                    {call.reason && (
-                      <p className="text-[11px] text-[var(--text)] italic leading-tight">
-                        "{call.reason}"
-                      </p>
-                    )}
-                    {onlineWaiters.length > 0 && (
-                      <select
-                        className="w-full text-[10px] py-1 bg-[var(--surface)] border-[var(--border)]"
-                        value={call.assignedTo ?? ''}
-                        onChange={(e) =>
-                          assignWaiterCall(call.id, e.target.value ? e.target.value : null)
-                        }
-                        disabled={assigningItems.has(call.id)}
-                      >
-                        <option value="">— Unassigned —</option>
-                        {onlineWaiters.map((w) => (
-                          <option key={w.id} value={w.id}>
-                            {w.name}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <button
-                      onClick={() => acknowledgeWaiterCall(call.id)}
-                      disabled={updatingItems.has(call.id)}
-                      className="w-full text-[10px] py-2 font-bold uppercase tracking-widest border border-[var(--preparing)] hover:bg-[var(--preparing)] hover:text-black transition-all rounded-sm active:scale-95"
-                    >
-                      {updatingItems.has(call.id) ? '...' : 'RESOLVE'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Service Requests */}
-            <div className="col-span-full mt-4">
-              <h2 className="font-bold text-[10px] tracking-widest text-[var(--muted)] mb-3 uppercase">
-                Service Requests ({serviceRequests.length})
-              </h2>
-              <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
-                {serviceRequests.length === 0 && (
-                  <div className="text-[var(--muted)] text-[10px] py-4 uppercase opacity-50 tracking-widest">
-                    No pending requests
-                  </div>
-                )}
-                {serviceRequests.map((req) => (
-                  <div
-                    key={req.id}
-                    className="border border-[var(--accent)] bg-[var(--surface2)] p-3 space-y-2.5 shadow-sm"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <AutoFitText
-                          className="font-bold text-[var(--accent)]"
-                          maxFontSize="1.125rem"
-                          minFontSize="0.875rem"
-                        >
-                          {req.table?.label || req.tableId}
-                        </AutoFitText>
-                        <TimeElapsed
-                          createdAt={req.createdAt}
-                          className="text-[var(--muted)] text-[9px] font-bold"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[11px] text-[var(--text)] font-bold uppercase tracking-wide">
-                        {req.serviceType}
-                      </div>
-                      {req.notes && (
-                        <p className="text-[10px] text-[var(--muted)] italic leading-tight mt-0.5">
-                          "{req.notes}"
-                        </p>
-                      )}
-                    </div>
-                    {onlineWaiters.length > 0 && (
-                      <select
-                        className="w-full text-[10px] py-1 bg-[var(--surface)] border-[var(--border)]"
-                        value={req.assignedTo ?? ''}
-                        onChange={(e) =>
-                          assignServiceRequest(req.id, e.target.value ? e.target.value : null)
-                        }
-                        disabled={assigningItems.has(req.id)}
-                      >
-                        <option value="">— Unassigned —</option>
-                        {onlineWaiters.map((w) => (
-                          <option key={w.id} value={w.id}>
-                            {w.name}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <button
-                      onClick={() => acknowledgeService(req.id)}
-                      disabled={updatingItems.has(req.id)}
-                      className="w-full text-[10px] py-2 font-bold uppercase tracking-widest border border-[var(--accent)] hover:bg-[var(--accent)] hover:text-black transition-all rounded-sm active:scale-95"
-                    >
-                      {updatingItems.has(req.id) ? '...' : 'RESOLVE'}
-                    </button>
-                  </div>
-                ))}
-              </div>
+                    RESOLVE
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         )}
-
         {activeTab === 'tables' && (
-          <div className="h-full overflow-y-auto p-2 sm:p-4 grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2 sm:gap-4 content-start">
+          <div className="h-full overflow-y-auto p-4 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
             {tables
-              .filter((t) => t.isActive)
-              .map((t) => (
+              .filter((t: any) => t.isActive)
+              .map((t: any) => (
                 <div
                   key={t.id}
-                  className={`border p-2.5 sm:p-3 flex flex-col justify-between gap-2.5 shadow-sm ${
-                    t.status === 'EMPTY'
-                      ? 'border-[var(--border)] bg-[var(--surface2)]'
-                      : t.status === 'OCCUPIED'
-                        ? 'border-yellow-600/50 bg-yellow-600/5'
-                        : 'border-[var(--accent)] bg-[var(--accent)]/5'
-                  }`}
+                  className={`border p-3 flex flex-col justify-between gap-3 ${t.status === 'EMPTY' ? 'border-[var(--border)]' : 'border-[var(--accent)]'}`}
                 >
-                  <div className="min-w-0">
-                    <AutoFitText
-                      className="font-bold"
-                      maxFontSize="1.125rem"
-                      minFontSize="0.875rem"
-                    >
-                      {t.label}
-                    </AutoFitText>
-                    <div
-                      className={`text-[9px] font-bold tracking-widest uppercase mt-0.5 ${
-                        t.status === 'EMPTY'
-                          ? 'text-[var(--muted)]'
-                          : t.status === 'OCCUPIED'
-                            ? 'text-yellow-500'
-                            : 'text-[var(--accent)]'
-                      }`}
-                    >
-                      {t.status}
-                    </div>
-                  </div>
-                  {t.activeSessionId ? (
-                    <button
-                      onClick={() => clearTable(t.activeSessionId!)}
-                      disabled={updatingItems.has(t.activeSessionId)}
-                      className="w-full text-[9px] py-1.5 font-bold tracking-widest uppercase border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all rounded-sm active:scale-95"
-                    >
-                      {updatingItems.has(t.activeSessionId) ? '...' : 'CLEAR'}
-                    </button>
-                  ) : t.status === 'CLEANING' ? (
-                    <button
-                      onClick={() => markTableEmpty(t.id)}
-                      disabled={updatingItems.has(t.id)}
-                      className="w-full text-[9px] py-1.5 font-bold tracking-widest uppercase border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all rounded-sm active:scale-95"
-                    >
-                      {updatingItems.has(t.id) ? '...' : 'CLEAN'}
-                    </button>
-                  ) : (
-                    <div className="h-7" /> // Spacer
-                  )}
+                  <AutoFitText className="font-bold">{t.label}</AutoFitText>
+                  <div className="text-[9px] font-bold uppercase">{t.status}</div>
                 </div>
               ))}
-            {tables.filter((t) => t.isActive).length === 0 && (
-              <div className="col-span-full text-center text-[var(--muted)] text-[10px] py-12 uppercase tracking-widest opacity-50">
-                No tables found
-              </div>
-            )}
           </div>
         )}
       </div>

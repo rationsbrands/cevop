@@ -10,9 +10,9 @@ import {
   requireBranchSelected,
   AuthRequest,
 } from '../middleware/auth';
-import { notifyNewOrder, notifyStaffWebPush } from '../services/notifications';
 import { io } from '../index';
 import { logger } from '../services/logger';
+import { notificationQueue } from '../services/queue';
 import { findLeastLoadedWaiter } from '../services/waiterAssignment';
 import { getOrCreateSession } from '../services/tableSession';
 
@@ -252,32 +252,39 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
 
     res.status(201).json({ success: true, data: order });
 
-    notifyStaffWebPush({
-      organizationId: actualOrgId as string,
-      branchId: actualBranchId,
-      roles: ['KITCHEN', 'SERVICE'],
-      title: 'New Order',
-      body: `${order.table?.label || 'Table'} — #${String(order.id).slice(-6).toUpperCase()}`,
-      url: '/',
-      tag: `order:${order.id}`,
-    }).catch(() => {});
+    // 4. Background tasks — push to queue to keep response time low
+    notificationQueue.add('STAFF_WEB_PUSH', {
+      type: 'STAFF_WEB_PUSH',
+      data: {
+        organizationId: actualOrgId as string,
+        branchId: actualBranchId,
+        roles: ['KITCHEN', 'SERVICE'],
+        title: 'New Order',
+        body: `${order.table?.label || 'Table'} — #${String(order.id).slice(-6).toUpperCase()}`,
+        url: '/',
+        tag: `order:${order.id}`,
+      },
+    });
 
     const org = (table as any).organization;
     if (org && org.notifyNewOrders) {
-      notifyNewOrder(
-        {
-          ...order,
-          total: order.total,
-          items: order.items.map((i: any) => ({ ...i, menuItem: i.menuItem })),
-          table: order.table,
+      notificationQueue.add('NEW_ORDER_NOTIFY', {
+        type: 'NEW_ORDER_NOTIFY',
+        data: {
+          order: {
+            ...order,
+            total: order.total,
+            items: order.items.map((i: any) => ({ ...i, menuItem: i.menuItem })),
+            table: order.table,
+          },
+          whatsappNumber: org.whatsappNumber,
+          slackWebhook: org.slackWebhook,
+          plan: org.plan,
+          currency: org.currency ?? 'NGN',
+          branchId: actualBranchId as string,
+          organizationId: actualOrgId,
         },
-        org.whatsappNumber,
-        org.slackWebhook,
-        org.plan,
-        org.currency ?? 'NGN',
-        actualBranchId as string,
-        actualOrgId,
-      );
+      });
     }
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
@@ -834,15 +841,18 @@ ordersRouter.patch(
           });
         }
 
-        notifyStaffWebPush({
-          organizationId: req.user!.organizationId,
-          branchId: finalOrder.branchId,
-          roles: ['WAITER', 'SERVICE'],
-          title: 'Order Ready',
-          body: `${finalOrder.table?.label || 'Table'} — #${String(finalOrder.id).slice(-6).toUpperCase()}`,
-          url: '/',
-          tag: `order-ready:${finalOrder.id}`,
-        }).catch(() => {});
+        notificationQueue.add('STAFF_WEB_PUSH', {
+          type: 'STAFF_WEB_PUSH',
+          data: {
+            organizationId: req.user!.organizationId,
+            branchId: finalOrder.branchId,
+            roles: ['WAITER', 'SERVICE'],
+            title: 'Order Ready',
+            body: `${finalOrder.table?.label || 'Table'} — #${String(finalOrder.id).slice(-6).toUpperCase()}`,
+            url: '/',
+            tag: `order-ready:${finalOrder.id}`,
+          },
+        });
       }
 
       io.to(`${req.user!.organizationId}:${finalOrder.branchId}`).emit('ORDER_UPDATED', finalOrder);

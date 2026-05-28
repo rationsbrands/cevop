@@ -25,6 +25,7 @@ import { Server as SocketServer } from 'socket.io';
 
 import { getRedisClient } from './services/redis';
 import { prisma } from './services/prisma';
+import './services/queue'; // Initialise BullMQ workers
 
 import { authRouter } from './routes/auth';
 import { menuRouter } from './routes/menu';

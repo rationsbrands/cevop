@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { formatPrice } from '../../../../shared/utils/currency';
 import { useAuth } from '../services/auth';
 import { AutoFitText } from './AutoFitText';
@@ -8,76 +9,67 @@ const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 interface WaiterPOSProps {
   onClose: () => void;
   onOrderSuccess: () => void;
+  initialTableId?: string;
 }
 
-export function WaiterPOS({ onClose, onOrderSuccess }: WaiterPOSProps) {
-  const { token, user } = useAuth();
-  const [tables, setTables] = useState<any[]>([]);
-  const [menuItems, setMenuItems] = useState<any[]>([]);
-  const [categories, setCategories] = useState<any[]>([]);
-  const [activeCategoryId, setActiveCategoryId] = useState<string | null>(null);
+export function WaiterPOS({ onClose, onOrderSuccess, initialTableId }: WaiterPOSProps) {
+  const { token, user, silentRefresh } = useAuth() as any;
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const [selectedTableId, setSelectedTableId] = useState('');
+  const [selectedTableId, setSelectedTableId] = useState(initialTableId || '');
   const [cart, setCart] = useState<
     { menuItemId: string; quantity: number; notes: string; menuItem: any }[]
   >([]);
   const [orderNotes, setOrderNotes] = useState('');
-
-  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function fetchData() {
-      if (!token) return;
-      try {
-        const headers = { Authorization: `Bearer ${token}` };
-        const bq = user?.branchId ? `?branchId=${user.branchId}` : '';
+  const { data: tables = [] } = useQuery({
+    queryKey: ['tables', user?.branchId],
+    queryFn: async () => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const bq = user?.branchId ? `?branchId=${user.branchId}` : '';
+      const res = await fetch(`${API_BASE}/api/tables${bq}`, {
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      const json = await res.json();
+      return json.success ? json.data : [];
+    },
+    enabled: !!token,
+  });
 
-        const [tablesRes, menuRes] = await Promise.all([
-          fetch(`${API_BASE}/api/tables${bq}`, { headers }).then((r) => r.json()),
-          fetch(`${API_BASE}/api/menu${bq}`, { headers }).then((r) => r.json()),
-        ]);
-
-        if (cancelled) return;
-
-        if (tablesRes.success) {
-          setTables(tablesRes.data);
-        }
-
-        if (menuRes.success) {
-          // menuRes.data is an array of categories with menuItems included
-          const cats = menuRes.data;
-          setCategories(cats);
-
-          // Flatten all menu items into one array for the cart lookup
-          const allItems = cats.flatMap((c: any) => c.menuItems || []);
-          setMenuItems(allItems);
-
-          if (cats.length > 0) {
-            setActiveCategoryId(cats[0].id);
-          }
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        if (!cancelled) setLoading(false);
+  const { data: menuData = { categories: [], items: [] }, isLoading: menuLoading } = useQuery({
+    queryKey: ['menu', user?.branchId],
+    queryFn: async () => {
+      const freshToken = (await silentRefresh()) ?? token;
+      const bq = user?.branchId ? `?branchId=${user.branchId}` : '';
+      const res = await fetch(`${API_BASE}/api/menu${bq}`, {
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      const json = await res.json();
+      if (json.success) {
+        const categories = json.data;
+        const items = categories.flatMap((c: any) => c.menuItems || []);
+        return { categories, items };
       }
-    }
-    fetchData();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, user?.branchId]);
+      return { categories: [], items: [] };
+    },
+    enabled: !!token,
+  });
+
+  const categories = menuData.categories;
+  const menuItems = menuData.items;
+  const loading = menuLoading;
+
+  const activeCategoryId = selectedCategoryId || (categories.length > 0 ? categories[0].id : null);
 
   const activeMenuItems = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
     if (query) {
       // Search across all categories if there's a search query
       return menuItems.filter(
-        (m) =>
+        (m: any) =>
           m.isAvailable &&
           (m.name.toLowerCase().includes(query) ||
             m.category?.name?.toLowerCase().includes(query) ||
@@ -86,7 +78,7 @@ export function WaiterPOS({ onClose, onOrderSuccess }: WaiterPOSProps) {
     }
     if (!activeCategoryId) return [];
     // Only show items belonging to the active category
-    return menuItems.filter((m) => m.categoryId === activeCategoryId && m.isAvailable);
+    return menuItems.filter((m: any) => m.categoryId === activeCategoryId && m.isAvailable);
   }, [menuItems, activeCategoryId, searchQuery]);
 
   const cartTotal = useMemo(() => {
@@ -127,7 +119,7 @@ export function WaiterPOS({ onClose, onOrderSuccess }: WaiterPOSProps) {
         body: JSON.stringify({
           tableId: selectedTableId,
           notes: orderNotes,
-          items: cart.map((c) => ({
+          items: cart.map((c: any) => ({
             menuItemId: c.menuItemId,
             quantity: c.quantity,
             notes: c.notes,
@@ -202,22 +194,22 @@ export function WaiterPOS({ onClose, onOrderSuccess }: WaiterPOSProps) {
               <div className="flex overflow-x-auto p-2 sm:p-4 gap-1.5 sm:gap-2 no-scrollbar">
                 <button
                   onClick={() => {
-                    setActiveCategoryId(null);
+                    setSelectedCategoryId(null);
                     setSearchQuery('');
                   }}
                   className={`px-3 sm:px-5 py-1.5 sm:py-2.5 whitespace-nowrap rounded-full text-[10px] sm:text-sm font-bold transition-all border ${
-                    !activeCategoryId && !searchQuery
+                    !selectedCategoryId && !searchQuery
                       ? 'bg-[var(--accent)] text-black border-[var(--accent)]'
                       : 'bg-[var(--surface2)] text-[var(--text)] border-transparent hover:border-[var(--border)] opacity-60'
                   }`}
                 >
                   All Items
                 </button>
-                {categories.map((c) => (
+                {categories.map((c: any) => (
                   <button
                     key={c.id}
                     onClick={() => {
-                      setActiveCategoryId(c.id);
+                      setSelectedCategoryId(c.id);
                       setSearchQuery('');
                     }}
                     className={`px-3 sm:px-5 py-1.5 sm:py-2.5 whitespace-nowrap rounded-full text-[10px] sm:text-sm font-bold transition-all border ${
@@ -283,7 +275,7 @@ export function WaiterPOS({ onClose, onOrderSuccess }: WaiterPOSProps) {
             {/* Menu Items Grid */}
             <div className="flex-1 overflow-y-auto p-3 sm:p-4">
               <div className="grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 sm:gap-4 content-start">
-                {activeMenuItems.map((item) => (
+                {activeMenuItems.map((item: any) => (
                   <button
                     key={item.id}
                     onClick={() => addToCart(item)}
@@ -364,7 +356,7 @@ export function WaiterPOS({ onClose, onOrderSuccess }: WaiterPOSProps) {
               className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl py-3 px-4 text-sm focus:border-[var(--accent)] outline-none appearance-none font-bold"
             >
               <option value="">-- CHOOSE TABLE --</option>
-              {tables.map((t) => (
+              {tables.map((t: any) => (
                 <option key={t.id} value={t.id}>
                   {t.label || t.number}
                 </option>

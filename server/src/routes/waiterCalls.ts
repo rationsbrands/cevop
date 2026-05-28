@@ -9,9 +9,9 @@ import {
   requireBranchSelected,
   AuthRequest,
 } from '../middleware/auth';
-import { notifyStaffWebPush, notifyWaiterCall } from '../services/notifications';
 import { io } from '../index';
 import { logger } from '../services/logger';
+import { notificationQueue } from '../services/queue';
 import { findLeastLoadedWaiter } from '../services/waiterAssignment';
 import { getOrCreateSession } from '../services/tableSession';
 
@@ -106,25 +106,32 @@ waiterCallsRouter.post('/public', async (req: Request, res: Response) => {
     });
 
     const org = await prisma.organization.findUnique({ where: { id: table.organizationId } });
-    if (org && (org as any).notifyWaiterCalls)
-      notifyWaiterCall(
-        call,
-        org.whatsappNumber || undefined,
-        org.slackWebhook || undefined,
-        org.plan,
-        actualBranchId,
-        table.organizationId,
-      ).catch(() => {});
+    if (org && (org as any).notifyWaiterCalls) {
+      notificationQueue.add('WAITER_CALL_NOTIFY', {
+        type: 'WAITER_CALL_NOTIFY',
+        data: {
+          call,
+          whatsappNumber: org.whatsappNumber || undefined,
+          slackWebhook: org.slackWebhook || undefined,
+          plan: org.plan,
+          branchId: actualBranchId,
+          organizationId: table.organizationId,
+        },
+      });
+    }
 
-    notifyStaffWebPush({
-      organizationId: table.organizationId,
-      branchId: actualBranchId,
-      roles: ['WAITER', 'SERVICE'],
-      title: 'Waiter Called',
-      body: `${finalCall.table?.label || 'Table'}${finalCall.reason ? ` — ${finalCall.reason}` : ''}`,
-      url: '/',
-      tag: `waiter-call:${call.id}`,
-    }).catch(() => {});
+    notificationQueue.add('STAFF_WEB_PUSH', {
+      type: 'STAFF_WEB_PUSH',
+      data: {
+        organizationId: table.organizationId,
+        branchId: actualBranchId,
+        roles: ['WAITER', 'SERVICE'],
+        title: 'Waiter Called',
+        body: `${finalCall.table?.label || 'Table'}${finalCall.reason ? ` — ${finalCall.reason}` : ''}`,
+        url: '/',
+        tag: `waiter-call:${call.id}`,
+      },
+    });
 
     res.status(201).json({ success: true, data: call });
   } catch (err: unknown) {

@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { logger } from '../services/logger';
-import { sendInvite } from '../services/email';
+import { notificationQueue } from '../services/queue';
 
 export const invitesRouter = Router();
 
@@ -140,28 +140,27 @@ invitesRouter.post(
 
       const inviteUrl = `${process.env.ADMIN_DASHBOARD_URL || 'http://localhost:5175'}/accept-invite/${token}`;
 
-      // Try to send email — if it fails, the inviteUrl is still returned in the response
-      // so the admin can copy and send it manually
+      // Try to send email via background queue
       try {
-        // Get inviting user's name for the email
         const inviter = await prisma.user.findUnique({
           where: { id: req.user!.userId },
           select: { name: true },
         });
-        await sendInvite(
-          email,
-          inviteUrl,
-          invite.organization.name,
-          invite.branch?.name ?? null,
-          role,
-          inviter?.name ?? 'A team member',
-        );
-        logger.info('Invite email sent', { email, role, orgId: req.user!.organizationId });
-      } catch {
-        logger.warn('Invite email failed — invite still created, URL returned in response', {
-          email,
-          inviteUrl,
+
+        notificationQueue.add('EMAIL_INVITE', {
+          type: 'EMAIL_INVITE',
+          data: {
+            email,
+            inviteUrl,
+            organizationName: invite.organization.name,
+            branchName: invite.branch?.name ?? null,
+            role,
+            inviterName: inviter?.name ?? 'A team member',
+          },
         });
+        logger.info('Invite email queued', { email, role, orgId: req.user!.organizationId });
+      } catch (err) {
+        logger.warn('Failed to queue invite email', { email, err });
       }
 
       res.status(201).json({

@@ -9,9 +9,9 @@ import {
   requireBranchSelected,
   AuthRequest,
 } from '../middleware/auth';
-import { notifyStaffWebPush, notifyServiceRequest } from '../services/notifications';
 import { io } from '../index';
 import { logger } from '../services/logger';
+import { notificationQueue } from '../services/queue';
 import { findLeastLoadedWaiter } from '../services/waiterAssignment';
 import { getOrCreateSession } from '../services/tableSession';
 
@@ -133,25 +133,32 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
     });
 
     const org = await prisma.organization.findUnique({ where: { id: table.organizationId } });
-    if (org && (org as any).notifyServiceRequests)
-      notifyServiceRequest(
-        request,
-        org.whatsappNumber || undefined,
-        org.slackWebhook || undefined,
-        org.plan,
-        actualBranchId,
-        table.organizationId,
-      ).catch(() => {});
+    if (org && (org as any).notifyServiceRequests) {
+      notificationQueue.add('SERVICE_REQUEST_NOTIFY', {
+        type: 'SERVICE_REQUEST_NOTIFY',
+        data: {
+          request,
+          whatsappNumber: org.whatsappNumber || undefined,
+          slackWebhook: org.slackWebhook || undefined,
+          plan: org.plan,
+          branchId: actualBranchId,
+          organizationId: table.organizationId,
+        },
+      });
+    }
 
-    notifyStaffWebPush({
-      organizationId: table.organizationId,
-      branchId: actualBranchId,
-      roles: ['WAITER', 'SERVICE'],
-      title: 'Service Request',
-      body: `${finalRequest.table?.label || 'Table'} — ${finalRequest.serviceType}${finalRequest.notes ? ` — ${finalRequest.notes}` : ''}`,
-      url: '/',
-      tag: `service-request:${request.id}`,
-    }).catch(() => {});
+    notificationQueue.add('STAFF_WEB_PUSH', {
+      type: 'STAFF_WEB_PUSH',
+      data: {
+        organizationId: table.organizationId,
+        branchId: actualBranchId,
+        roles: ['WAITER', 'SERVICE'],
+        title: 'Service Request',
+        body: `${finalRequest.table?.label || 'Table'} — ${finalRequest.serviceType}${finalRequest.notes ? ` — ${finalRequest.notes}` : ''}`,
+        url: '/',
+        tag: `service-request:${request.id}`,
+      },
+    });
 
     res.status(201).json({ success: true, data: request });
   } catch (err: unknown) {

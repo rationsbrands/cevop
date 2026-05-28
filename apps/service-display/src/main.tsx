@@ -4,8 +4,20 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App.tsx';
 import { AuthProvider } from './services/auth.tsx';
 import { ThemeProvider } from './context/theme.tsx';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import './index.css';
 import * as Sentry from '@sentry/react';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000, // 30 seconds
+      retry: 1,
+      refetchOnWindowFocus: true,
+    },
+  },
+});
 
 type DeferredPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -89,17 +101,7 @@ Sentry.init({
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   import.meta.env.DEV ? (
-    <ThemeProvider>
-      <ErrorBoundary>
-        <AuthProvider>
-          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-            <App />
-          </BrowserRouter>
-        </AuthProvider>
-      </ErrorBoundary>
-    </ThemeProvider>
-  ) : (
-    <React.StrictMode>
+    <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <ErrorBoundary>
           <AuthProvider>
@@ -109,6 +111,21 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           </AuthProvider>
         </ErrorBoundary>
       </ThemeProvider>
+      <ReactQueryDevtools initialIsOpen={false} />
+    </QueryClientProvider>
+  ) : (
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          <ErrorBoundary>
+            <AuthProvider>
+              <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                <App />
+              </BrowserRouter>
+            </AuthProvider>
+          </ErrorBoundary>
+        </ThemeProvider>
+      </QueryClientProvider>
     </React.StrictMode>
   ),
 );

@@ -64,6 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRefreshedAt = useRef<number>(0);
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
+  const coolDownUntil = useRef<number>(0);
   const silentRefreshRef = useRef<() => Promise<string | null>>(() => Promise.resolve(null));
 
   function doLogout() {
@@ -190,6 +191,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return refreshPromiseRef.current;
     }
 
+    // Cool-down period if we recently failed (especially 429s)
+    if (Date.now() < coolDownUntil.current) {
+      return token;
+    }
+
     // Debounce: don't refresh if we did it very recently (within 10s)
     if (Date.now() - lastRefreshedAt.current < 10_000) {
       return token;
@@ -213,6 +219,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (res.status === 401) {
             doLogout();
             return null;
+          }
+          if (res.status === 429) {
+            // Server is hammering us or we are hammering it. 30s cool down.
+            coolDownUntil.current = Date.now() + 30_000;
           }
           return token;
         }
