@@ -63,7 +63,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   >('unsupported');
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRefreshedAt = useRef<number>(0);
-  const silentRefreshRef = useRef<() => void>(() => void 0);
+  const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
+  const silentRefreshRef = useRef<() => Promise<string | null>>(() => Promise.resolve(null));
 
   function doLogout() {
     setToken(null);
@@ -184,47 +185,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const silentRefresh = useCallback(async (): Promise<string | null> => {
-    if (Date.now() - lastRefreshedAt.current < 30_000) {
+    // If a refresh is already in progress, return the existing promise
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    // Debounce: don't refresh if we did it very recently (within 10s)
+    if (Date.now() - lastRefreshedAt.current < 10_000) {
       return token;
     }
 
-    try {
-      // If we're on the login page and don't have a marker, don't even try
-      if (window.location.pathname === '/login' && !localStorage.getItem(HAS_SESSION_KEY)) {
-        return null;
-      }
-
-      const res = await fetch(`${API_BASE}/api/auth/refresh`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: AUTH_HEADERS,
-      });
-      if (!res.ok) {
-        if (res.status === 401) {
-          doLogout();
+    // Create the refresh promise and store it
+    refreshPromiseRef.current = (async () => {
+      try {
+        // If we're on the login page and don't have a marker, don't even try
+        if (window.location.pathname === '/login' && !localStorage.getItem(HAS_SESSION_KEY)) {
           return null;
         }
-        return token;
-      }
-      const { data } = await res.json();
-      setToken(data.accessToken);
-      lastRefreshedAt.current = Date.now();
-      scheduleRefresh(data.accessToken);
-      try {
-        localStorage.setItem(HAS_SESSION_KEY, '1');
+
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: AUTH_HEADERS,
+        });
+
+        if (!res.ok) {
+          if (res.status === 401) {
+            doLogout();
+            return null;
+          }
+          return token;
+        }
+
+        const { data } = await res.json();
+        setToken(data.accessToken);
+        lastRefreshedAt.current = Date.now();
+        scheduleRefresh(data.accessToken);
+        try {
+          localStorage.setItem(HAS_SESSION_KEY, '1');
+        } catch {
+          void 0;
+        }
+        return data.accessToken;
       } catch {
-        void 0;
+        return token;
+      } finally {
+        // Clear the promise when done so future calls can trigger a new refresh
+        refreshPromiseRef.current = null;
       }
-      return data.accessToken;
-    } catch {
-      return token;
-    }
+    })();
+
+    return refreshPromiseRef.current;
   }, [scheduleRefresh, token]);
 
   useEffect(() => {
-    silentRefreshRef.current = () => {
-      silentRefresh().catch(() => void 0);
-    };
+    silentRefreshRef.current = () => silentRefresh();
   }, [silentRefresh]);
 
   useEffect(() => {

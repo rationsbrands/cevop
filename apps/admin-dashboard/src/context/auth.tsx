@@ -205,7 +205,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [activeBranchFilter, setActiveBranchFilter] = useState<BranchInfo | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRefreshedAt = useRef<number>(0);
-  const silentRefreshRef = useRef<() => void>(() => void 0);
+  const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
+  const silentRefreshRef = useRef<() => Promise<string | null>>(() => Promise.resolve(null));
 
   const scheduleRefresh = useCallback((accessToken: string) => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
@@ -229,8 +230,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const silentRefresh = useCallback(async (): Promise<string | null> => {
+    // If a refresh is already in progress, return the existing promise
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
     // Debounce
-    if (Date.now() - lastRefreshedAt.current < 30_000) {
+    if (Date.now() - lastRefreshedAt.current < 10_000) {
       return token; // Return current in-memory token
     }
 
@@ -238,52 +244,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return null;
     }
 
-    try {
-      // If we're on the login page and don't have a marker, don't even try
-      if (window.location.pathname === '/login' && !localStorage.getItem(SESSION_MARKER_KEY)) {
-        return null;
-      }
-
-      const res = await fetch(`${API_BASE}/api/auth/refresh`, {
-        method: 'POST',
-        credentials: 'include', // Cookie is sent automatically
-        headers: AUTH_HEADERS,
-        // No body
-      });
-      if (!res.ok) {
-        if (res.status === 401) {
-          try {
-            localStorage.removeItem(SESSION_MARKER_KEY);
-          } catch {
-            /* ignore */
-          }
-          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-          sessionStorage.removeItem('impersonate_token');
-          setToken(null);
-          setUser(null);
-          setActiveBranchFilter(null);
+    // Create the refresh promise and store it
+    refreshPromiseRef.current = (async () => {
+      try {
+        // If we're on the login page and don't have a marker, don't even try
+        if (window.location.pathname === '/login' && !localStorage.getItem(SESSION_MARKER_KEY)) {
           return null;
         }
-        return token;
-      }
-      const { data } = await res.json();
-      setTokenInMemory(data.accessToken);
-      try {
-        localStorage.setItem(SESSION_MARKER_KEY, '1');
+
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include', // Cookie is sent automatically
+          headers: AUTH_HEADERS,
+          // No body
+        });
+        if (!res.ok) {
+          if (res.status === 401) {
+            try {
+              localStorage.removeItem(SESSION_MARKER_KEY);
+            } catch {
+              /* ignore */
+            }
+            if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+            sessionStorage.removeItem('impersonate_token');
+            setToken(null);
+            setUser(null);
+            setActiveBranchFilter(null);
+            return null;
+          }
+          return token;
+        }
+        const { data } = await res.json();
+        setTokenInMemory(data.accessToken);
+        try {
+          localStorage.setItem(SESSION_MARKER_KEY, '1');
+        } catch {
+          /* ignore */
+        }
+        lastRefreshedAt.current = Date.now();
+        return data.accessToken;
       } catch {
-        /* ignore */
+        return token;
+      } finally {
+        // Clear the promise when done so future calls can trigger a new refresh
+        refreshPromiseRef.current = null;
       }
-      lastRefreshedAt.current = Date.now();
-      return data.accessToken;
-    } catch {
-      return token;
-    }
+    })();
+
+    return refreshPromiseRef.current;
   }, [setTokenInMemory, token]);
 
   useEffect(() => {
-    silentRefreshRef.current = () => {
-      silentRefresh().catch(() => void 0);
-    };
+    silentRefreshRef.current = () => silentRefresh();
   }, [silentRefresh]);
 
   useEffect(() => {
