@@ -247,13 +247,11 @@ sessionsRouter.patch(
       res.json({ success: true });
     } catch (err: unknown) {
       if (err instanceof Error && err.message === 'Session already closed') {
-        res
-          .status(400)
-          .json({
-            success: false,
-            code: 'SESSION_ALREADY_CLOSED',
-            error: 'Session already closed',
-          });
+        res.status(400).json({
+          success: false,
+          code: 'SESSION_ALREADY_CLOSED',
+          error: 'Session already closed',
+        });
         return;
       }
       logger.error('PATCH /sessions/:id/close error:', err);
@@ -329,14 +327,12 @@ sessionsRouter.patch(
       res.json({ success: true });
     } catch (err: unknown) {
       if (err instanceof z.ZodError) {
-        res
-          .status(400)
-          .json({
-            success: false,
-            code: 'VALIDATION_ERROR',
-            error: 'Validation error',
-            details: err.errors,
-          });
+        res.status(400).json({
+          success: false,
+          code: 'VALIDATION_ERROR',
+          error: 'Validation error',
+          details: err.errors,
+        });
         return;
       }
       logger.error('PATCH /sessions/:id/assign-waiter error:', err);
@@ -371,6 +367,12 @@ sessionsRouter.patch(
       }
 
       const { claimTableSession } = await import('../services/waiterAssignment');
+      if (!session.tableId) {
+        res
+          .status(400)
+          .json({ success: false, code: 'INVALID_REQUEST', error: 'Table no longer exists' });
+        return;
+      }
       const result = await claimTableSession(
         req.user!.userId,
         session.tableId,

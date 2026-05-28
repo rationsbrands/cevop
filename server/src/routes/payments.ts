@@ -316,7 +316,10 @@ paymentsRouter.patch(
 
           // 3. Re-occupy the table
           await tx.table.updateMany({
-            where: { activeSessionId: null, id: payment.session.tableId },
+            where: {
+              activeSessionId: null,
+              ...(payment.session.tableId ? { id: payment.session.tableId } : {}),
+            },
             data: { status: 'OCCUPIED', activeSessionId: payment.sessionId },
           });
 

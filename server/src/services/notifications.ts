@@ -225,7 +225,7 @@ export async function notifyNewOrder(
 
 type WaiterCallForNotification = {
   id: string;
-  tableId: string;
+  tableId: string | null;
   reason?: string | null;
   table?: { label: string } | null;
 };
@@ -261,7 +261,7 @@ export async function notifyWaiterCall(
 
 type ServiceRequestForNotification = {
   id: string;
-  tableId: string;
+  tableId: string | null;
   serviceType: string;
   notes?: string | null;
   table?: { label: string } | null;
