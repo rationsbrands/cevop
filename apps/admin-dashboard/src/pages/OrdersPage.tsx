@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import { useAuth, useApi } from '../context/auth';
 import { useSocket } from '../context/socket';
 import { formatPrice } from '../../../../shared/utils/currency';
@@ -316,6 +316,18 @@ export function OrdersPage() {
     const i = setInterval(() => setNow(Date.now()), 30000);
     return () => clearInterval(i);
   }, []);
+
+  const sortedWaiterCalls = useMemo(() => {
+    return [...waiterCalls].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+  }, [waiterCalls]);
+
+  const sortedServiceRequests = useMemo(() => {
+    return [...serviceRequests].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+  }, [serviceRequests]);
 
   const getOrderHeat = (order: any) => {
     if (!['RECEIVED', 'PREPARING', 'READY'].includes(order.status)) return 'text-muted';
@@ -804,14 +816,14 @@ export function OrdersPage() {
               </tr>
             </thead>
             <tbody>
-              {waiterCalls.length === 0 && (
+              {sortedWaiterCalls.length === 0 && (
                 <tr>
                   <td colSpan={6} className="text-center text-[var(--muted)] py-10">
                     No waiter calls
                   </td>
                 </tr>
               )}
-              {waiterCalls.map((c) => (
+              {sortedWaiterCalls.map((c) => (
                 <tr key={c.id}>
                   <td className="font-medium">{c.table?.label || '—'}</td>
                   <td className="text-[var(--muted)]">{c.reason || '—'}</td>
@@ -869,14 +881,14 @@ export function OrdersPage() {
               </tr>
             </thead>
             <tbody>
-              {serviceRequests.length === 0 && (
+              {sortedServiceRequests.length === 0 && (
                 <tr>
                   <td colSpan={7} className="text-center text-[var(--muted)] py-10">
                     No service requests
                   </td>
                 </tr>
               )}
-              {serviceRequests.map((s) => (
+              {sortedServiceRequests.map((s) => (
                 <tr key={s.id}>
                   <td className="font-medium">{s.table?.label || '—'}</td>
                   <td>

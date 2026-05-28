@@ -160,7 +160,9 @@ export function ServiceBoard() {
 
   const orders = useMemo(() => {
     if (!ordersData?.success) return [];
-    return ordersData.data.filter((o: Order) => ACTIVE_STATUSES.includes(o.status));
+    return ordersData.data
+      .filter((o: Order) => ACTIVE_STATUSES.includes(o.status))
+      .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [ordersData]);
 
   const waiterCalls = callsData || [];

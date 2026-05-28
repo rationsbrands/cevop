@@ -196,7 +196,9 @@ export function WaiterBoard() {
     unassigned.readyOrders?.forEach((o: any) =>
       tasks.push(normaliseTask('ORDER_READY', o, tablesData)),
     );
-    return Array.from(new Map(tasks.map((t) => [t.id, t])).values());
+    return Array.from(new Map(tasks.map((t) => [t.id, t])).values()).sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
   }, [tasksData, tablesData, normaliseTask]);
 
   const myTasks = useMemo(
