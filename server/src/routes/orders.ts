@@ -129,12 +129,12 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
         stationId: true,
         trackStock: true,
         stockCount: true,
-      },
+      } as any,
     });
 
     if (menuItems.length !== menuItemIds.length) {
       const foundIds = new Set(menuItems.map((m) => m.id));
-      const missing = data.items.find((i) => !foundIds.has(i.menuItemId));
+      const missing = (data.items as any[]).find((i) => !foundIds.has(i.menuItemId));
       res.status(400).json({
         success: false,
         error: `Item "${missing?.menuItemId || 'unknown'}" is unavailable or does not belong to this branch.`,
@@ -150,7 +150,7 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
       trackStock: boolean;
       stockCount: number;
     };
-    const itemMap = new Map<string, MenuItemLike>(menuItems.map((m) => [m.id, m]));
+    const itemMap = new Map<string, MenuItemLike>(menuItems.map((m: any) => [m.id, m]));
 
     // Check stock for all items
     for (const item of data.items) {
@@ -206,7 +206,7 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
       for (const item of data.items) {
         const menuItem = itemMap.get(item.menuItemId)!;
         if (menuItem.trackStock) {
-          await tx.menuItem.update({
+          await (tx.menuItem as any).update({
             where: { id: menuItem.id },
             data: {
               stockCount: { decrement: item.quantity },
@@ -779,61 +779,51 @@ ordersRouter.patch(
         })
         .parse(req.body);
 
-      const orderWhere: Prisma.OrderWhereInput = {
-        id: req.params.id,
-        organizationId: req.user!.organizationId,
-        ...(req.branchScope ? { branchId: req.branchScope } : {}),
-      };
-
-      const result = await prisma.$transaction(async (tx) => {
-        const existingOrder = await tx.order.findFirst({ where: orderWhere });
-        if (!existingOrder) {
-          return { error: 'ORDER_NOT_FOUND', status: 404 };
-        }
-
-        const updated = await tx.order.update({
-          where: { id: req.params.id },
-          data: {
-            status,
-            ...(status === 'CANCELLED' && cancellationReason ? { cancellationReason } : {}),
-          },
-          include: { items: { include: { menuItem: true } }, table: true },
-        });
-
-        let finalOrder = updated;
-        if (status === 'READY') {
-          const assignedWaiterId = await findLeastLoadedWaiter(
-            req.user!.organizationId,
-            updated.branchId,
-            updated.tableId ?? '', // tableId is nullable after schema change; empty string skips session lookup
-          ).catch((err) => {
-            logger.error('findLeastLoadedWaiter failed in status update', { err: err.message });
-            return null;
-          });
-
-          if (assignedWaiterId) {
-            finalOrder = await tx.order.update({
-              where: { id: updated.id },
-              data: { assignedWaiter: assignedWaiterId, assignedWaiterAt: new Date() },
-              include: { items: { include: { menuItem: true } }, table: true },
-            });
-            return { finalOrder, assignedWaiterId, type: 'ASSIGNED' };
-          } else {
-            return { finalOrder, type: 'UNASSIGNED' };
-          }
-        }
-        return { finalOrder, type: 'UPDATED' };
+      // 1. Update order status first
+      const updatedOrder = await prisma.order.update({
+        where: { id: req.params.id },
+        data: {
+          status,
+          ...(status === 'CANCELLED' && cancellationReason ? { cancellationReason } : {}),
+        },
+        include: { items: { include: { menuItem: true } }, table: true },
       });
 
-      if ('error' in result) {
-        return res.status(result.status || 400).json({ success: false, error: result.error });
+      if (!updatedOrder) {
+        return res.status(404).json({ success: false, error: 'ORDER_NOT_FOUND' });
       }
 
-      const { finalOrder } = result as any;
+      let finalOrder = updatedOrder;
+      let assignedWaiterId: string | null = null;
+      let assignmentType: 'ASSIGNED' | 'UNASSIGNED' | 'UPDATED' = 'UPDATED';
 
+      // 2. If READY, perform waiter assignment OUTSIDE the main transaction/update to prevent deadlocks
       if (status === 'READY') {
-        if ((result as any).type === 'ASSIGNED') {
-          io.to(`waiter:${(result as any).assignedWaiterId}`).emit('TASK_ASSIGNED', {
+        assignedWaiterId = await findLeastLoadedWaiter(
+          req.user!.organizationId,
+          updatedOrder.branchId,
+          updatedOrder.tableId ?? undefined,
+        ).catch((err) => {
+          logger.error('findLeastLoadedWaiter failed in status update', { err: err.message });
+          return null;
+        });
+
+        if (assignedWaiterId) {
+          finalOrder = await prisma.order.update({
+            where: { id: updatedOrder.id },
+            data: { assignedWaiter: assignedWaiterId, assignedWaiterAt: new Date() },
+            include: { items: { include: { menuItem: true } }, table: true },
+          });
+          assignmentType = 'ASSIGNED';
+        } else {
+          assignmentType = 'UNASSIGNED';
+        }
+      }
+
+      // 3. Notifications and events
+      if (status === 'READY') {
+        if (assignmentType === 'ASSIGNED') {
+          io.to(`waiter:${assignedWaiterId}`).emit('TASK_ASSIGNED', {
             type: 'ORDER_READY',
             task: finalOrder,
           });
@@ -1509,7 +1499,7 @@ ordersRouter.get('/', async (req: AuthRequest, res: Response) => {
       where.items = {
         some: {
           stationId: stationId,
-        },
+        } as any,
       };
     }
 

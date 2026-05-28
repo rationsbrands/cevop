@@ -10,7 +10,6 @@ import {
 } from '../middleware/auth';
 import { logger } from '../services/logger';
 import { io } from '../index';
-import { closeSession } from '../services/tableSession';
 
 export const paymentsRouter = Router();
 
@@ -94,7 +93,8 @@ paymentsRouter.post('/', requireRole(...CASHIER_ROLES), async (req: AuthRequest,
     const body = z
       .object({
         sessionId: z.string(),
-        amount: z.number().positive(),
+        amount: z.number().optional(), // Optional if itemIds are provided
+        itemIds: z.array(z.string()).optional(), // Specific items to pay for
         method: z.enum(['CASH', 'CARD', 'TRANSFER']),
         reference: z.string().optional(),
         note: z.string().optional(),
@@ -102,107 +102,127 @@ paymentsRouter.post('/', requireRole(...CASHIER_ROLES), async (req: AuthRequest,
       })
       .parse(req.body);
 
-    if (body.idempotencyKey) {
-      const existing = await prisma.payment.findFirst({
-        where: {
-          sessionId: body.sessionId,
-          amount: body.amount,
-          method: body.method,
-          createdAt: { gte: new Date(Date.now() - 5 * 60 * 1000) }, // Last 5 minutes
-        },
-      });
-      if (existing) {
-        res.status(200).json({ success: true, data: existing, idempotent: true });
-        return;
-      }
-    }
+    const orgId = req.user!.organizationId;
+    const branchId = req.branchScope!;
 
-    // Verify session belongs to this org and branch
-    const session = await prisma.tableSession.findFirst({
-      where: {
-        id: body.sessionId,
-        organizationId: req.user!.organizationId,
-        branchId: req.branchScope!,
-        closedAt: null,
-      },
-      select: {
-        id: true,
+    // 1. Fetch the session and items
+    const session = (await prisma.tableSession.findFirst({
+      where: { id: body.sessionId, organizationId: orgId, branchId: branchId, closedAt: null },
+      include: {
         orders: {
           where: { status: { not: 'CANCELLED' } },
-          select: { total: true },
+          include: { items: { where: { cancelledAt: null } } },
         },
-        payments: { select: { amount: true } },
+        payments: { include: { orderItems: true } as any },
       },
-    });
+    } as any)) as any;
 
     if (!session) {
-      res
-        .status(404)
-        .json({ success: false, code: 'NOT_FOUND', error: 'Session not found or already closed' });
+      res.status(404).json({ success: false, error: 'Session not found or already closed' });
       return;
     }
 
-    const grandTotal = session.orders.reduce((sum, o) => sum + Number(o.total), 0);
-    const alreadyPaid = session.payments.reduce((sum, p) => sum + Number(p.amount), 0);
-    const remaining = Math.max(0, grandTotal - alreadyPaid);
+    // 2. Identify items being paid for
+    let targetItems: any[] = [];
+    let calculatedAmount = 0;
 
-    // Don't allow overpayment beyond the balance
-    const payAmount = Math.min(body.amount, remaining > 0 ? remaining : body.amount);
+    if (body.itemIds && body.itemIds.length > 0) {
+      targetItems = session.orders
+        .flatMap((o: any) => o.items)
+        .filter((i: any) => body.itemIds!.includes(i.id) && i.status !== 'PAID');
 
-    const payment = await prisma.payment.create({
-      data: {
-        sessionId: body.sessionId,
-        organizationId: req.user!.organizationId,
-        branchId: req.branchScope!,
-        amount: payAmount,
-        currency: req.user!.currency ?? 'NGN',
-        method: body.method,
-        reference: body.reference,
-        note: body.note,
-        ordersTotal: grandTotal,
-        processedBy: req.user!.userId,
-      },
-    });
-
-    // Check if fully paid — if so, close the session automatically
-    const totalPaid = alreadyPaid + payAmount;
-    let sessionClosed = false;
-
-    if (totalPaid >= grandTotal && grandTotal > 0) {
-      await closeSession(body.sessionId, req.user!.userId, 'EMPTY').catch((err) => {
-        logger.error('Failed to close session during payment processing', {
-          err: err.message,
-          sessionId: body.sessionId,
-        });
-      });
-      sessionClosed = true;
+      if (targetItems.length === 0) {
+        res.status(400).json({ success: false, error: 'No unpaid items found with provided IDs' });
+        return;
+      }
+      calculatedAmount = targetItems.reduce(
+        (sum: number, i: any) => sum + Number(i.unitPrice) * i.quantity,
+        0,
+      );
     }
 
-    // Notify all clients that payment state changed for this session
-    const orgBranch = `${req.user!.organizationId}:${req.branchScope!}`;
+    const payAmount = body.amount ?? calculatedAmount;
+
+    if (payAmount <= 0) {
+      res.status(400).json({ success: false, error: 'Payment amount must be greater than zero' });
+      return;
+    }
+
+    // 3. Create payment and update items in a transaction
+    const result = await prisma.$transaction(async (tx: any) => {
+      const grandTotal = session.orders.reduce((sum: number, o: any) => sum + Number(o.total), 0);
+
+      const payment = await tx.payment.create({
+        data: {
+          sessionId: body.sessionId,
+          organizationId: orgId,
+          branchId: branchId,
+          amount: payAmount,
+          currency: req.user!.currency ?? 'NGN',
+          method: body.method,
+          reference: body.reference,
+          note: body.note,
+          ordersTotal: grandTotal,
+          processedBy: req.user!.userId,
+          ...(targetItems.length > 0
+            ? {
+                orderItems: {
+                  connect: targetItems.map((i: any) => ({ id: i.id })),
+                },
+              }
+            : {}),
+        },
+      });
+
+      // Update item statuses if specific items were paid
+      if (targetItems.length > 0) {
+        await tx.orderItem.updateMany({
+          where: { id: { in: targetItems.map((i: any) => i.id) } },
+          data: { status: 'PAID' },
+        });
+      }
+
+      // Re-calculate total paid to see if we should close the session
+      const allPayments = await tx.payment.findMany({
+        where: { sessionId: body.sessionId },
+        select: { amount: true },
+      });
+      const totalPaid = allPayments.reduce((sum: number, p: any) => sum + Number(p.amount), 0);
+
+      let sessionClosed = false;
+      if (totalPaid >= grandTotal && grandTotal > 0) {
+        // Auto-close session logic (imported from tableSession service)
+        await tx.tableSession.update({
+          where: { id: body.sessionId },
+          data: { closedAt: new Date(), closedBy: req.user!.userId },
+        });
+
+        if (session.tableId) {
+          await tx.table.update({
+            where: { id: session.tableId },
+            data: { status: 'EMPTY', activeSessionId: null } as any,
+          });
+        }
+        sessionClosed = true;
+      }
+
+      return { payment, totalPaid, grandTotal, sessionClosed };
+    });
+
+    // 4. Notifications
+    const orgBranch = `${orgId}:${branchId}`;
     io.to(orgBranch).emit('PAYMENT_RECORDED', {
       sessionId: body.sessionId,
-      payment: { id: payment.id, amount: Number(payAmount), method: body.method },
-      totalPaid,
-      grandTotal,
-      sessionClosed,
-    });
-    io.to(orgBranch).emit('SYNC_REQUIRED', {
-      type: 'PAYMENT_RECORDED',
-      sessionId: body.sessionId,
-      sessionClosed,
+      payment: result.payment,
+      totalPaid: result.totalPaid,
+      grandTotal: result.grandTotal,
+      sessionClosed: result.sessionClosed,
     });
 
-    res.json({ success: true, data: { payment, sessionClosed, totalPaid, grandTotal } });
+    res.json({ success: true, data: result });
   } catch (err) {
-    if (err instanceof z.ZodError) {
-      res.status(400).json({ success: false, error: err.errors[0].message });
-      return;
-    }
     logger.error('POST /payments error', { err });
-    res
-      .status(500)
-      .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to record payment' });
+    res.status(500).json({ success: false, error: 'Failed to record payment' });
   }
 });
 

@@ -45,6 +45,7 @@ import { plansRouter } from './routes/plans';
 import { pushRouter } from './routes/push';
 import { paymentsRouter } from './routes/payments';
 import { stationsRouter } from './routes/stations';
+import { analyticsRouter } from './routes/analytics';
 import { initSocketHandlers } from './sockets/handlers';
 import { errorHandler } from './middleware/errorHandler';
 import { planGuard } from './middleware/planGuard';
@@ -298,6 +299,7 @@ app.use('/api/ops', opsRouter);
 app.use('/api/waiter-tasks', waiterTasksRouter);
 app.use('/api/push', pushRouter);
 app.use('/api/stations', stationsRouter);
+app.use('/api/analytics', analyticsRouter);
 app.use('/api/payments', paymentsRouter);
 
 // WebSocket

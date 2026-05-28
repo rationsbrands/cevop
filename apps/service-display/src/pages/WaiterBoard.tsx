@@ -5,6 +5,7 @@ import { useTheme } from '../context/theme';
 import { formatPrice } from '../../../../shared/utils/currency';
 import { AutoFitText } from '../components/AutoFitText';
 import { WaiterPOS } from '../components/WaiterPOS';
+import { syncManager } from '../services/sync';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 
@@ -106,6 +107,7 @@ export function WaiterBoard() {
   const [socketConnected, setSocketConnected] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [offlineSnapshotTs, setOfflineSnapshotTs] = useState<number | null>(null);
+  const [pendingSyncCount, setPendingSyncCount] = useState(() => syncManager.getQueue().length);
   const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set());
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [shiftBusy, setShiftBusy] = useState(false);
@@ -558,9 +560,21 @@ export function WaiterBoard() {
 
   // Online/offline
   useEffect(() => {
+    const handleSyncStatus = (e: any) => {
+      setPendingSyncCount(e.detail.pending || 0);
+    };
+    window.addEventListener('cevop-sync-status', handleSyncStatus as any);
+    return () => window.removeEventListener('cevop-sync-status', handleSyncStatus as any);
+  }, []);
+
+  useEffect(() => {
     const up = () => {
       setIsOnline(true);
-      refreshNowRef.current().catch(() => void 0);
+      if (token) {
+        syncManager.processQueue(token).then(() => {
+          refreshNowRef.current().catch(() => void 0);
+        });
+      }
     };
     const down = () => setIsOnline(false);
     window.addEventListener('online', up);
@@ -569,7 +583,7 @@ export function WaiterBoard() {
       window.removeEventListener('online', up);
       window.removeEventListener('offline', down);
     };
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     const onVisible = () => {
@@ -686,7 +700,6 @@ export function WaiterBoard() {
     setOrderError('');
 
     try {
-      const freshToken = (await silentRefresh()) ?? token;
       const idempotencyKey = `waiter-${user?.id}-${orderModal.tableId}-${Date.now()}`;
 
       const body = {
@@ -701,11 +714,19 @@ export function WaiterBoard() {
         })),
       };
 
+      if (!navigator.onLine) {
+        await syncManager.addToQueue(`${API_BASE}/api/orders/public`, 'POST', body, {});
+        setOrderModal(null);
+        setCart({});
+        setOrderNotes('');
+        return;
+      }
+
+      const freshToken = (await silentRefresh()) ?? token;
       const res = await fetch(`${API_BASE}/api/orders/public`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Pass waiter auth so the order is tagged as staff-entered
           Authorization: `Bearer ${freshToken}`,
         },
         body: JSON.stringify(body),
@@ -717,7 +738,6 @@ export function WaiterBoard() {
         setOrderModal(null);
         setCart({});
         setOrderNotes('');
-        // Refresh tasks to pick up the new order
         refreshNowRef.current().catch(() => void 0);
       } else {
         setOrderError(data.error ?? 'Failed to place order');
@@ -781,12 +801,9 @@ export function WaiterBoard() {
     if (updatingItems.has(task.id)) return;
     setUpdatingItems((prev) => new Set(prev).add(task.id));
     try {
-      const freshToken = await silentRefresh();
-      if (!freshToken) return;
-      const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` };
-
       let url = '';
       let body = {};
+      const method = 'PATCH';
 
       if (task.type === 'WAITER_CALL') {
         url = `${API_BASE}/api/waiter-calls/${task.id}/status`;
@@ -800,7 +817,18 @@ export function WaiterBoard() {
         body = { status: 'SERVED' };
       }
 
-      const res = await fetch(url, { method: 'PATCH', headers: h, body: JSON.stringify(body) });
+      if (!navigator.onLine) {
+        await syncManager.addToQueue(url, method, body, {});
+        setMyTasks((prev) => prev.filter((t) => t.id !== task.id));
+        setUnassignedTasks((prev) => prev.filter((t) => t.id !== task.id));
+        return;
+      }
+
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` };
+
+      const res = await fetch(url, { method, headers: h, body: JSON.stringify(body) });
       if (res.ok) {
         setMyTasks((prev) => prev.filter((t) => t.id !== task.id));
         setUnassignedTasks((prev) => prev.filter((t) => t.id !== task.id));
@@ -875,16 +903,26 @@ export function WaiterBoard() {
     if (updatingItems.has(task.id)) return;
     setUpdatingItems((prev) => new Set(prev).add(task.id));
     try {
-      const freshToken = await silentRefresh();
-      if (!freshToken) return;
-      const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` };
-
       const url =
         task.type === 'WAITER_CALL'
           ? `${API_BASE}/api/waiter-calls/${task.id}/claim`
           : task.type === 'SERVICE_REQUEST'
             ? `${API_BASE}/api/service-requests/${task.id}/claim`
             : `${API_BASE}/api/orders/${task.id}/claim`;
+
+      if (!navigator.onLine) {
+        await syncManager.addToQueue(url, 'PATCH', {}, {});
+        setUnassignedTasks((prev) => prev.filter((t) => t.id !== task.id));
+        setMyTasks((prev) => [
+          { ...task, assignedTo: user?.id ?? null },
+          ...prev.filter((t) => t.id !== task.id),
+        ]);
+        return;
+      }
+
+      const freshToken = await silentRefresh();
+      if (!freshToken) return;
+      const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` };
 
       const res = await fetch(url, { method: 'PATCH', headers: h });
       if (res.ok) {
@@ -1139,6 +1177,11 @@ export function WaiterBoard() {
               />
               {isOnline && socketConnected ? 'LIVE' : 'OFFLINE'}
             </div>
+            {pendingSyncCount > 0 && (
+              <div className="flex items-center gap-1 text-[8px] sm:text-[9px] px-1.5 py-0.5 bg-amber-500 text-black font-black animate-pulse rounded-full shrink-0">
+                SYNCING {pendingSyncCount}
+              </div>
+            )}
             <button
               onClick={logout}
               className="sm:hidden text-[9px] text-[var(--muted)] border border-[var(--border)] px-2 py-1 rounded-full font-bold"

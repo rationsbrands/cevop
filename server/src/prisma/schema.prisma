@@ -312,14 +312,16 @@ model Payment {
   reference      String?
   note           String?
   ordersTotal    Decimal       @db.Decimal(10, 2)
-  processedBy    String
+  processedBy    String?
   processedAt    DateTime      @default(now())
   createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @default(now()) @updatedAt
 
   session        TableSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   branch         Branch        @relation(fields: [branchId], references: [id])
-  processor      User          @relation("PaymentProcessor", fields: [processedBy], references: [id])
+  processor      User?         @relation("PaymentProcessor", fields: [processedBy], references: [id])
+  orderItems     OrderItem[]   @relation("PaymentOrderItems")
 
   @@index([sessionId])
   @@index([branchId, processedAt])
@@ -459,6 +461,7 @@ model OrderItem {
   orderId    String
   menuItemId String
   stationId  String?
+  paymentId  String?
   quantity   Int
   unitPrice  Decimal  @db.Decimal(10, 2)
   notes      String?
@@ -470,9 +473,11 @@ model OrderItem {
   menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
   order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   station    Station? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  payment    Payment? @relation("PaymentOrderItems", fields: [paymentId], references: [id])
 
   @@index([orderId])
   @@index([stationId])
+  @@index([paymentId])
   @@map("order_items")
 }
 
