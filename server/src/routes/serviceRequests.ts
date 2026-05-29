@@ -14,6 +14,7 @@ import { logger } from '../services/logger';
 import { notificationQueue } from '../services/queue';
 import { findLeastLoadedWaiter } from '../services/waiterAssignment';
 import { getOrCreateSession } from '../services/tableSession';
+import { scheduleEscalation } from '../index';
 
 export const serviceRequestsRouter = Router();
 
@@ -69,7 +70,6 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
         },
       });
 
-      // Relaxed check: just ensure there's at least one order in the session
       const hasOrders = activeSession && activeSession.orders.length > 0;
 
       if (!hasOrders) {
@@ -118,6 +118,14 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
         type: 'SERVICE_REQUEST',
         task: finalRequest,
       });
+
+      // Schedule escalation if waiter doesn't acknowledge within 60s
+      void scheduleEscalation(
+        'ESCALATE_SERVICE_REQUEST',
+        request.id,
+        table.organizationId,
+        actualBranchId,
+      );
     } else {
       // No waiter online — emit as unassigned so all waiters can claim
       io.to(`${table.organizationId}:${actualBranchId}`).emit('TASK_UNASSIGNED', {
@@ -202,7 +210,6 @@ serviceRequestsRouter.get('/', async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Admin/staff updates a service request — including adding admin notes
 serviceRequestsRouter.patch(
   '/:id/status',
   requireRole(
@@ -236,7 +243,6 @@ serviceRequestsRouter.patch(
       });
       const { status, adminNotes } = schema.parse(req.body);
 
-      // Enforce org + branch isolation
       const existingReq = await prisma.serviceRequest.findFirst({
         where: {
           id: req.params.id,
@@ -263,8 +269,6 @@ serviceRequestsRouter.patch(
       });
 
       if (status === 'RESOLVED' && request.serviceType === 'BILL_REQUEST' && request.sessionId) {
-        // Clear and clean table, change status to empty.
-        // This is where the waiter confirms the table is paid and ready for new customers.
         const { closeSession } = await import('../services/tableSession');
         await closeSession(request.sessionId, req.user!.userId, 'EMPTY').catch((err) => {
           logger.warn('Failed to close session during bill request resolution', {
@@ -361,13 +365,12 @@ serviceRequestsRouter.patch(
         const { claimTableSession } = await import('../services/waiterAssignment');
         await claimTableSession(
           req.user!.userId,
-          updated.tableId, // tableId is non-null here — guarded by the if condition
+          updated.tableId,
           updated.sessionId,
           updated.branchId,
         );
       }
 
-      // Notify everyone this is now claimed
       io.to(`${req.user!.organizationId}:${req.branchScope!}`).emit('TASK_CLAIMED', {
         type: 'SERVICE_REQUEST',
         task: updated,
@@ -446,7 +449,6 @@ serviceRequestsRouter.patch(
         updated,
       );
 
-      // If assigning to a specific waiter, send them a direct notification
       if (waiterId) {
         io.to(`waiter:${waiterId}`).emit('TASK_ASSIGNED', {
           type: 'SERVICE_REQUEST',

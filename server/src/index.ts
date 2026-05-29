@@ -25,7 +25,7 @@ import { Server as SocketServer } from 'socket.io';
 
 import { getRedisClient } from './services/redis';
 import { prisma } from './services/prisma';
-import './services/queue'; // Initialise BullMQ workers
+import { escalationQueue } from './services/queue';
 
 import { authRouter } from './routes/auth';
 import { menuRouter } from './routes/menu';
@@ -162,12 +162,6 @@ function getRateLimitKey(req: Request): string {
 function getRefreshRateLimitKey(req: Request): string {
   try {
     const auth = req.headers.authorization;
-    // Refresh uses httpOnly cookie, not a bearer token — so also check cookie
-    // We just need to extract sub from the cookie's refresh token hash.
-    // Since we can't decode the httpOnly cookie here easily, we try the
-    // Authorization header first (for cases where token is passed), and
-    // fall back to IP. The important thing is the Upstash key prefix
-    // 'cevop:rl:refresh' is separate from 'cevop:rl:api'.
     if (auth && auth.startsWith('Bearer ')) {
       const token = auth.slice(7);
       const payloadB64 = token.split('.')[1];
@@ -193,9 +187,6 @@ const authFallback = rateLimit({
   message: { success: false, error: 'Too many requests, please slow down.' },
 });
 
-// Dedicated in-memory fallback for /api/auth/refresh
-// Higher limit than auth (logins) since refresh is called automatically.
-// Keyed separately from general API traffic so refresh never eats into API quota.
 const authRefreshFallback = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
@@ -238,13 +229,10 @@ function makeUpstashLimiter(requests: number, window: Duration, prefix: string):
 }
 
 const upstashAuth = makeUpstashLimiter(50, '15 m', 'auth');
-// Refresh gets its own Upstash namespace so it never competes with general API traffic.
-// 300 per 15 min per user = 20/min, ample for proactive + reactive refreshes.
 const upstashRefresh = makeUpstashLimiter(300, '15 m', 'refresh');
 const upstashApi = makeUpstashLimiter(500, '15 m', 'api');
 const upstashPublic = makeUpstashLimiter(60, '1 m', 'public');
-// Wraps an Upstash limiter into Express middleware, falls back to in-memory.
-// keyFn allows per-endpoint key strategies (e.g. userId for refresh, IP for general API).
+
 function makeLimiter(
   upstash: Ratelimit | null,
   fallback: ReturnType<typeof rateLimit>,
@@ -261,7 +249,6 @@ function makeLimiter(
       const key = keyFn(req);
       const { success, reset, remaining } = await upstash.limit(key);
       if (!success) {
-        // Inform the client exactly when the window resets so it can back off precisely
         const retryAfterSec = Math.ceil((reset - Date.now()) / 1000);
         res.setHeader('Retry-After', String(Math.max(retryAfterSec, 1)));
         res.setHeader('X-RateLimit-Remaining', '0');
@@ -280,8 +267,6 @@ function makeLimiter(
 }
 
 const authLimiter = makeLimiter(upstashAuth, authFallback, 'Too many requests, please slow down.');
-// Refresh limiter uses getRefreshRateLimitKey so each user has their own bucket,
-// not the shared restaurant IP bucket.
 const authRefreshLimiter = makeLimiter(
   upstashRefresh,
   authRefreshFallback,
@@ -300,8 +285,6 @@ const publicLimiter = makeLimiter(
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/forgot-password', authLimiter);
 app.use('/api/auth/signup', authLimiter);
-// Refresh gets its own dedicated limiter (userId-keyed, separate Upstash namespace).
-// It is registered BEFORE the /api/ catch-all so it is never double-counted.
 app.use('/api/auth/refresh', authRefreshLimiter);
 app.use('/api/auth/check-slug', apiLimiter);
 app.use('/api/menu/public', publicLimiter);
@@ -310,7 +293,6 @@ app.use('/api/tables/public', publicLimiter);
 app.use('/api/waiter-calls/public', publicLimiter);
 app.use('/api/service-requests/public', publicLimiter);
 app.use('/api/help-options/public', publicLimiter);
-// Exclude /api/auth/refresh from the general API limiter — it has its own above.
 app.use('/api/', (req, res, next) => {
   if (req.path.startsWith('/auth/refresh')) return next();
   return apiLimiter(req, res, next);
@@ -385,7 +367,6 @@ app.use('/api/payments', paymentsRouter);
 initSocketHandlers(io);
 
 // Redis adapter — enables horizontal scaling across multiple server instances
-// Only activates when REDIS_URL is set. Safe to leave unset — falls back to single-instance.
 if (process.env.REDIS_URL) {
   const pubClient = createClient({ url: process.env.REDIS_URL });
   const subClient = pubClient.duplicate();
@@ -399,7 +380,11 @@ if (process.env.REDIS_URL) {
     });
 }
 
-const staleOrderCutoffMinutes = Number(process.env.STALE_ORDER_MINUTES || 30); // 30min default — flag early
+// ---------------------------------------------------------------------------
+// Stale order monitor — polls every 5 min, emits socket alert to admin
+// ---------------------------------------------------------------------------
+
+const staleOrderCutoffMinutes = Number(process.env.STALE_ORDER_MINUTES || 30);
 const staleOrderCheckEveryMs = Number(process.env.STALE_ORDER_CHECK_MS || 5 * 60 * 1000);
 const staleOrderAuditThrottleMs = 60 * 60 * 1000;
 const lastStaleAudit = new Map<string, { count: number; at: number }>();
@@ -469,133 +454,32 @@ function startStaleOrderMonitor() {
   (interval as any).unref?.();
 }
 
-/**
- * Task Escalation Monitor (Industry Grade Handshake)
- * Periodically checks for tasks that were assigned but never acknowledged by a device.
- * If a task is not acknowledged within the timeout, it is escalated (e.g. unassigned to broadcast to everyone).
- */
-function startTaskEscalationMonitor() {
-  if (process.env.NODE_ENV === 'test') return;
+// ---------------------------------------------------------------------------
+// Task escalation — schedules a BullMQ delayed job at assignment time.
+// Replaces the old setInterval polling approach.
+// ---------------------------------------------------------------------------
 
-  const ESCALATION_CHECK_MS = 30_000; // Check every 30s
-  const ACK_TIMEOUT_MS = 60_000; // Handshake timeout: 60s
-
-  const interval = setInterval(async () => {
-    try {
-      const now = new Date();
-      const cutoff = new Date(Date.now() - ACK_TIMEOUT_MS);
-
-      // 1. Escalate Orders (READY status but no handshake)
-      const unackedOrders = await prisma.order.findMany({
-        where: {
-          status: 'READY',
-          assignedWaiter: { not: null },
-          acknowledgedAt: null,
-          assignedWaiterAt: { lt: cutoff },
-          escalationLevel: 0,
-        } as any,
-      });
-
-      for (const order of unackedOrders) {
-        logger.warn('Order handshake timeout — escalating to broadcast', {
-          orderId: order.id,
-          branchId: order.branchId,
-        });
-
-        const updated = await prisma.order.update({
-          where: { id: order.id },
-          data: {
-            assignedWaiter: null, // Unassign so it broadcasts to everyone
-            assignedWaiterAt: null,
-            escalationLevel: 1,
-            lastEscalatedAt: now,
-          } as any,
-        });
-
-        io.to(`${order.organizationId}:${order.branchId}`).emit('TASK_UNASSIGNED', {
-          type: 'ORDER_READY',
-          task: updated,
-        });
-        io.to(`${order.organizationId}:${order.branchId}`).emit('ORDER_UPDATED', updated);
-      }
-
-      // 2. Escalate Waiter Calls
-      const unackedCalls = await prisma.waiterCall.findMany({
-        where: {
-          status: 'PENDING',
-          assignedTo: { not: null },
-          acknowledgedAt: null,
-          assignedAt: { lt: cutoff },
-          escalationLevel: 0,
-        } as any,
-      });
-
-      for (const call of unackedCalls) {
-        logger.warn('Waiter call handshake timeout — escalating to broadcast', {
-          callId: call.id,
-          branchId: call.branchId,
-        });
-
-        const updated = await prisma.waiterCall.update({
-          where: { id: call.id },
-          data: {
-            assignedTo: null,
-            assignedAt: null,
-            escalationLevel: 1,
-            lastEscalatedAt: now,
-          } as any,
-        });
-
-        io.to(`${call.organizationId}:${call.branchId}`).emit('TASK_UNASSIGNED', {
-          type: 'WAITER_CALL',
-          task: updated,
-        });
-        io.to(`${call.organizationId}:${call.branchId}`).emit('WAITER_CALL_UPDATED', updated);
-      }
-
-      // 3. Escalate Service Requests
-      const unackedRequests = await prisma.serviceRequest.findMany({
-        where: {
-          status: 'PENDING',
-          assignedTo: { not: null },
-          acknowledgedAt: null,
-          assignedAt: { lt: cutoff },
-          escalationLevel: 0,
-        } as any,
-      });
-
-      for (const req of unackedRequests) {
-        logger.warn('Service request handshake timeout — escalating to broadcast', {
-          requestId: req.id,
-          branchId: req.branchId,
-        });
-
-        const updated = await prisma.serviceRequest.update({
-          where: { id: req.id },
-          data: {
-            assignedTo: null,
-            assignedAt: null,
-            escalationLevel: 1,
-            lastEscalatedAt: now,
-          } as any,
-        });
-
-        io.to(`${req.organizationId}:${req.branchId}`).emit('TASK_UNASSIGNED', {
-          type: 'SERVICE_REQUEST',
-          task: updated,
-        });
-        io.to(`${req.organizationId}:${req.branchId}`).emit('SERVICE_REQUEST_UPDATED', updated);
-      }
-    } catch (err) {
-      logger.error('Task escalation monitor failed', { err });
-    }
-  }, ESCALATION_CHECK_MS);
-
-  (interval as any).unref?.();
+export async function scheduleEscalation(
+  type: 'ESCALATE_ORDER' | 'ESCALATE_WAITER_CALL' | 'ESCALATE_SERVICE_REQUEST',
+  id: string,
+  organizationId: string,
+  branchId: string,
+): Promise<void> {
+  try {
+    await escalationQueue.add(
+      type,
+      { type, id, organizationId, branchId },
+      {
+        delay: 60_000, // 60 seconds — escalate if unacknowledged
+        jobId: `${type}:${id}`, // deduplicate — same task won't queue twice
+      },
+    );
+  } catch (err) {
+    logger.error('Failed to schedule escalation job', { type, id, err });
+  }
 }
 
 startStaleOrderMonitor();
-startTaskEscalationMonitor();
 
 // Sentry error handler must be before the custom error handler
 Sentry.setupExpressErrorHandler(app);

@@ -15,6 +15,7 @@ import { logger } from '../services/logger';
 import { notificationQueue } from '../services/queue';
 import { findLeastLoadedWaiter } from '../services/waiterAssignment';
 import { getOrCreateSession } from '../services/tableSession';
+import { scheduleEscalation } from '../index';
 
 // Simple in-memory analytics cache — 30 second TTL
 const analyticsCache = new Map<string, { data: unknown; expiresAt: number }>();
@@ -887,6 +888,12 @@ ordersRouter.patch(
             type: 'ORDER_READY',
             task: finalOrder,
           });
+          void scheduleEscalation(
+            'ESCALATE_ORDER',
+            finalOrder.id,
+            req.user!.organizationId,
+            finalOrder.branchId,
+          );
         } else {
           io.to(`${req.user!.organizationId}:${finalOrder.branchId}`).emit('TASK_UNASSIGNED', {
             type: 'ORDER_READY',

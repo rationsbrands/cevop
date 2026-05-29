@@ -14,6 +14,7 @@ import { logger } from '../services/logger';
 import { notificationQueue } from '../services/queue';
 import { findLeastLoadedWaiter } from '../services/waiterAssignment';
 import { getOrCreateSession } from '../services/tableSession';
+import { scheduleEscalation } from '../index';
 
 export const waiterCallsRouter = Router();
 
@@ -91,6 +92,14 @@ waiterCallsRouter.post('/public', async (req: Request, res: Response) => {
         type: 'WAITER_CALL',
         task: finalCall,
       });
+
+      // Schedule escalation if waiter doesn't acknowledge within 60s
+      void scheduleEscalation(
+        'ESCALATE_WAITER_CALL',
+        call.id,
+        table.organizationId,
+        actualBranchId,
+      );
     } else {
       // No waiter online — emit as unassigned so all waiters can claim
       io.to(`${table.organizationId}:${actualBranchId}`).emit('TASK_UNASSIGNED', {
