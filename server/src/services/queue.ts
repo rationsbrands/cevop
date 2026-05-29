@@ -9,15 +9,17 @@ import {
 import { sendInvite } from './email';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const parsedUrl = new URL(REDIS_URL);
+const isTLS = parsedUrl.protocol === 'rediss:';
 
 const connection = {
-  host: new URL(REDIS_URL).hostname,
-  port: parseInt(new URL(REDIS_URL).port || '6379', 10),
-  password: new URL(REDIS_URL).password || undefined,
-  username: new URL(REDIS_URL).username || undefined,
+  host: parsedUrl.hostname,
+  port: parseInt(parsedUrl.port || '6379', 10),
+  password: parsedUrl.password || undefined,
+  username: parsedUrl.username || undefined,
   maxRetriesPerRequest: null,
+  ...(isTLS && { tls: { rejectUnauthorized: false } }),
 };
-
 // 1. Notification Queue
 export const notificationQueue = new Queue('notifications', {
   connection,
