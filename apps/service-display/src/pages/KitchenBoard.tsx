@@ -125,6 +125,23 @@ export function KitchenBoard() {
       if (!res.ok) throw new Error('Failed to update order status');
       return res.json();
     },
+    onMutate: async ({ orderId, status }) => {
+      await queryClient.cancelQueries({ queryKey: ['kitchen-orders'] });
+      const previous = queryClient.getQueryData(['kitchen-orders']);
+      queryClient.setQueryData(['kitchen-orders'], (old: any) => {
+        if (!old?.data) return old;
+        return {
+          ...old,
+          data: old.data.map((o: any) => (o.id === orderId ? { ...o, status } : o)),
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _new, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(['kitchen-orders'], context.previous);
+      }
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['kitchen-orders'] }),
   });
 
@@ -250,6 +267,29 @@ export function KitchenBoard() {
       });
       if (!res.ok) throw new Error('Failed to cancel item');
       return res.json();
+    },
+    onMutate: async ({ orderId, itemId }) => {
+      await queryClient.cancelQueries({ queryKey: ['kitchen-orders'] });
+      const previous = queryClient.getQueryData(['kitchen-orders']);
+      queryClient.setQueryData(['kitchen-orders'], (old: any) => {
+        if (!old?.data) return old;
+        return {
+          ...old,
+          data: old.data.map((o: any) => {
+            if (o.id !== orderId) return o;
+            return {
+              ...o,
+              items: o.items.map((i: any) => (i.id === itemId ? { ...i, status: 'CANCELLED' } : i)),
+            };
+          }),
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _new, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(['kitchen-orders'], context.previous);
+      }
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['kitchen-orders'] }),
   });

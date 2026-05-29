@@ -769,6 +769,21 @@ export function WaiterBoard() {
   async function resolveTask(task: TaskItem) {
     if (updatingItems.has(task.id)) return;
     setUpdatingItems((prev) => new Set(prev).add(task.id));
+
+    await queryClient.cancelQueries({ queryKey: ['waiter-tasks'] });
+    const previous = queryClient.getQueryData(['waiter-tasks']);
+    queryClient.setQueryData(['waiter-tasks'], (old: any) => {
+      if (!old?.data) return old;
+      return {
+        ...old,
+        data: old.data.map((t: any) =>
+          t.id === task.id
+            ? { ...t, status: task.type === 'ORDER_READY' ? 'SERVED' : 'RESOLVED' }
+            : t,
+        ),
+      };
+    });
+
     try {
       const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenRef.current}` };
 
@@ -788,12 +803,12 @@ export function WaiterBoard() {
       }
 
       const res = await fetch(url, { method: 'PATCH', headers: h, body: JSON.stringify(body) });
-      if (res.ok) {
-        queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
-      } else if (res.status === 404) {
-        await queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
-        await queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
+      if (!res.ok && previous) {
+        queryClient.setQueryData(['waiter-tasks'], previous);
       }
+      queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
+    } catch {
+      if (previous) queryClient.setQueryData(['waiter-tasks'], previous);
     } finally {
       setUpdatingItems((prev) => {
         const n = new Set(prev);
@@ -859,6 +874,17 @@ export function WaiterBoard() {
   async function claimTask(task: TaskItem) {
     if (updatingItems.has(task.id)) return;
     setUpdatingItems((prev) => new Set(prev).add(task.id));
+
+    await queryClient.cancelQueries({ queryKey: ['waiter-tasks'] });
+    const previous = queryClient.getQueryData(['waiter-tasks']);
+    queryClient.setQueryData(['waiter-tasks'], (old: any) => {
+      if (!old?.data) return old;
+      return {
+        ...old,
+        data: old.data.map((t: any) => (t.id === task.id ? { ...t, assignedTo: user?.id } : t)),
+      };
+    });
+
     try {
       const h = { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenRef.current}` };
 
@@ -870,12 +896,15 @@ export function WaiterBoard() {
             : `${API_BASE}/api/orders/${task.id}/claim`;
 
       const res = await fetch(url, { method: 'PATCH', headers: h });
-      if (res.ok) {
-        queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
-      } else if (res.status === 404) {
-        await queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
-        await queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
+      if (!res.ok) {
+        if (previous) queryClient.setQueryData(['waiter-tasks'], previous);
+        if (res.status === 404) {
+          queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
+        }
       }
+      queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
+    } catch {
+      if (previous) queryClient.setQueryData(['waiter-tasks'], previous);
     } finally {
       setUpdatingItems((prev) => {
         const n = new Set(prev);
@@ -888,6 +917,19 @@ export function WaiterBoard() {
   async function clearTable(sessionId: string) {
     if (updatingItems.has(sessionId)) return;
     setUpdatingItems((prev) => new Set(prev).add(sessionId));
+
+    await queryClient.cancelQueries({ queryKey: ['waiter-tables'] });
+    const previous = queryClient.getQueryData(['waiter-tables']);
+    queryClient.setQueryData(['waiter-tables'], (old: any) => {
+      if (!old?.data) return old;
+      return {
+        ...old,
+        data: old.data.map((t: any) =>
+          t.activeSession?.id === sessionId ? { ...t, status: 'CLEANING', activeSession: null } : t,
+        ),
+      };
+    });
+
     try {
       const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/close`, {
         method: 'PATCH',
@@ -897,8 +939,11 @@ export function WaiterBoard() {
         },
         body: JSON.stringify({ nextStatus: 'CLEANING' }),
       });
-      if (!res.ok) await queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
-      await queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
+      if (!res.ok && previous) {
+        queryClient.setQueryData(['waiter-tables'], previous);
+      }
+      queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
+      queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
     } finally {
       setUpdatingItems((prev) => {
         const n = new Set(prev);
@@ -911,6 +956,17 @@ export function WaiterBoard() {
   async function markTableEmpty(tableId: string) {
     if (updatingItems.has(tableId)) return;
     setUpdatingItems((prev) => new Set(prev).add(tableId));
+
+    await queryClient.cancelQueries({ queryKey: ['waiter-tables'] });
+    const previous = queryClient.getQueryData(['waiter-tables']);
+    queryClient.setQueryData(['waiter-tables'], (old: any) => {
+      if (!old?.data) return old;
+      return {
+        ...old,
+        data: old.data.map((t: any) => (t.id === tableId ? { ...t, status: 'EMPTY' } : t)),
+      };
+    });
+
     try {
       const res = await fetch(`${API_BASE}/api/tables/${tableId}/status`, {
         method: 'PATCH',
@@ -920,8 +976,11 @@ export function WaiterBoard() {
         },
         body: JSON.stringify({ status: 'EMPTY' }),
       });
-      if (!res.ok) await queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
-      await queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
+      if (!res.ok && previous) {
+        queryClient.setQueryData(['waiter-tables'], previous);
+      }
+      queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
+      queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
     } finally {
       setUpdatingItems((prev) => {
         const n = new Set(prev);

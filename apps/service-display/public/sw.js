@@ -1,11 +1,28 @@
 /// <reference lib="webworker" />
 import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
+import { Queue } from 'workbox-background-sync';
 
 const CACHE_NAME = 'cevop-service-v2';
 
 // Precache ALL build assets — injected by vite-plugin-pwa at build time
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
+
+// Background Sync Queue for offline mutations
+const mutationQueue = new Queue('mutation-queue', {
+  maxRetentionTime: 24 * 60, // 24 hours
+  onSync: async ({ queue }) => {
+    let entry;
+    while ((entry = await queue.shiftRequest())) {
+      try {
+        await fetch(entry.request.clone());
+      } catch {
+        await queue.unshiftRequest(entry);
+        throw new Error('Replay failed — still offline');
+      }
+    }
+  },
+});
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -27,6 +44,28 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  // Handle API Mutations (POST, PATCH, PUT) for offline queueing
+  if (
+    event.request.url.includes('/api/') &&
+    ['POST', 'PATCH', 'PUT'].includes(event.request.method)
+  ) {
+    const bgSyncResponse = async () => {
+      try {
+        const response = await fetch(event.request.clone());
+        return response;
+      } catch {
+        await mutationQueue.pushRequest({ request: event.request.clone() });
+        return new Response(
+          JSON.stringify({ success: false, queued: true, error: 'Offline — request queued' }),
+          { status: 202, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+    };
+    event.respondWith(bgSyncResponse());
+    return;
+  }
+
+  // Bypass other non-GET or cross-origin requests
   if (!event.request.url.startsWith(self.location.origin)) return;
   if (event.request.url.includes('/api/') || event.request.url.includes('/socket.io/')) return;
   if (event.request.method !== 'GET') return;

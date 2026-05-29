@@ -178,6 +178,21 @@ export function ServiceBoard() {
       if (!res.ok) throw new Error('Failed to update order');
       return res.json();
     },
+    onMutate: async ({ orderId, status }) => {
+      await queryClient.cancelQueries({ queryKey: ['service-orders'] });
+      const previous = queryClient.getQueryData(['service-orders']);
+      queryClient.setQueryData(['service-orders'], (old: any) => {
+        if (!old?.data) return old;
+        return {
+          ...old,
+          data: old.data.map((o: any) => (o.id === orderId ? { ...o, status } : o)),
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _new, context) => {
+      if (context?.previous) queryClient.setQueryData(['service-orders'], context.previous);
+    },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['service-orders'] });
     },
@@ -196,6 +211,21 @@ export function ServiceBoard() {
       if (!res.ok) throw new Error('Failed to update call');
       return res.json();
     },
+    onMutate: async ({ callId, status }) => {
+      await queryClient.cancelQueries({ queryKey: ['service-calls'] });
+      const previous = queryClient.getQueryData(['service-calls']);
+      queryClient.setQueryData(['service-calls'], (old: any) => {
+        if (!old?.data) return old;
+        return {
+          ...old,
+          data: old.data.map((c: any) => (c.id === callId ? { ...c, status } : c)),
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _new, context) => {
+      if (context?.previous) queryClient.setQueryData(['service-calls'], context.previous);
+    },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['service-calls'] });
     },
@@ -213,6 +243,21 @@ export function ServiceBoard() {
       });
       if (!res.ok) throw new Error('Failed to update request');
       return res.json();
+    },
+    onMutate: async ({ requestId, status }) => {
+      await queryClient.cancelQueries({ queryKey: ['service-requests'] });
+      const previous = queryClient.getQueryData(['service-requests']);
+      queryClient.setQueryData(['service-requests'], (old: any) => {
+        if (!old?.data) return old;
+        return {
+          ...old,
+          data: old.data.map((r: any) => (r.id === requestId ? { ...r, status } : r)),
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _new, context) => {
+      if (context?.previous) queryClient.setQueryData(['service-requests'], context.previous);
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['service-requests'] });
@@ -381,6 +426,25 @@ export function ServiceBoard() {
       if (!res.ok) throw new Error('Failed to close session');
       return res.json();
     },
+    onMutate: async ({ sessionId, nextStatus }) => {
+      await queryClient.cancelQueries({ queryKey: ['tables'] });
+      const previous = queryClient.getQueryData(['tables']);
+      queryClient.setQueryData(['tables'], (old: any) => {
+        if (!old?.data) return old;
+        return {
+          ...old,
+          data: old.data.map((t: any) =>
+            t.activeSession?.id === sessionId
+              ? { ...t, status: nextStatus, activeSession: null }
+              : t,
+          ),
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _new, context) => {
+      if (context?.previous) queryClient.setQueryData(['tables'], context.previous);
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['tables'] }),
   });
 
@@ -396,6 +460,21 @@ export function ServiceBoard() {
       });
       if (!res.ok) throw new Error('Failed to update table status');
       return res.json();
+    },
+    onMutate: async ({ tableId, status }) => {
+      await queryClient.cancelQueries({ queryKey: ['tables'] });
+      const previous = queryClient.getQueryData(['tables']);
+      queryClient.setQueryData(['tables'], (old: any) => {
+        if (!old?.data) return old;
+        return {
+          ...old,
+          data: old.data.map((t: any) => (t.id === tableId ? { ...t, status } : t)),
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _new, context) => {
+      if (context?.previous) queryClient.setQueryData(['tables'], context.previous);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['tables'] }),
   });
@@ -457,6 +536,27 @@ export function ServiceBoard() {
       });
       if (!res.ok) throw new Error('Failed to cancel item');
       return res.json();
+    },
+    onMutate: async ({ orderId, itemId }) => {
+      await queryClient.cancelQueries({ queryKey: ['service-orders'] });
+      const previous = queryClient.getQueryData(['service-orders']);
+      queryClient.setQueryData(['service-orders'], (old: any) => {
+        if (!old?.data) return old;
+        return {
+          ...old,
+          data: old.data.map((o: any) => {
+            if (o.id !== orderId) return o;
+            return {
+              ...o,
+              items: o.items.map((i: any) => (i.id === itemId ? { ...i, status: 'CANCELLED' } : i)),
+            };
+          }),
+        };
+      });
+      return { previous };
+    },
+    onError: (_err, _new, context) => {
+      if (context?.previous) queryClient.setQueryData(['service-orders'], context.previous);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['service-orders'] }),
   });
