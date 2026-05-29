@@ -146,22 +146,24 @@ export async function findLeastLoadedWaiter(
           : null;
 
         if (branch && branch.maxTablesPerWaiter !== null) {
-          const validWaiterIds: string[] = [];
-          for (const wid of waiterIds) {
-            const activeOwnedCount = await prisma.tableSession.count({
-              where: {
-                assignedWaiterId: wid,
-                closedAt: null,
-                table: { activeSessionId: { not: null } },
-              },
-            });
-            if (activeOwnedCount < branch.maxTablesPerWaiter) {
-              validWaiterIds.push(wid);
-            }
-          }
-          waiterIds = validWaiterIds;
-        }
+          const sessionCounts = await prisma.tableSession.groupBy({
+            by: ['assignedWaiterId'],
+            where: {
+              assignedWaiterId: { in: waiterIds },
+              closedAt: null,
+              table: { activeSessionId: { not: null } },
+            },
+            _count: { _all: true },
+          });
 
+          const countByWaiter = new Map(
+            sessionCounts.map((r) => [r.assignedWaiterId, r._count._all]),
+          );
+
+          waiterIds = waiterIds.filter(
+            (wid) => (countByWaiter.get(wid) ?? 0) < branch.maxTablesPerWaiter!,
+          );
+        }
         if (waiterIds.length === 0) return null;
 
         // If tableId is provided, check if it belongs to a section

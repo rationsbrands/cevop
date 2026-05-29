@@ -5,7 +5,6 @@ import App from './App.tsx';
 import { AuthProvider } from './services/auth.tsx';
 import { ThemeProvider } from './context/theme.tsx';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import './index.css';
 import * as Sentry from '@sentry/react';
 
@@ -111,7 +110,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           </AuthProvider>
         </ErrorBoundary>
       </ThemeProvider>
-      <ReactQueryDevtools initialIsOpen={false} />
     </QueryClientProvider>
   ) : (
     <React.StrictMode>
