@@ -125,6 +125,8 @@ export function MenuPage() {
     grandTotal: number;
     orderCount: number;
     currency: string;
+    isPaid?: boolean;
+    balance?: number;
   } | null>(null);
   const [orderPreviews, setOrderPreviews] = useState<Record<string, OrderPreview | null>>({});
   const [ordersPreviewLoading, setOrdersPreviewLoading] = useState(false);
@@ -166,10 +168,23 @@ export function MenuPage() {
       const res = await fetch(`${CUSTOMER_API_BASE}/api/sessions/public/${sessionId}/bill`);
       const data = await res.json();
       if (data.success) {
+        if (data.data.closedAt) {
+          const currentSessionId = (tableInfoRef.current as any)?.activeSessionId;
+          if (currentSessionId === sessionId) {
+            setTableInfo((prev) => (prev ? { ...prev, activeSessionId: null } : prev));
+            setSessionBill(null);
+            setFullBill(null);
+            setActiveOrderIds([]);
+            setOrderPreviews({});
+          }
+          return;
+        }
         setSessionBill({
           grandTotal: data.data.grandTotal,
           orderCount: data.data.orderCount,
           currency: data.data.currency,
+          isPaid: data.data.isPaid,
+          balance: data.data.balance,
         });
         setFullBill(data.data);
       }
@@ -1201,9 +1216,14 @@ export function MenuPage() {
               aria-label="Request bill"
             >
               <span>Bill</span>
-              {sessionBill && sessionBill.grandTotal > 0 && (
+              {sessionBill && sessionBill.grandTotal > 0 && !sessionBill.isPaid && (
                 <span className="text-[9px] text-[var(--accent)] mt-1 mono">
                   {formatPrice(sessionBill.grandTotal, sessionBill.currency)}
+                </span>
+              )}
+              {sessionBill && sessionBill.isPaid && (
+                <span className="text-[9px] text-[var(--success)] mt-1 font-bold tracking-widest uppercase">
+                  Paid
                 </span>
               )}
             </button>
@@ -1292,9 +1312,13 @@ export function MenuPage() {
                 <p className="text-[10px] text-[var(--accent)] font-black uppercase tracking-[0.2em] mb-1">
                   Your Running Tab
                 </p>
-                <h3 className="text-2xl font-display text-[var(--text)]">
-                  {formatPrice(sessionBill.grandTotal, sessionBill.currency)}
-                </h3>
+                {sessionBill.isPaid ? (
+                  <h3 className="text-2xl font-display text-[var(--success)]">PAID IN FULL</h3>
+                ) : (
+                  <h3 className="text-2xl font-display text-[var(--text)]">
+                    {formatPrice(sessionBill.grandTotal, sessionBill.currency)}
+                  </h3>
+                )}
                 <p className="text-xs text-[var(--muted)] mt-1">
                   {sessionBill.orderCount} {sessionBill.orderCount === 1 ? 'order' : 'orders'} — Tap
                   to view receipt
@@ -1892,21 +1916,27 @@ export function MenuPage() {
             <div className="p-6 bg-[var(--surface2)] border-t border-[var(--border)] space-y-4 safe-bottom">
               <div className="flex justify-between items-center">
                 <span className="text-sm font-bold text-[var(--muted)] uppercase tracking-[0.2em]">
-                  Grand Total
+                  {sessionBill?.isPaid ? 'Balance Due' : 'Grand Total'}
                 </span>
-                <span className="text-3xl font-display text-[var(--accent)]">
-                  {formatPrice(fullBill.grandTotal, fullBill.currency)}
+                <span
+                  className={`text-3xl font-display ${sessionBill?.isPaid ? 'text-[var(--success)]' : 'text-[var(--accent)]'}`}
+                >
+                  {sessionBill?.isPaid
+                    ? 'PAID'
+                    : formatPrice(fullBill.grandTotal, fullBill.currency)}
                 </span>
               </div>
-              <button
-                onClick={() => {
-                  setTabModal(false);
-                  void submitBillRequest();
-                }}
-                className="btn-primary w-full py-4 text-center font-bold tracking-widest"
-              >
-                REQUEST PAYMENT NOW
-              </button>
+              {!sessionBill?.isPaid && (
+                <button
+                  onClick={() => {
+                    setTabModal(false);
+                    void submitBillRequest();
+                  }}
+                  className="btn-primary w-full py-4 text-center font-bold tracking-widest"
+                >
+                  REQUEST PAYMENT NOW
+                </button>
+              )}
             </div>
           </div>
         </div>

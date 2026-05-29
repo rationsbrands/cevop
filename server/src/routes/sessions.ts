@@ -22,6 +22,7 @@ sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response
       select: {
         id: true,
         openedAt: true,
+        closedAt: true,
         tableId: true,
         assignedWaiter: { select: { staffCode: true, name: true } },
         organizationId: true,
@@ -49,6 +50,9 @@ sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response
             },
           },
         },
+        payments: {
+          select: { id: true, amount: true, method: true, processedAt: true },
+        },
       },
     });
 
@@ -64,6 +68,7 @@ sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response
       0,
     );
     const grandTotal = session.orders.reduce((sum, o) => sum + Number(o.total), 0);
+    const amountPaid = session.payments.reduce((sum, p) => sum + Number(p.amount), 0);
 
     res.json({
       success: true,
@@ -92,7 +97,17 @@ sessionsRouter.get('/public/:sessionId/bill', async (req: Request, res: Response
         grandTax,
         grandServiceCharge,
         grandTotal,
+        amountPaid,
+        balance: Math.max(0, grandTotal - amountPaid),
+        isPaid: amountPaid >= grandTotal,
         orderCount: session.orders.length,
+        closedAt: session.closedAt,
+        payments: session.payments.map((p) => ({
+          id: p.id,
+          amount: Number(p.amount),
+          method: p.method,
+          processedAt: p.processedAt,
+        })),
       },
     });
   } catch (err) {
