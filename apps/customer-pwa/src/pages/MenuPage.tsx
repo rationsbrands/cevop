@@ -123,6 +123,7 @@ export function MenuPage() {
     }
   });
   const [ordersExpanded, setOrdersExpanded] = useState(false);
+  const [billRequested, setBillRequested] = useState(false);
   const [sessionBill, setSessionBill] = useState<{
     grandTotal: number;
     orderCount: number;
@@ -178,9 +179,12 @@ export function MenuPage() {
             setFullBill(null);
             setActiveOrderIds([]);
             setOrderPreviews({});
+            setBillRequested(false);
           }
           return;
         }
+        // Bill settled — reset the requested state
+        if (data.data.isPaid) setBillRequested(false);
         setSessionBill({
           grandTotal: data.data.grandTotal,
           orderCount: data.data.orderCount,
@@ -265,6 +269,7 @@ export function MenuPage() {
 
       const data = await res.json();
       if (data.success) {
+        setBillRequested(true);
         showToast('Bill requested. Your waiter is on the way.', 'success');
       } else {
         showToast('Could not request bill. Please try again.', 'error');
@@ -1125,10 +1130,31 @@ export function MenuPage() {
 
   if (loading)
     return (
-      <div className="min-h-dvh bg-[var(--bg)] flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <div className="w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-[var(--muted)] text-sm">Loading menu…</p>
+      <div className="min-h-dvh bg-[var(--bg)] flex flex-col">
+        {/* Header skeleton */}
+        <div className="px-4 py-3 border-b border-[var(--border)] safe-top">
+          <div className="skeleton h-6 w-40 mb-2" />
+          <div className="skeleton h-3 w-24" />
+        </div>
+        <div className="px-4 pb-3 pt-2">
+          <div className="grid grid-cols-2 gap-2">
+            <div className="skeleton h-11 rounded-full" />
+            <div className="skeleton h-11 rounded-full" />
+          </div>
+        </div>
+        {/* Menu item skeletons */}
+        <div className="px-4 pt-4 space-y-3">
+          <div className="skeleton h-9 w-48 mb-2" />
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="card p-5 flex items-start gap-4">
+              <div className="flex-1 space-y-2.5">
+                <div className="skeleton h-5 w-3/4" />
+                <div className="skeleton h-3 w-full" />
+                <div className="skeleton h-4 w-20 mt-3" />
+              </div>
+              <div className="skeleton w-10 h-10 rounded-full shrink-0" />
+            </div>
+          ))}
         </div>
       </div>
     );
@@ -1204,61 +1230,75 @@ export function MenuPage() {
         </div>
 
         <div className="px-4 pb-3 relative z-20">
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              onClick={() => {
-                if (!hasWaiterOptions) {
-                  showToast('Not available at this time.', 'error');
-                  return;
-                }
-                setWaiterModal(true);
-              }}
-              className="min-h-11 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
-              aria-label="Call waiter"
-            >
-              Waiter
-            </button>
+          {(() => {
+            // Bill button only shows when there's an unpaid bill to settle
+            const showBillButton =
+              !!sessionBill && sessionBill.grandTotal > 0 && !sessionBill.isPaid;
+            return (
+              <div className={`grid ${showBillButton ? 'grid-cols-3' : 'grid-cols-2'} gap-2`}>
+                <button
+                  onClick={() => {
+                    if (!hasWaiterOptions) {
+                      showToast('Not available at this time.', 'error');
+                      return;
+                    }
+                    setWaiterModal(true);
+                  }}
+                  className="min-h-11 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
+                  aria-label="Call waiter"
+                >
+                  Waiter
+                </button>
 
-            <button
-              onClick={() => {
-                if (!hasServiceOptions) {
-                  showToast('Not available at this time.', 'error');
-                  return;
-                }
-                setServiceModal(true);
-              }}
-              className="min-h-11 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
-              aria-label="Request service"
-            >
-              Service
-            </button>
+                <button
+                  onClick={() => {
+                    if (!hasServiceOptions) {
+                      showToast('Not available at this time.', 'error');
+                      return;
+                    }
+                    setServiceModal(true);
+                  }}
+                  className="min-h-11 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
+                  aria-label="Request service"
+                >
+                  Service
+                </button>
 
-            <button
-              onClick={() => {
-                if (!isOnline) {
-                  showToast('You appear to be offline. Please reconnect and try again.', 'error');
-                  return;
-                }
-                const billOpt = helpOptions.find((o) => o.type === 'BILL');
-                if (billOpt) handleHelpOptionClick(billOpt);
-                else void submitBillRequest();
-              }}
-              className="min-h-11 px-3 py-2 rounded-full border border-[var(--accent)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display flex flex-col items-center justify-center leading-none"
-              aria-label="Request bill"
-            >
-              <span>Bill</span>
-              {sessionBill && sessionBill.grandTotal > 0 && !sessionBill.isPaid && (
-                <span className="text-[9px] text-[var(--accent)] mt-1 mono">
-                  {formatPrice(sessionBill.grandTotal, sessionBill.currency)}
-                </span>
-              )}
-              {sessionBill && sessionBill.isPaid && (
-                <span className="text-[9px] text-[var(--success)] mt-1 font-bold tracking-widest uppercase">
-                  Paid
-                </span>
-              )}
-            </button>
-          </div>
+                {showBillButton && (
+                  <button
+                    disabled={billRequested}
+                    onClick={() => {
+                      if (!isOnline) {
+                        showToast(
+                          'You appear to be offline. Please reconnect and try again.',
+                          'error',
+                        );
+                        return;
+                      }
+                      const billOpt = helpOptions.find((o) => o.type === 'BILL');
+                      if (billOpt) handleHelpOptionClick(billOpt);
+                      else void submitBillRequest();
+                    }}
+                    className={`min-h-11 px-3 py-2 rounded-full text-xs sm:text-sm font-bold transition-all font-display flex flex-col items-center justify-center leading-none ${
+                      billRequested
+                        ? 'bg-[var(--success)] text-white border border-[var(--success)] cursor-default'
+                        : 'bg-[var(--accent)] text-black border border-[var(--accent)] hover:brightness-110 active:scale-95'
+                    }`}
+                    aria-label="Request bill"
+                  >
+                    <span>{billRequested ? 'Bill Requested' : 'Request Bill'}</span>
+                    <span
+                      className={`text-[9px] mt-1 mono ${billRequested ? 'text-white/80' : 'text-black/70'}`}
+                    >
+                      {billRequested
+                        ? 'Waiter on the way'
+                        : formatPrice(sessionBill!.grandTotal, sessionBill!.currency)}
+                    </span>
+                  </button>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Persistent offline order banner — stays visible until the queued order is sent */}
@@ -1326,14 +1366,14 @@ export function MenuPage() {
         )}
 
         {/* Category tabs */}
-        <div className="flex overflow-x-auto scrollbar-none px-4 pt-2 pb-3 gap-2 relative z-20">
+        <div className="flex overflow-x-auto no-scrollbar px-4 pt-2 pb-3 gap-2 relative z-20">
           {categories.map((cat) => (
             <button
               key={cat.id}
               onClick={() => scrollToCategory(cat.id)}
-              className={`shrink-0 px-4 py-1.5 text-sm font-bold transition-all duration-150 border rounded-full font-display ${
+              className={`press shrink-0 px-4 py-1.5 text-sm font-bold transition-all duration-200 border rounded-full font-display ${
                 activeCategory === cat.id
-                  ? 'bg-[var(--text)] text-[var(--bg)] border-[var(--text)]'
+                  ? 'bg-[var(--text)] text-[var(--bg)] border-[var(--text)] scale-105'
                   : 'border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:border-[var(--text)]'
               }`}
             >
@@ -1436,20 +1476,22 @@ export function MenuPage() {
                     </div>
                     <div className="shrink-0">
                       {cartItem ? (
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2.5 animate-in">
                           <button
                             onClick={() => removeFromCart(item.id)}
-                            className="w-8 h-8 border border-[var(--border)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent)] transition-colors font-bold text-lg"
+                            className="qty-btn w-9 h-9 border border-[var(--border)] text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent)] font-bold text-lg"
+                            aria-label={`Remove one ${item.name}`}
                           >
                             −
                           </button>
-                          <span className="w-5 text-center font-semibold text-[var(--text)]">
+                          <span className="w-5 text-center font-bold text-[var(--text)] tabular-nums">
                             {cartItem.quantity}
                           </span>
                           <button
                             onClick={() => (isUnavailable ? null : addToCart(item))}
                             disabled={isUnavailable}
-                            className={`w-8 h-8 bg-[var(--accent)] text-black flex items-center justify-center font-bold text-lg transition-transform active:scale-90 ${isUnavailable ? 'opacity-30 cursor-not-allowed' : ''}`}
+                            className={`qty-btn w-9 h-9 bg-[var(--accent)] text-black font-bold text-lg shadow-lg shadow-[var(--accent)]/20 ${isUnavailable ? 'opacity-30 cursor-not-allowed' : ''}`}
+                            aria-label={`Add one ${item.name}`}
                           >
                             +
                           </button>
@@ -1458,7 +1500,8 @@ export function MenuPage() {
                         <button
                           onClick={() => (isUnavailable ? null : addToCart(item))}
                           disabled={isUnavailable}
-                          className={`w-8 h-8 bg-[var(--accent)] text-black flex items-center justify-center font-bold text-xl transition-transform active:scale-90 ${isUnavailable ? 'opacity-30 cursor-not-allowed' : ''}`}
+                          className={`qty-btn w-10 h-10 bg-[var(--accent)] text-black font-bold text-xl shadow-lg shadow-[var(--accent)]/20 ${isUnavailable ? 'opacity-30 cursor-not-allowed' : ''}`}
+                          aria-label={`Add ${item.name} to order`}
                         >
                           +
                         </button>

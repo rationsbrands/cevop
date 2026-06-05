@@ -250,3 +250,130 @@ h6 {
 .safe-top {
   padding-top: max(0.5rem, env(safe-area-inset-top));
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Native-feel primitives
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Spring-like bottom-sheet entrance (cart, modals) */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-slide-up {
+  animation: slide-up 0.42s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Generic content entrance */
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.animate-in {
+  animation: scale-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Pulsing glow for the cart FAB so it draws the eye */
+@keyframes pulse-glow {
+  0%,
+  100% {
+    box-shadow: 0 8px 24px -6px var(--accent-dim);
+  }
+  50% {
+    box-shadow:
+      0 10px 32px -4px rgba(0, 255, 213, 0.35),
+      0 0 0 1px rgba(0, 255, 213, 0.15);
+  }
+}
+.animate-pulse-glow {
+  animation: pulse-glow 2.4s ease-in-out infinite;
+}
+
+/* Backdrop fade for modals */
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-backdrop {
+  animation: backdrop-in 0.3s ease forwards;
+}
+
+/* Skeleton shimmer for loading states */
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--surface) 0%, var(--surface2) 50%, var(--surface) 100%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: 12px;
+}
+
+/* Tactile press feedback — apply to any interactive element */
+.press {
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  touch-action: manipulation;
+}
+.press:active {
+  transform: scale(0.94);
+}
+
+/* Horizontal scroll for category tabs without a visible scrollbar */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Smooth momentum scrolling on the menu body */
+.momentum-scroll {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* Rounded add/quantity control used across the menu */
+.qty-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  touch-action: manipulation;
+}
+.qty-btn:active {
+  transform: scale(0.88);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-slide-up,
+  .animate-in,
+  .animate-pulse-glow,
+  .animate-fade-in,
+  .skeleton {
+    animation: none;
+  }
+}

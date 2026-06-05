@@ -1079,7 +1079,7 @@ export function WaiterBoard() {
     }
   }
 
-  async function clearTable(sessionId: string) {
+  async function clearTable(sessionId: string, tableLabel?: string) {
     if (updatingItems.has(sessionId)) return;
     setUpdatingItems((prev) => new Set(prev).add(sessionId));
 
@@ -1104,8 +1104,43 @@ export function WaiterBoard() {
         },
         body: JSON.stringify({ nextStatus: 'CLEANING' }),
       });
-      if (!res.ok && previous) {
-        queryClient.setQueryData(['waiter-tables'], previous);
+      if (!res.ok) {
+        // Roll back the optimistic update
+        if (previous) queryClient.setQueryData(['waiter-tables'], previous);
+        const data = await res.json().catch(() => ({}));
+        if (data?.code === 'UNPAID_BALANCE') {
+          const isManager = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(
+            user?.role,
+          );
+          // Managers may force-clear an unpaid table (walkout / comp)
+          if (
+            isManager &&
+            window.confirm(
+              `This table has an unpaid balance of ${formatPrice(data.balance ?? 0, (user?.organization as any)?.currency || 'NGN')}.\n\nForce clear anyway? Use only for walkouts or comped meals — no payment will be recorded.`,
+            )
+          ) {
+            const forceRes = await fetch(`${API_BASE}/api/sessions/${sessionId}/close`, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${tokenRef.current}`,
+              },
+              body: JSON.stringify({ nextStatus: 'CLEANING', force: true }),
+            });
+            if (forceRes.ok) {
+              queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
+              queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
+            } else {
+              alert('Failed to force clear table');
+            }
+          } else {
+            // Waiter (or manager who declined) — settle the bill first
+            void fetchBill(sessionId, tableLabel ?? 'Table');
+          }
+        } else {
+          alert(data?.error || 'Failed to clear table');
+        }
+        return;
       }
       queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
       queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
@@ -1620,7 +1655,7 @@ export function WaiterBoard() {
                           View Bill
                         </button>
                         <button
-                          onClick={() => clearTable(t.activeSessionId!)}
+                          onClick={() => clearTable(t.activeSessionId!, t.label)}
                           disabled={updatingItems.has(t.activeSessionId!)}
                           className="w-full text-[10px] py-1.5 font-bold tracking-wider border border-[var(--border)] hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50 uppercase"
                         >

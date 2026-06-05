@@ -283,9 +283,46 @@ sessionsRouter.patch(
 
       const bodySchema = z.object({
         nextStatus: z.enum(['CLEANING', 'EMPTY']).optional(),
+        // Managers can force-close an unpaid table for genuine walkouts/comps.
+        force: z.boolean().optional(),
       });
 
-      const { nextStatus } = bodySchema.parse(req.body);
+      const { nextStatus, force } = bodySchema.parse(req.body);
+
+      // ─── Require payment before clearing ──────────────────────────────────
+      // A table with an outstanding balance cannot be cleared. The waiter must
+      // record payment first. Only org/branch managers may force-close (walkouts).
+      const [orders, payments] = await Promise.all([
+        prisma.order.findMany({
+          where: { sessionId: req.params.id, status: { not: 'CANCELLED' } },
+          select: { total: true },
+        }),
+        (prisma as any).payment.findMany({
+          where: { sessionId: req.params.id },
+          select: { amount: true },
+        }),
+      ]);
+      const grandTotal = orders.reduce((s, o) => s + Number(o.total), 0);
+      const amountPaid = payments.reduce((s: number, p: any) => s + Number(p.amount), 0);
+      const balance = Number((grandTotal - amountPaid).toFixed(2));
+
+      const isManager = [
+        'ORG_OWNER',
+        'ADMIN',
+        'ORG_MANAGER',
+        'BRANCH_ADMIN',
+        'SUPERADMIN',
+      ].includes(req.user!.role);
+
+      if (balance > 0 && !(force && isManager)) {
+        res.status(400).json({
+          success: false,
+          code: 'UNPAID_BALANCE',
+          error: 'This table has an unpaid balance. Record payment before clearing.',
+          balance,
+        });
+        return;
+      }
 
       await closeSession(req.params.id, req.user!.userId, nextStatus);
 
