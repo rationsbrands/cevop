@@ -152,14 +152,37 @@ export function WaiterBoard() {
   const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [orderError, setOrderError] = useState('');
 
+  // Add-items-to-existing-order modal
+  const [addItemsModal, setAddItemsModal] = useState<{
+    orderId: string;
+    tableLabel: string;
+  } | null>(null);
+  const [addItemsCart, setAddItemsCart] = useState<
+    Record<string, { name: string; price: number; quantity: number; notes: string }>
+  >({});
+  const [addItemsSubmitting, setAddItemsSubmitting] = useState(false);
+  const [addItemsError, setAddItemsError] = useState('');
+
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanMode, setScanMode] = useState<'scan' | 'pick'>('scan');
   const [scanResult, setScanResult] = useState<string | null>(null);
+  const [tableSearch, setTableSearch] = useState('');
+  const [sectionOnly, setSectionOnly] = useState(true);
+  const [cameraError, setCameraError] = useState('');
+  const [cameraActive, setCameraActive] = useState(false);
   const [attachingTable, setAttachingTable] = useState(false);
+  const [attachError, setAttachError] = useState('');
+  const [pendingAttach, setPendingAttach] = useState<{ orgId: string; tableId: string } | null>(
+    null,
+  );
   const [handoverConfirm, setHandoverConfirm] = useState<{
     orgId: string;
     tableId: string;
     waiterName: string;
   } | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const scanFrameRef = useRef<number | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
   const tokenRef = useRef(token);
@@ -563,6 +586,26 @@ export function WaiterBoard() {
     };
   }, []);
 
+  // Reset modal state on open; stop camera on close
+  /* eslint-disable */
+  useEffect(() => {
+    if (scannerOpen) {
+      setScanMode('scan');
+      setScanResult(null);
+      setTableSearch('');
+      setAttachError('');
+      setCameraError('');
+      setPendingAttach(null);
+    } else {
+      stopCamera();
+    }
+  }, [scannerOpen]);
+  /* eslint-enable */
+
+  useEffect(() => {
+    return () => stopCamera();
+  }, []);
+
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
@@ -720,48 +763,170 @@ export function WaiterBoard() {
     }
   }
 
-  async function attachToTableByQR(qrUrl: string, force = false) {
-    // Parse orgId and tableId from the scanned URL
-    // Expected format: `https://order.cevop.com/menu/:orgId/:tableId`
+  async function openAddItemsForTable(table: { id: string; label: string }) {
+    if (!user?.organizationId || !user?.branchId) return;
+    // Fetch the most recent RECEIVED/PREPARING order for this table
     try {
-      const url = new URL(qrUrl);
-      const parts = url.pathname.split('/').filter(Boolean);
-      // parts = ['menu', orgId, tableId]
-      if (parts[0] !== 'menu' || parts.length < 3) {
-        return { success: false, error: 'Not a valid Cevop QR code' };
+      const res = await fetch(
+        `${API_BASE}/api/orders?status=RECEIVED&status=PREPARING&tableId=${table.id}&limit=1`,
+        { headers: { Authorization: `Bearer ${tokenRef.current}` } },
+      );
+      const data = await res.json();
+      const orders = data?.data ?? [];
+      if (orders.length === 0) {
+        // No active order — fall back to new order modal
+        openOrderModal({ id: table.id, label: table.label });
+        return;
       }
-      const [, orgId, tableId] = parts;
+      setAddItemsCart({});
+      setAddItemsError('');
+      setAddItemsModal({ orderId: orders[0].id, tableLabel: table.label });
+      void fetchMenu(user.organizationId, user.branchId);
+    } catch {
+      openOrderModal({ id: table.id, label: table.label });
+    }
+  }
 
-      setAttachingTable(true);
+  async function submitAddItems() {
+    if (!addItemsModal) return;
+    const items = Object.entries(addItemsCart)
+      .filter(([, v]) => v.quantity > 0)
+      .map(([menuItemId, v]) => ({
+        menuItemId,
+        quantity: v.quantity,
+        notes: v.notes || undefined,
+      }));
+    if (items.length === 0) {
+      setAddItemsError('Add at least one item');
+      return;
+    }
+    setAddItemsSubmitting(true);
+    setAddItemsError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/orders/${addItemsModal.orderId}/add-items`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
+        body: JSON.stringify({ items }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAddItemsModal(null);
+        setAddItemsCart({});
+        refreshNowRef.current().catch(() => void 0);
+      } else {
+        setAddItemsError(data.error ?? 'Failed to add items');
+      }
+    } catch {
+      setAddItemsError('Network error. Please try again.');
+    } finally {
+      setAddItemsSubmitting(false);
+    }
+  }
+
+  function stopCamera() {
+    if (scanFrameRef.current) {
+      cancelAnimationFrame(scanFrameRef.current);
+      scanFrameRef.current = null;
+    }
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((t) => t.stop());
+      cameraStreamRef.current = null;
+    }
+    setCameraActive(false);
+  }
+
+  async function startCamera() {
+    setCameraError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+      });
+      cameraStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setCameraActive(true);
+
+      // Start QR detection loop — uses BarcodeDetector if available
+      if (!('BarcodeDetector' in window)) {
+        setCameraError('no-detector');
+        return;
+      }
+      const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+      const scan = async () => {
+        if (!videoRef.current || !cameraStreamRef.current) return;
+        try {
+          const codes = await detector.detect(videoRef.current);
+          if (codes.length > 0) {
+            stopCamera();
+            await attachToTableByQR(codes[0].rawValue);
+            return;
+          }
+        } catch {
+          // frame decode error — keep going
+        }
+        scanFrameRef.current = requestAnimationFrame(scan);
+      };
+      scanFrameRef.current = requestAnimationFrame(scan);
+    } catch (err: any) {
+      const msg =
+        err?.name === 'NotAllowedError'
+          ? 'Camera permission denied. Please allow camera access and try again.'
+          : err?.name === 'NotFoundError'
+            ? 'No camera found on this device.'
+            : 'Could not start camera.';
+      setCameraError(msg);
+    }
+  }
+
+  async function attachToTableById(orgId: string, tableId: string, force = false) {
+    setAttachingTable(true);
+    setAttachError('');
+    try {
       const res = await fetch(
         `${API_BASE}/api/tables/public/${orgId}/${tableId}/attach-waiter${force ? '?force=true' : ''}`,
-        {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${tokenRef.current}` },
-        },
+        { method: 'POST', headers: { Authorization: `Bearer ${tokenRef.current}` } },
       );
       const data = await res.json();
       setAttachingTable(false);
-
       if (data.success) {
-        // Refresh tasks to pick up the newly attached table
         refreshNowRef.current().catch(() => void 0);
         setHandoverConfirm(null);
-        if (data.message) {
-          // You might have a showToast helper or similar
-          alert(data.message);
-        }
-        return { success: true, tableLabel: data.data.tableLabel };
+        setPendingAttach(null);
+        setScannerOpen(false);
+        setScanResult(null);
+        return { success: true };
       }
-
       if (data.error === 'ALREADY_CLAIMED') {
         setHandoverConfirm({ orgId, tableId, waiterName: data.currentWaiter });
         return { success: false, error: 'ALREADY_CLAIMED' };
       }
-
+      setAttachError(data.error ?? 'Failed to claim table');
       return { success: false, error: data.error ?? 'Failed to attach' };
     } catch {
       setAttachingTable(false);
+      setAttachError('Network error. Please try again.');
+      return { success: false, error: 'Network error' };
+    }
+  }
+
+  async function attachToTableByQR(qrUrl: string, force = false) {
+    try {
+      const url = new URL(qrUrl);
+      const parts = url.pathname.split('/').filter(Boolean);
+      if (parts[0] !== 'menu' || parts.length < 3) {
+        setAttachError('Not a valid Cevop QR code');
+        return { success: false, error: 'Not a valid Cevop QR code' };
+      }
+      const [, orgId, tableId] = parts;
+      setPendingAttach({ orgId, tableId });
+      return await attachToTableById(orgId, tableId, force);
+    } catch {
+      setAttachError('Invalid QR code');
       return { success: false, error: 'Invalid QR code' };
     }
   }
@@ -981,6 +1146,30 @@ export function WaiterBoard() {
       }
       queryClient.invalidateQueries({ queryKey: ['waiter-tables'] });
       queryClient.invalidateQueries({ queryKey: ['waiter-tasks'] });
+    } finally {
+      setUpdatingItems((prev) => {
+        const n = new Set(prev);
+        n.delete(tableId);
+        return n;
+      });
+    }
+  }
+
+  async function openTable(tableId: string) {
+    if (!user?.organizationId) return;
+    if (updatingItems.has(tableId)) return;
+    setUpdatingItems((prev) => new Set(prev).add(tableId));
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/tables/public/${user.organizationId}/${tableId}/attach-waiter`,
+        { method: 'POST', headers: { Authorization: `Bearer ${tokenRef.current}` } },
+      );
+      const data = await res.json();
+      if (data.success) {
+        refreshNowRef.current().catch(() => void 0);
+      } else if (data.error === 'ALREADY_CLAIMED') {
+        setHandoverConfirm({ orgId: user.organizationId, tableId, waiterName: data.currentWaiter });
+      }
     } finally {
       setUpdatingItems((prev) => {
         const n = new Set(prev);
@@ -1448,20 +1637,37 @@ export function WaiterBoard() {
                       </button>
                     ) : null}
                     {t.status === 'OCCUPIED' && (
-                      <button
-                        onClick={() => openOrderModal({ id: t.id, label: t.label })}
-                        className="mt-2 w-full text-xs border border-[var(--accent)]/40 text-[var(--accent)] py-1.5 hover:bg-[var(--accent)]/10 transition-colors"
-                      >
-                        + Add Order
-                      </button>
+                      <div className="mt-2 space-y-1.5">
+                        <button
+                          onClick={() => openAddItemsForTable({ id: t.id, label: t.label })}
+                          className="w-full text-[10px] py-1.5 font-bold tracking-wider border border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent)]/10 transition-all uppercase"
+                        >
+                          + Add to Order
+                        </button>
+                        <button
+                          onClick={() => openOrderModal({ id: t.id, label: t.label })}
+                          className="w-full text-[10px] py-1.5 border border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)] transition-colors"
+                        >
+                          + New Round
+                        </button>
+                      </div>
                     )}
                     {t.status === 'EMPTY' && (
-                      <button
-                        onClick={() => openOrderModal({ id: t.id, label: t.label })}
-                        className="mt-2 w-full text-xs border border-[var(--border)] text-[var(--muted)] py-1.5 hover:border-[var(--accent)]/40 hover:text-[var(--accent)] transition-colors"
-                      >
-                        + Start Order
-                      </button>
+                      <div className="mt-2 space-y-1.5">
+                        <button
+                          onClick={() => openTable(t.id)}
+                          disabled={updatingItems.has(t.id)}
+                          className="w-full text-[10px] py-2 font-bold tracking-wider bg-[var(--accent)] text-black hover:brightness-110 transition-all uppercase disabled:opacity-50"
+                        >
+                          {updatingItems.has(t.id) ? 'Opening…' : 'Open Table'}
+                        </button>
+                        <button
+                          onClick={() => openOrderModal({ id: t.id, label: t.label })}
+                          className="w-full text-xs border border-[var(--border)] text-[var(--muted)] py-1.5 hover:border-[var(--accent)]/40 hover:text-[var(--accent)] transition-colors"
+                        >
+                          + Start Order
+                        </button>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -1474,56 +1680,333 @@ export function WaiterBoard() {
         </div>
       )}
 
-      {scannerOpen && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-          <div className="bg-[var(--surface)] border border-[var(--border)] p-5 w-full max-w-sm space-y-4 shadow-2xl relative">
-            <div className="flex items-center justify-between">
-              <p className="font-bold text-[var(--text)] font-display tracking-tight">
-                Attach to Table
-              </p>
-              <button
-                onClick={() => {
-                  setScannerOpen(false);
-                  setScanResult(null);
-                }}
-                className="text-[var(--muted)] text-lg hover:text-[var(--text)] transition-colors"
-              >
-                ×
-              </button>
-            </div>
-            <p className="text-xs text-[var(--muted)] leading-relaxed">
-              Scan the table QR with your camera app, then paste the link below.
-            </p>
-            <input
-              type="url"
-              className="w-full bg-[var(--surface2)] border border-[var(--border)] text-sm text-[var(--text)] px-3 py-2 placeholder-[var(--muted)] focus:border-[var(--accent)] outline-none transition-colors"
-              placeholder="https://order.cevop.com/menu/..."
-              value={scanResult ?? ''}
-              onChange={(e) => setScanResult(e.target.value)}
-              autoFocus
-            />
-            {attachingTable && (
-              <div className="flex justify-center">
-                <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+      {scannerOpen &&
+        (() => {
+          // Derive section IDs the waiter belongs to (tables marked isMine with a section,
+          // where the session isn't claimed by someone — i.e. the isMine comes from section assignment)
+          const waiterSectionIds = new Set<string>(
+            tables
+              .filter((t: any) => t.isMine && t.section && !t.activeSession?.assignedWaiter)
+              .map((t: any) => t.section.id as string),
+          );
+          const hasSection = waiterSectionIds.size > 0;
+
+          const activeTables = tables.filter((t: any) => t.isActive);
+          const sectionTables = hasSection
+            ? activeTables.filter((t: any) => t.section && waiterSectionIds.has(t.section.id))
+            : activeTables;
+
+          const displayTables = (sectionOnly && hasSection ? sectionTables : activeTables).filter(
+            (t: any) => {
+              if (!tableSearch.trim()) return true;
+              const q = tableSearch.toLowerCase();
+              return t.label?.toLowerCase().includes(q) || String(t.number ?? '').includes(q);
+            },
+          );
+
+          return (
+            <div className="fixed inset-0 bg-black/80 z-50 flex items-end sm:items-center justify-center">
+              <div className="bg-[var(--surface)] border border-[var(--border)] w-full max-w-sm shadow-2xl flex flex-col max-h-[90dvh] sm:max-h-[80dvh] rounded-t-2xl sm:rounded-none">
+                {/* Header */}
+                <div className="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
+                  <p className="font-display font-bold text-lg text-[var(--text)] tracking-tight">
+                    CLAIM TABLE
+                  </p>
+                  <button
+                    onClick={() => {
+                      stopCamera();
+                      setScannerOpen(false);
+                      setScanResult(null);
+                      setScanMode('scan');
+                      setTableSearch('');
+                      setAttachError('');
+                      setCameraError('');
+                    }}
+                    className="text-[var(--muted)] text-2xl leading-none hover:text-[var(--text)] transition-colors w-8 h-8 flex items-center justify-center"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {/* Mode tabs */}
+                <div className="flex border-b border-[var(--border)] mx-5 shrink-0">
+                  {(['scan', 'pick'] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => {
+                        if (m !== scanMode) {
+                          if (m !== 'scan') stopCamera();
+                          setScanMode(m);
+                          setAttachError('');
+                          setCameraError('');
+                        }
+                      }}
+                      className={`flex-1 py-2.5 text-xs font-bold tracking-widest uppercase transition-all ${
+                        scanMode === m
+                          ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]'
+                          : 'text-[var(--muted)] hover:text-[var(--text)]'
+                      }`}
+                    >
+                      {m === 'scan' ? 'Scan QR' : 'Pick Table'}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 overflow-y-auto p-5 space-y-4 min-h-0">
+                  {scanMode === 'scan' ? (
+                    <div className="space-y-4">
+                      {/* Camera viewfinder */}
+                      {!cameraActive && !cameraError && (
+                        <button
+                          onClick={startCamera}
+                          className="w-full aspect-square border-2 border-dashed border-[var(--border)] hover:border-[var(--accent)] flex flex-col items-center justify-center gap-3 transition-colors group"
+                        >
+                          <div className="w-14 h-14 border-2 border-[var(--muted)] group-hover:border-[var(--accent)] flex items-center justify-center transition-colors">
+                            <svg
+                              width="28"
+                              height="28"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              className="text-[var(--muted)] group-hover:text-[var(--accent)] transition-colors"
+                            >
+                              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                              <circle cx="12" cy="13" r="4" />
+                            </svg>
+                          </div>
+                          <span className="text-xs font-bold text-[var(--muted)] group-hover:text-[var(--accent)] uppercase tracking-widest transition-colors">
+                            Tap to open camera
+                          </span>
+                        </button>
+                      )}
+
+                      {cameraActive && (
+                        <div className="relative w-full aspect-square bg-black overflow-hidden">
+                          <video
+                            ref={videoRef}
+                            muted
+                            playsInline
+                            className="absolute inset-0 w-full h-full object-cover"
+                          />
+                          {/* Scan frame overlay */}
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div className="relative w-3/5 aspect-square">
+                              <span className="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-[var(--accent)]" />
+                              <span className="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-[var(--accent)]" />
+                              <span className="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-[var(--accent)]" />
+                              <span className="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-[var(--accent)]" />
+                            </div>
+                          </div>
+                          <p className="absolute bottom-3 left-0 right-0 text-center text-[10px] text-white/70 font-bold tracking-widest uppercase">
+                            Point at table QR code
+                          </p>
+                        </div>
+                      )}
+
+                      {/* BarcodeDetector not available — show file capture fallback */}
+                      {cameraError === 'no-detector' && (
+                        <div className="space-y-3">
+                          <p className="text-xs text-[var(--muted)]">
+                            Live scan isn't supported on this browser. Take a photo of the QR code
+                            instead.
+                          </p>
+                          <label className="w-full py-3 border border-[var(--border)] text-[var(--muted)] text-xs font-bold uppercase tracking-widest flex items-center justify-center cursor-pointer hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors">
+                            Take Photo
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              className="sr-only"
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                // Read as image and try BarcodeDetector
+                                const img = new Image();
+                                img.src = URL.createObjectURL(file);
+                                img.onload = async () => {
+                                  if (!('BarcodeDetector' in window)) {
+                                    setAttachError(
+                                      'QR scanning not supported. Use "Pick Table" instead.',
+                                    );
+                                    return;
+                                  }
+                                  try {
+                                    const detector = new (window as any).BarcodeDetector({
+                                      formats: ['qr_code'],
+                                    });
+                                    const codes = await detector.detect(img);
+                                    if (codes.length > 0) {
+                                      await attachToTableByQR(codes[0].rawValue);
+                                    } else {
+                                      setAttachError(
+                                        'No QR code found in photo. Try again or use Pick Table.',
+                                      );
+                                    }
+                                  } catch {
+                                    setAttachError(
+                                      'Could not read QR code. Try Pick Table instead.',
+                                    );
+                                  }
+                                };
+                              }}
+                            />
+                          </label>
+                        </div>
+                      )}
+
+                      {/* Camera permission / other errors */}
+                      {cameraError && cameraError !== 'no-detector' && (
+                        <div className="space-y-3">
+                          <p className="text-xs text-[var(--danger)]">{cameraError}</p>
+                          <button
+                            onClick={() => {
+                              setCameraError('');
+                              setScanMode('pick');
+                            }}
+                            className="text-xs text-[var(--accent)] underline"
+                          >
+                            Pick table manually instead
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Paste URL fallback (always shown below camera) */}
+                      <div className="space-y-2">
+                        <p className="text-[10px] text-[var(--muted)] uppercase tracking-widest font-bold">
+                          Or paste QR link
+                        </p>
+                        <div className="flex gap-2">
+                          <input
+                            type="url"
+                            className="flex-1 bg-[var(--surface2)] border border-[var(--border)] text-sm text-[var(--text)] px-3 py-2 placeholder-[var(--muted)] focus:border-[var(--accent)] outline-none transition-colors min-w-0"
+                            placeholder="https://order.cevop.com/menu/..."
+                            value={scanResult ?? ''}
+                            onChange={(e) => {
+                              setScanResult(e.target.value);
+                              setAttachError('');
+                            }}
+                          />
+                          <button
+                            className="px-4 py-2 bg-[var(--accent)] text-black font-bold text-xs disabled:opacity-50 shrink-0"
+                            disabled={!scanResult || attachingTable}
+                            onClick={() => {
+                              if (scanResult) attachToTableByQR(scanResult);
+                            }}
+                          >
+                            {attachingTable ? '...' : 'GO'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Pick Table mode */
+                    <div className="space-y-3">
+                      {/* Search */}
+                      <input
+                        type="search"
+                        autoFocus
+                        className="w-full bg-[var(--surface2)] border border-[var(--border)] text-sm text-[var(--text)] px-3 py-2.5 placeholder-[var(--muted)] focus:border-[var(--accent)] outline-none transition-colors"
+                        placeholder="Search table name or number…"
+                        value={tableSearch}
+                        onChange={(e) => setTableSearch(e.target.value)}
+                      />
+
+                      {/* Section filter toggle */}
+                      {hasSection && (
+                        <button
+                          onClick={() => setSectionOnly((v) => !v)}
+                          className={`flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                            sectionOnly ? 'text-[var(--accent)]' : 'text-[var(--muted)]'
+                          }`}
+                        >
+                          <span
+                            className={`w-3.5 h-3.5 border flex items-center justify-center transition-colors ${
+                              sectionOnly
+                                ? 'border-[var(--accent)] bg-[var(--accent)]/20'
+                                : 'border-[var(--border)]'
+                            }`}
+                          >
+                            {sectionOnly && <span className="w-1.5 h-1.5 bg-[var(--accent)]" />}
+                          </span>
+                          My section only
+                        </button>
+                      )}
+
+                      {/* Table list */}
+                      <div className="space-y-1.5">
+                        {displayTables.length === 0 && (
+                          <p className="text-center text-[var(--muted)] text-xs py-6">
+                            {tableSearch ? 'No tables match your search' : 'No tables available'}
+                          </p>
+                        )}
+                        {displayTables.map((t: any) => (
+                          <button
+                            key={t.id}
+                            disabled={attachingTable}
+                            onClick={() => {
+                              if (!user?.organizationId) return;
+                              // eslint-disable-next-line
+                              attachToTableById(user.organizationId, t.id);
+                            }}
+                            className="w-full flex items-center justify-between px-3 py-3 border border-[var(--border)] hover:border-[var(--accent)] bg-[var(--surface2)] hover:bg-[var(--surface2)] transition-all text-left group disabled:opacity-50"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-sm text-[var(--text)]">
+                                  {t.label}
+                                </span>
+                                {t.isMine && (
+                                  <span className="text-[9px] bg-[var(--accent)] text-black px-1.5 py-0.5 font-bold uppercase rounded-sm">
+                                    Mine
+                                  </span>
+                                )}
+                              </div>
+                              {t.section && (
+                                <span
+                                  className="text-[10px] font-bold"
+                                  style={{ color: t.section.colour ?? 'var(--muted)' }}
+                                >
+                                  {t.section.name}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span
+                                className={`text-[10px] font-bold uppercase tracking-wider ${
+                                  t.status === 'OCCUPIED'
+                                    ? 'text-[var(--warning)]'
+                                    : t.status === 'EMPTY'
+                                      ? 'text-[var(--muted)]'
+                                      : 'text-[var(--accent)]'
+                                }`}
+                              >
+                                {t.status}
+                              </span>
+                              {attachingTable && pendingAttach?.tableId === t.id ? (
+                                <div className="w-4 h-4 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <span className="text-[var(--muted)] group-hover:text-[var(--accent)] text-xs transition-colors">
+                                  →
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Error */}
+                  {attachError && (
+                    <p className="text-xs text-[var(--danger)] font-medium">{attachError}</p>
+                  )}
+                </div>
               </div>
-            )}
-            <button
-              className="w-full py-3 bg-[var(--accent)] text-black font-bold text-sm disabled:opacity-50 hover:bg-[var(--accent)]/90 transition-colors uppercase tracking-widest font-display"
-              disabled={!scanResult || attachingTable}
-              onClick={async () => {
-                if (!scanResult) return;
-                const result = await attachToTableByQR(scanResult);
-                if (result.success) {
-                  setScannerOpen(false);
-                  setScanResult(null);
-                }
-              }}
-            >
-              Attach to {scanResult ? 'Table' : '...'}
-            </button>
-          </div>
-        </div>
-      )}
+            </div>
+          );
+        })()}
 
       {handoverConfirm && (
         <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4">
@@ -1546,12 +2029,8 @@ export function WaiterBoard() {
               <button
                 disabled={attachingTable}
                 onClick={async () => {
-                  if (!scanResult) return;
-                  const res = await attachToTableByQR(scanResult, true);
-                  if (res.success) {
-                    setScannerOpen(false);
-                    setScanResult(null);
-                  }
+                  if (!handoverConfirm) return;
+                  await attachToTableById(handoverConfirm.orgId, handoverConfirm.tableId, true);
                 }}
                 className="py-3 bg-[var(--accent)] text-black font-bold text-xs uppercase tracking-widest hover:brightness-110 transition-colors disabled:opacity-50"
               >
@@ -1825,6 +2304,169 @@ export function WaiterBoard() {
                     : `Place Order — ${cartItemCount} item${cartItemCount !== 1 ? 's' : ''}`}
                 </button>
               </div>
+            </div>
+          )}
+        </div>
+      )}
+      {/* Add Items to Existing Order Modal */}
+      {addItemsModal && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex flex-col">
+          <div className="flex items-center justify-between p-4 border-b border-[var(--border)] bg-[var(--surface)] flex-shrink-0">
+            <div>
+              <p className="font-bold text-[var(--text)]">{addItemsModal.tableLabel}</p>
+              <p className="text-xs text-[var(--muted)]">Add to current order</p>
+            </div>
+            <button
+              onClick={() => setAddItemsModal(null)}
+              className="text-[var(--muted)] hover:text-[var(--text)] text-lg px-2"
+            >
+              ×
+            </button>
+          </div>
+
+          {/* Menu */}
+          <div className="flex-1 overflow-y-auto bg-[var(--bg)]">
+            {menuLoading ? (
+              <div className="flex justify-center py-12">
+                <div className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : menu.categories.length === 0 ? (
+              <div className="text-center text-[var(--muted)] py-12 text-sm">
+                No menu items available
+              </div>
+            ) : (
+              <div className="p-4 space-y-6">
+                {menu.categories.map((cat) => (
+                  <div key={cat.id}>
+                    <p className="text-xs font-bold text-[var(--muted)] uppercase tracking-widest mb-2">
+                      {cat.name}
+                    </p>
+                    <div className="space-y-1">
+                      {cat.items.map((item) => {
+                        const inCart = addItemsCart[item.id];
+                        return (
+                          <div key={item.id} className="space-y-1">
+                            <div className="flex items-center justify-between py-2 border-b border-[var(--border)]/50">
+                              <div className="flex-1 min-w-0 pr-3">
+                                <p className="text-sm font-medium text-[var(--text)] truncate">
+                                  {item.name}
+                                </p>
+                                <p className="text-xs text-[var(--accent)]">
+                                  {formatPrice(
+                                    item.price,
+                                    (user?.organization as any)?.currency || 'NGN',
+                                  )}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                {inCart ? (
+                                  <>
+                                    <button
+                                      onClick={() =>
+                                        setAddItemsCart((p) => {
+                                          const n = { ...p };
+                                          if (n[item.id].quantity > 1)
+                                            n[item.id] = {
+                                              ...n[item.id],
+                                              quantity: n[item.id].quantity - 1,
+                                            };
+                                          else delete n[item.id];
+                                          return n;
+                                        })
+                                      }
+                                      className="w-7 h-7 border border-[var(--border)] text-[var(--muted)] hover:border-[var(--danger)] hover:text-[var(--danger)] flex items-center justify-center text-lg leading-none"
+                                    >
+                                      −
+                                    </button>
+                                    <span className="text-sm font-bold w-4 text-center text-[var(--text)]">
+                                      {inCart.quantity}
+                                    </span>
+                                    <button
+                                      onClick={() =>
+                                        setAddItemsCart((p) => ({
+                                          ...p,
+                                          [item.id]: {
+                                            ...(p[item.id] || {
+                                              name: item.name,
+                                              price: item.price,
+                                              notes: '',
+                                            }),
+                                            quantity: (p[item.id]?.quantity || 0) + 1,
+                                          },
+                                        }))
+                                      }
+                                      className="w-7 h-7 border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)]/10 flex items-center justify-center text-lg leading-none"
+                                    >
+                                      +
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    onClick={() =>
+                                      setAddItemsCart((p) => ({
+                                        ...p,
+                                        [item.id]: {
+                                          name: item.name,
+                                          price: item.price,
+                                          quantity: 1,
+                                          notes: '',
+                                        },
+                                      }))
+                                    }
+                                    className="w-7 h-7 border border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] flex items-center justify-center text-lg leading-none"
+                                  >
+                                    +
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            {inCart && (
+                              <input
+                                type="text"
+                                maxLength={200}
+                                placeholder="Special instructions…"
+                                value={inCart.notes}
+                                onChange={(e) =>
+                                  setAddItemsCart((p) => ({
+                                    ...p,
+                                    [item.id]: { ...p[item.id], notes: e.target.value },
+                                  }))
+                                }
+                                className="w-full text-xs bg-[var(--surface2)] border border-[var(--border)] px-2 py-1.5 focus:border-[var(--accent)] outline-none"
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          {Object.keys(addItemsCart).length > 0 && (
+            <div className="border-t border-[var(--border)] bg-[var(--surface)] p-4 flex-shrink-0 space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[var(--muted)]">Adding</span>
+                <span className="font-bold text-[var(--accent)]">
+                  {formatPrice(
+                    Object.values(addItemsCart).reduce((s, i) => s + i.price * i.quantity, 0),
+                    (user?.organization as any)?.currency || 'NGN',
+                  )}
+                </span>
+              </div>
+              {addItemsError && <p className="text-xs text-[var(--danger)]">{addItemsError}</p>}
+              <button
+                className="w-full py-3 bg-[var(--accent)] text-black font-bold text-sm disabled:opacity-50"
+                onClick={() => void submitAddItems()}
+                disabled={addItemsSubmitting}
+              >
+                {addItemsSubmitting
+                  ? 'Adding…'
+                  : `Add ${Object.values(addItemsCart).reduce((s, i) => s + i.quantity, 0)} item(s) to Order`}
+              </button>
             </div>
           )}
         </div>

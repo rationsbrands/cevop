@@ -19,13 +19,25 @@ const PLATFORM_SLUG = 'cevop-internal'; // Internal platform org — excluded fr
 export const opsRouter = Router();
 opsRouter.use(authenticate, requireRole('SUPERADMIN'));
 
-function getImpersonationCodeStore(): Map<
+// In-memory fallback for when Redis isn't configured (single-instance only)
+const _localImpersonationStore = new Map<
   string,
   { token: string; expiresAt: number; orgId: string; opsUserId: string; createdAt: number }
-> {
-  const g = globalThis as any;
-  if (!g.__cevopImpersonationCodeStore) g.__cevopImpersonationCodeStore = new Map();
-  return g.__cevopImpersonationCodeStore;
+>();
+
+async function storeImpersonationCode(
+  code: string,
+  entry: { token: string; expiresAt: number; orgId: string; opsUserId: string; createdAt: number },
+): Promise<void> {
+  const { getRedisClient } = await import('../services/redis');
+  const redis = getRedisClient();
+  if (redis) {
+    await redis.set(`cevop:impersonate:${code}`, JSON.stringify(entry), { ex: 120 });
+  } else {
+    _localImpersonationStore.set(code, entry);
+    // Clean up expired entries to prevent memory leak
+    setTimeout(() => _localImpersonationStore.delete(code), 120_000);
+  }
 }
 
 // ─── Platform metrics ─────────────────────────────────────────────────────────
@@ -53,6 +65,8 @@ opsRouter.get('/metrics', requireOpsPermission('view_metrics'), async (_req, res
     const orgIds = orgsForCurrency.map((o) => o.id);
     const orgCurrencyById = new Map(orgsForCurrency.map((o) => [o.id, o.currency]));
 
+    const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
     const [
       totalOrgs,
       activeOrgs,
@@ -61,9 +75,13 @@ opsRouter.get('/metrics', requireOpsPermission('view_metrics'), async (_req, res
       selfSignupOrgs,
       newOrgsThisMonth,
       freeOrgs,
+      starterOrgs,
+      growthOrgs,
+      enterpriseOrgs,
       totalUsers,
       totalOrders,
       ordersToday,
+      ordersThisMonth,
       totalBranches,
     ] = await Promise.all([
       prisma.organization.count({ where: { slug: { not: PLATFORM_SLUG } } }),
@@ -79,12 +97,29 @@ opsRouter.get('/metrics', requireOpsPermission('view_metrics'), async (_req, res
         where: { createdAt: { gte: thirtyDaysAgo }, slug: { not: PLATFORM_SLUG } },
       }),
       prisma.organization.count({ where: { plan: 'free', slug: { not: PLATFORM_SLUG } } }),
+      prisma.organization.count({
+        where: { plan: 'starter', planStatus: 'active', slug: { not: PLATFORM_SLUG } },
+      }),
+      prisma.organization.count({
+        where: { plan: 'growth', planStatus: 'active', slug: { not: PLATFORM_SLUG } },
+      }),
+      prisma.organization.count({
+        where: {
+          plan: { in: ['enterprise', 'trial'] },
+          planStatus: 'active',
+          slug: { not: PLATFORM_SLUG },
+        },
+      }),
       prisma.user.count({ where: { isActive: true, role: { not: 'SUPERADMIN' } } }),
       prisma.order.count({ where: { organizationId: { in: orgIds } } }),
       prisma.order.count({ where: { createdAt: { gte: today }, organizationId: { in: orgIds } } }),
+      prisma.order.count({
+        where: { createdAt: { gte: firstOfMonth }, organizationId: { in: orgIds } },
+      }),
       prisma.branch.count({ where: { isActive: true, organizationId: { in: orgIds } } }),
     ]);
 
+    // All-time GMV (order revenue processed through the platform)
     const revenueByOrg = await prisma.order.groupBy({
       by: ['organizationId'],
       where: { status: { not: 'CANCELLED' }, organizationId: { in: orgIds } },
@@ -97,6 +132,23 @@ opsRouter.get('/metrics', requireOpsPermission('view_metrics'), async (_req, res
         (revenueByCurrency[currency] ?? 0) + Number(row._sum.total ?? 0);
     }
 
+    // GMV this month
+    const gmvThisMonthByOrg = await prisma.order.groupBy({
+      by: ['organizationId'],
+      where: {
+        status: { not: 'CANCELLED' },
+        organizationId: { in: orgIds },
+        createdAt: { gte: firstOfMonth },
+      },
+      _sum: { total: true },
+    });
+    const gmvThisMonthByCurrency: Record<string, number> = {};
+    for (const row of gmvThisMonthByOrg) {
+      const currency = orgCurrencyById.get(row.organizationId) ?? 'NGN';
+      gmvThisMonthByCurrency[currency] =
+        (gmvThisMonthByCurrency[currency] ?? 0) + Number(row._sum.total ?? 0);
+    }
+
     const data = {
       orgs: {
         total: totalOrgs,
@@ -106,11 +158,13 @@ opsRouter.get('/metrics', requireOpsPermission('view_metrics'), async (_req, res
         selfSignup: selfSignupOrgs,
         newThisMonth: newOrgsThisMonth,
         free: freeOrgs,
+        byPlan: { starter: starterOrgs, growth: growthOrgs, enterprise: enterpriseOrgs },
       },
       users: { total: totalUsers },
-      orders: { total: totalOrders, today: ordersToday },
+      orders: { total: totalOrders, today: ordersToday, thisMonth: ordersThisMonth },
       branches: { total: totalBranches },
       revenue: { byCurrency: revenueByCurrency },
+      gmvThisMonth: { byCurrency: gmvThisMonthByCurrency },
     };
 
     metricsCache = { data, expiresAt: nowCache + 60_000 };
@@ -443,7 +497,7 @@ opsRouter.post(
 
       const code = crypto.randomBytes(24).toString('hex');
       const expiresAt = Date.now() + 2 * 60 * 1000;
-      getImpersonationCodeStore().set(code, {
+      await storeImpersonationCode(code, {
         token,
         expiresAt,
         orgId: org.id,
@@ -560,6 +614,79 @@ opsRouter.get(
     }
   },
 );
+
+// ─── At-risk orgs — active but no orders in last 7 days ─────────────────────
+
+opsRouter.get('/at-risk', requireOpsPermission('view_metrics'), async (_req, res: Response) => {
+  try {
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    // Orgs that had orders in the last 30 days but none in last 7 days
+    const hadRecentOrders = await prisma.order.findMany({
+      where: { createdAt: { gte: thirtyDaysAgo } },
+      select: { organizationId: true, createdAt: true },
+      distinct: ['organizationId'],
+    });
+    const recentOrgIds = new Set(hadRecentOrders.map((o) => o.organizationId));
+
+    const hadVeryRecentOrders = await prisma.order.findMany({
+      where: { createdAt: { gte: sevenDaysAgo } },
+      select: { organizationId: true },
+      distinct: ['organizationId'],
+    });
+    const veryRecentOrgIds = new Set(hadVeryRecentOrders.map((o) => o.organizationId));
+
+    // At-risk = had orders in last 30d but NOT in last 7d
+    const atRiskOrgIds = [...recentOrgIds].filter((id) => !veryRecentOrgIds.has(id));
+
+    if (atRiskOrgIds.length === 0) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    const orgs = await prisma.organization.findMany({
+      where: {
+        id: { in: atRiskOrgIds },
+        planStatus: { in: ['active', 'trialing'] },
+        slug: { not: PLATFORM_SLUG },
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        plan: true,
+        planStatus: true,
+        _count: { select: { users: true, orders: true } },
+      },
+      orderBy: { name: 'asc' },
+      take: 50,
+    });
+
+    // Get last order date per org
+    const lastOrders = await prisma.order.findMany({
+      where: { organizationId: { in: orgs.map((o) => o.id) } },
+      select: { organizationId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      distinct: ['organizationId'],
+    });
+    const lastOrderByOrg = new Map(lastOrders.map((o) => [o.organizationId, o.createdAt]));
+
+    const data = orgs.map((o) => ({
+      ...o,
+      lastOrderAt: lastOrderByOrg.get(o.id) ?? null,
+      daysSilent: lastOrderByOrg.get(o.id)
+        ? Math.floor((now.getTime() - lastOrderByOrg.get(o.id)!.getTime()) / (1000 * 60 * 60 * 24))
+        : null,
+    }));
+
+    res.json({ success: true, data });
+  } catch (err) {
+    logger.error('GET /ops/at-risk error:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch at-risk orgs' });
+  }
+});
 
 // ─── Team Management ─────────────────────────────────────────────────────────
 

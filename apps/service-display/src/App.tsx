@@ -16,6 +16,9 @@ const KitchenBoard = React.lazy(() =>
 const LoginPage = React.lazy(() =>
   import('./pages/LoginPage').then((m) => ({ default: m.LoginPage })),
 );
+const KioskPage = React.lazy(() =>
+  import('./pages/KioskPage').then((m) => ({ default: m.KioskPage })),
+);
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -51,6 +54,8 @@ function AppRoutes() {
     >
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        {/* Kiosk route — no auth required, orgId+branchId come from URL params */}
+        <Route path="/kiosk" element={<KioskPage />} />
         <Route
           path="/"
           element={

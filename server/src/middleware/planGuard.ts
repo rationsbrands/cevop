@@ -3,9 +3,9 @@ import { prisma } from '../services/prisma';
 import { AuthRequest } from './auth';
 import { logger } from '../services/logger';
 
-// How long to trust the plan in the JWT before doing a live DB check (in ms)
-// Access tokens are 15 minutes, so we check at most once per token lifetime
-const PLAN_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+// How long to trust the plan cache before doing a live DB check (in ms).
+// 2 minutes means a suspended org is blocked within 2 minutes of suspension — not 15.
+const PLAN_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 
 // In-memory cache: orgId -> { planStatus, trialEndsAt, checkedAt }
 // This is per-process but that's fine — worst case a suspended org gets 15 extra minutes

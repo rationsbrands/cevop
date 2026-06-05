@@ -82,6 +82,8 @@ export function ServiceBoard() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<'orders' | 'calls' | 'tables'>('orders');
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [isOnShift, setIsOnShift] = useState<boolean>(!!user?.isOnShift);
+  const [shiftBusy, setShiftBusy] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const lastSyncAtRef = useRef(0);
 
@@ -278,6 +280,23 @@ export function ServiceBoard() {
   useEffect(() => {
     refreshNowRef.current = refreshNow;
   }, [refreshNow]);
+
+  async function toggleShift() {
+    if (shiftBusy) return;
+    setShiftBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/shifts/toggle`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
+      });
+      const data = await res.json();
+      if (data.success) setIsOnShift(data.data.isOnShift);
+    } catch {
+      void 0;
+    } finally {
+      setShiftBusy(false);
+    }
+  }
 
   const playAlert = useCallback(() => {
     try {
@@ -635,6 +654,17 @@ export function ServiceBoard() {
             className="w-8 h-8 rounded-full border border-[var(--border)] flex items-center justify-center text-[10px] font-black"
           >
             {themeLabel}
+          </button>
+          <button
+            onClick={toggleShift}
+            disabled={shiftBusy}
+            className={`px-3 py-1 border text-xs font-bold uppercase rounded-full disabled:opacity-50 transition-colors ${
+              isOnShift
+                ? 'border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger)]/10'
+                : 'border-[var(--ready)] text-[var(--ready)] hover:bg-[var(--ready)]/10'
+            }`}
+          >
+            {shiftBusy ? '...' : isOnShift ? 'Clock Out' : 'Clock In'}
           </button>
           <button
             onClick={logout}

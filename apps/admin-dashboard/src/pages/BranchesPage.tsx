@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { useApi } from '../context/auth';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useApi, useAuth } from '../context/auth';
 import { ConfirmDialog, showToast } from '../components/Popup';
+import { QRCodeSVG } from 'qrcode.react';
 
 interface Branch {
   id: string;
@@ -23,8 +24,14 @@ function slugify(name: string): string {
     .replace(/[^a-z0-9-]/g, '');
 }
 
+const SERVICE_DISPLAY_URL = (
+  import.meta.env.VITE_SERVICE_DISPLAY_URL ||
+  (import.meta.env.DEV ? 'http://localhost:5174' : 'https://service.cevop.com')
+).replace(/\/$/, '');
+
 export function BranchesPage() {
   const api = useApi();
+  const { user } = useAuth();
 
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,6 +68,10 @@ export function BranchesPage() {
   const [adminError, setAdminError] = useState('');
   const [adminSuccess, setAdminSuccess] = useState('');
   const [showAdminPassword, setShowAdminPassword] = useState(false);
+
+  const [kioskBranch, setKioskBranch] = useState<Branch | null>(null);
+  const [copied, setCopied] = useState(false);
+  const printRef = useRef<HTMLDivElement>(null);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmBusy, setConfirmBusy] = useState(false);
@@ -555,6 +566,15 @@ export function BranchesPage() {
                       {branch.isActive ? 'Deactivate' : 'Activate'}
                     </button>
                     <button
+                      onClick={() => {
+                        setKioskBranch(branch);
+                        setCopied(false);
+                      }}
+                      className="flex-1 sm:flex-none text-xs text-[var(--accent)] border border-[var(--accent)]/50 hover:bg-[var(--accent)]/10 px-2.5 py-1.5 transition-colors"
+                    >
+                      Kiosk QR
+                    </button>
+                    <button
                       onClick={() => handleDelete(branch.id)}
                       className="flex-1 sm:flex-none text-xs text-red-400 border border-red-800 hover:bg-red-900/20 px-2.5 py-1.5 transition-colors"
                     >
@@ -704,6 +724,147 @@ export function BranchesPage() {
           ))}
         </div>
       )}
+      {/* Kiosk QR Modal */}
+      {kioskBranch &&
+        (() => {
+          const branch = kioskBranch;
+          const orgId = user?.organizationId ?? '';
+          const kioskUrl = `${SERVICE_DISPLAY_URL}/kiosk?orgId=${orgId}&branchId=${branch.id}`;
+
+          function copyUrl() {
+            navigator.clipboard.writeText(kioskUrl).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            });
+          }
+
+          function printKiosk() {
+            const w = window.open('', '_blank', 'width=600,height=700');
+            if (!w) return;
+            const svgEl = printRef.current?.querySelector('svg');
+            const svgHtml = svgEl ? svgEl.outerHTML : '';
+            w.document.write(`
+            <!DOCTYPE html><html><head><title>Kiosk QR — ${branch.name}</title>
+            <style>
+              body { font-family: system-ui, sans-serif; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; margin:0; padding:2rem; box-sizing:border-box; text-align:center; }
+              h1 { font-size:2rem; font-weight:900; letter-spacing:0.05em; text-transform:uppercase; margin:0 0 0.25rem; }
+              p { color:#666; margin:0 0 1.5rem; font-size:0.875rem; }
+              .qr { margin: 1rem 0; }
+              .url { font-family:monospace; font-size:0.7rem; color:#888; word-break:break-all; margin-top:1rem; border:1px solid #ddd; padding:0.5rem; border-radius:4px; }
+              .instructions { margin-top:1.5rem; font-size:0.8rem; color:#555; line-height:1.6; }
+              @media print { body { padding:1rem; } }
+            </style></head>
+            <body>
+              <h1>Staff Clock-In</h1>
+              <p>${branch.name}</p>
+              <div class="qr">${svgHtml}</div>
+              <p style="font-size:0.75rem;color:#999">Scan with phone camera to open kiosk</p>
+              <div class="instructions">
+                Enter your staff code (e.g. W-01, K-02) to clock in or out.<br>
+                The code on your staff profile card.
+              </div>
+              <div class="url">${kioskUrl}</div>
+              <script>window.onload=()=>window.print();</script>
+            </body></html>
+          `);
+            w.document.close();
+          }
+
+          return (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+              onClick={() => setKioskBranch(null)}
+            >
+              <div
+                className="card w-full max-w-sm p-6 space-y-5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="font-display text-2xl">STAFF KIOSK</h2>
+                    <p className="text-sm text-[var(--muted)] mt-0.5">{branch.name}</p>
+                  </div>
+                  <button
+                    onClick={() => setKioskBranch(null)}
+                    className="text-[var(--muted)] text-2xl leading-none hover:text-[var(--text)] w-8 h-8 flex items-center justify-center"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {/* QR Code */}
+                <div
+                  ref={printRef}
+                  className="flex flex-col items-center gap-3 p-5 border border-[var(--border)] bg-white"
+                >
+                  <QRCodeSVG
+                    value={kioskUrl}
+                    size={200}
+                    bgColor="#ffffff"
+                    fgColor="#000000"
+                    level="M"
+                  />
+                  <p className="text-xs text-gray-500 font-medium text-center">
+                    {branch.name} · Staff Clock-In
+                  </p>
+                </div>
+
+                {/* Instructions */}
+                <p className="text-xs text-[var(--muted)] leading-relaxed">
+                  Put this QR code on a shared tablet in the break room or at the entrance. Staff
+                  scan it to open the clock-in kiosk — no login needed. They enter their staff code
+                  (e.g. <span className="font-mono bg-[var(--surface2)] px-1">W-01</span>) to clock
+                  in or out.
+                </p>
+
+                {/* URL + copy */}
+                <div className="flex items-center gap-2 p-2.5 bg-[var(--surface2)] border border-[var(--border)]">
+                  <span className="font-mono text-[10px] text-[var(--muted)] flex-1 break-all leading-tight">
+                    {kioskUrl}
+                  </span>
+                  <button
+                    onClick={copyUrl}
+                    className={`shrink-0 text-xs font-bold px-2.5 py-1.5 border transition-all ${
+                      copied
+                        ? 'border-[var(--ready)] text-[var(--ready)]'
+                        : 'border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]'
+                    }`}
+                  >
+                    {copied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-2">
+                  <button onClick={() => setKioskBranch(null)} className="btn btn-secondary flex-1">
+                    Close
+                  </button>
+                  <button
+                    onClick={printKiosk}
+                    className="btn btn-primary flex-1 flex items-center justify-center gap-1.5"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="6 9 6 2 18 2 18 9" />
+                      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                      <rect x="6" y="14" width="12" height="8" />
+                    </svg>
+                    Print / Save PDF
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
     </div>
   );
 }

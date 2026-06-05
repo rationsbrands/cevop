@@ -59,7 +59,13 @@ export function KitchenBoard() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [refreshing, setRefreshing] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false);
+  const [isOnShift, setIsOnShift] = useState<boolean>(!!user?.isOnShift);
+  const [shiftBusy, setShiftBusy] = useState(false);
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
+  const selectedStationIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedStationIdRef.current = selectedStationId;
+  }, [selectedStationId]);
   const socketRef = useRef<Socket | null>(null);
   const lastSyncAtRef = useRef(0);
 
@@ -103,6 +109,8 @@ export function KitchenBoard() {
     },
     enabled: !!token && !!user,
     staleTime: 30000,
+    refetchInterval: 15_000, // 15s fallback — keeps board live if socket drops
+    refetchIntervalInBackground: false,
   });
 
   const orders = useMemo(() => {
@@ -160,6 +168,23 @@ export function KitchenBoard() {
     refreshNowRef.current = refreshNow;
   }, [refreshNow]);
 
+  async function toggleShift() {
+    if (shiftBusy) return;
+    setShiftBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/shifts/toggle`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
+      });
+      const data = await res.json();
+      if (data.success) setIsOnShift(data.data.isOnShift);
+    } catch {
+      void 0;
+    } finally {
+      setShiftBusy(false);
+    }
+  }
+
   const { data: stationsData } = useQuery({
     queryKey: ['stations', user?.organizationId, user?.branchId],
     queryFn: async () => {
@@ -203,8 +228,10 @@ export function KitchenBoard() {
 
     socket.on('ORDER_CREATED', (order: any) => {
       playAlert();
+      // Use ref so this handler always writes to the currently-selected station's cache key,
+      // not the stale value captured when the socket was first created.
       queryClient.setQueryData(
-        ['kitchen-orders', user?.organizationId, user?.branchId, selectedStationId],
+        ['kitchen-orders', user?.organizationId, user?.branchId, selectedStationIdRef.current],
         (prev: any) => {
           if (!prev || !prev.success) return prev;
           if (prev.data.some((o: any) => o.id === order.id)) return prev;
@@ -215,10 +242,9 @@ export function KitchenBoard() {
 
     socket.on('ORDER_UPDATED', (order: any) => {
       queryClient.setQueryData(
-        ['kitchen-orders', user?.organizationId, user?.branchId, selectedStationId],
+        ['kitchen-orders', user?.organizationId, user?.branchId, selectedStationIdRef.current],
         (prev: any) => {
           if (!prev || !prev.success) return prev;
-          // Note: if order.status moves to READY, it will be filtered out by useMemo orders
           const exists = prev.data.some((o: any) => o.id === order.id);
           if (exists) {
             return { ...prev, data: prev.data.map((o: any) => (o.id === order.id ? order : o)) };
@@ -352,6 +378,17 @@ export function KitchenBoard() {
             className="text-xs border border-gray-800 px-3 py-1 uppercase font-bold"
           >
             REFRESH
+          </button>
+          <button
+            onClick={toggleShift}
+            disabled={shiftBusy}
+            className={`text-xs border px-3 py-1 uppercase font-bold disabled:opacity-50 transition-colors ${
+              isOnShift
+                ? 'border-red-700 text-red-400 hover:bg-red-900/20'
+                : 'border-green-700 text-green-400 hover:bg-green-900/20'
+            }`}
+          >
+            {shiftBusy ? '...' : isOnShift ? 'CLOCK OUT' : 'CLOCK IN'}
           </button>
           <button
             onClick={logout}

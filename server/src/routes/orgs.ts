@@ -75,6 +75,7 @@ const orgSchema = z.object({
   notifyNewOrders: z.boolean().optional(),
   notifyWaiterCalls: z.boolean().optional(),
   notifyServiceRequests: z.boolean().optional(),
+  qrOrderingEnabled: z.boolean().optional(),
   taxRate: z.coerce.number().min(0).max(100).optional(),
   serviceChargeRate: z.coerce.number().min(0).max(100).optional(),
 });

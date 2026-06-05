@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth, useApi } from '../context/auth';
+import { useSocket } from '../context/socket';
 import { printReceipt } from '../utils/printReceipt';
 
 interface Payment {
@@ -37,6 +38,7 @@ interface SessionWithPayments {
 export function PaymentsPage() {
   const { user, activeBranchFilter } = useAuth();
   const api = useApi();
+  const { socket } = useSocket();
 
   const [sessions, setSessions] = useState<SessionWithPayments[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,6 +109,20 @@ export function PaymentsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (branchId) void load();
   }, [load, branchId]);
+
+  // Reload when a payment is recorded or session closes anywhere in the branch
+  useEffect(() => {
+    if (!socket) return;
+    const reload = () => {
+      if (branchId) void load();
+    };
+    socket.on('PAYMENT_RECORDED', reload);
+    socket.on('SESSION_CLOSED', reload);
+    return () => {
+      socket.off('PAYMENT_RECORDED', reload);
+      socket.off('SESSION_CLOSED', reload);
+    };
+  }, [socket, branchId, load]);
 
   if (!branchId) {
     return (

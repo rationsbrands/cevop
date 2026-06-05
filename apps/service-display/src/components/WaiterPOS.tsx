@@ -422,6 +422,21 @@ export function WaiterPOS({ onClose, onOrderSuccess, initialTableId }: WaiterPOS
                   REMOVE
                 </button>
               </div>
+              {/* Per-item special instructions */}
+              <input
+                type="text"
+                maxLength={200}
+                placeholder="Special instructions (e.g. no onions, well done…)"
+                value={item.notes}
+                onChange={(e) =>
+                  setCart((prev) =>
+                    prev.map((c) =>
+                      c.menuItemId === item.menuItemId ? { ...c, notes: e.target.value } : c,
+                    ),
+                  )
+                }
+                className="mt-2 w-full bg-[var(--surface2)] border border-[var(--border)] rounded-lg py-2 px-3 text-xs focus:border-[var(--accent)] outline-none placeholder-[var(--muted)]/60"
+              />
             </div>
           ))}
           {cart.length === 0 && (

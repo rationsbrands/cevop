@@ -109,6 +109,15 @@ function corsOrigin(origin: string | undefined, cb: (err: Error | null, allow?: 
   return cb(null, false);
 }
 
+// Request ID — attach a UUID to every request for distributed tracing.
+// Echoed back in X-Request-ID so clients can correlate errors with server logs.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const id = (req.headers['x-request-id'] as string) || crypto.randomUUID();
+  (req as any).id = id;
+  res.setHeader('X-Request-ID', id);
+  next();
+});
+
 // CORS
 app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(cookieParser());
@@ -118,7 +127,13 @@ app.use(express.urlencoded({ extended: true }));
 
 // Use minimal format in production — 'combined' is too verbose and slow at high traffic
 const morganFormat = process.env.NODE_ENV === 'production' ? 'tiny' : 'combined';
-app.use(morgan(morganFormat, { stream: { write: (msg) => logger.info(msg.trim()) } }));
+app.use(
+  morgan(morganFormat, {
+    stream: {
+      write: (msg) => logger.info(msg.trim()),
+    },
+  }),
+);
 
 // Request timeout — 30s hard limit. Prevents slow DB queries from hanging the server.
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -293,6 +308,7 @@ app.use('/api/tables/public', publicLimiter);
 app.use('/api/waiter-calls/public', publicLimiter);
 app.use('/api/service-requests/public', publicLimiter);
 app.use('/api/help-options/public', publicLimiter);
+app.use('/api/shifts/kiosk-toggle', publicLimiter);
 app.use('/api/', (req, res, next) => {
   if (req.path.startsWith('/auth/refresh')) return next();
   return apiLimiter(req, res, next);

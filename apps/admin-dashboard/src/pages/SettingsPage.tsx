@@ -14,6 +14,7 @@ export function SettingsPage() {
     notifyNewOrders: true,
     notifyWaiterCalls: true,
     notifyServiceRequests: true,
+    qrOrderingEnabled: true,
     taxRate: '0.00',
     serviceChargeRate: '0.00',
   });
@@ -49,6 +50,7 @@ export function SettingsPage() {
           notifyNewOrders: o.notifyNewOrders ?? true,
           notifyWaiterCalls: o.notifyWaiterCalls ?? true,
           notifyServiceRequests: o.notifyServiceRequests ?? true,
+          qrOrderingEnabled: o.qrOrderingEnabled ?? true,
           taxRate: o.taxRate?.toString() || '0.00',
           serviceChargeRate: o.serviceChargeRate?.toString() || '0.00',
         });
@@ -183,6 +185,53 @@ export function SettingsPage() {
             />
           </div>
         </div>
+      </div>
+
+      {/* Order Mode */}
+      <div className="card p-6 space-y-5">
+        <div className="border-b border-[var(--border)] pb-2">
+          <h2 className="font-semibold text-sm text-[var(--muted)] uppercase tracking-wider">
+            Order Mode
+          </h2>
+          <p className="text-xs text-[var(--muted)] mt-1">
+            Control whether customers can order directly from their phones via QR code.
+          </p>
+        </div>
+
+        <label className="flex items-start gap-4 cursor-pointer group">
+          <div className="relative mt-0.5 shrink-0">
+            <input
+              type="checkbox"
+              className="sr-only peer"
+              checked={form.qrOrderingEnabled}
+              onChange={(e) => setForm({ ...form, qrOrderingEnabled: e.target.checked })}
+            />
+            <div className="w-11 h-6 bg-[var(--border)] peer-checked:bg-[var(--accent)] rounded-full transition-colors" />
+            <div className="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform peer-checked:translate-x-5" />
+          </div>
+          <div>
+            <p className="font-semibold text-sm text-[var(--text)]">
+              {form.qrOrderingEnabled
+                ? 'QR + Staff ordering (both on)'
+                : 'Staff only (QR ordering off)'}
+            </p>
+            <p className="text-xs text-[var(--muted)] mt-0.5 leading-relaxed">
+              {form.qrOrderingEnabled
+                ? 'Customers can scan the table QR code and order from their phone. Staff can also enter orders manually. Both work at the same time.'
+                : 'Customers cannot order themselves. All orders go through your staff. When customers scan the QR code they will see the menu but cannot place an order.'}
+            </p>
+          </div>
+        </label>
+
+        {!form.qrOrderingEnabled && (
+          <div className="flex items-start gap-2 p-3 border border-[var(--warning)]/40 bg-[var(--warning)]/5">
+            <span className="text-[var(--warning)] text-sm shrink-0">⚠</span>
+            <p className="text-xs text-[var(--warning)]">
+              Staff-only mode is active. Customers who scan table QR codes will see the menu but
+              cannot submit orders. Make sure all staff know to take orders manually.
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="card p-6 space-y-5">

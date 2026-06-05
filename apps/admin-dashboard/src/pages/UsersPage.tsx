@@ -79,6 +79,9 @@ export function UsersPage() {
     password: '',
     role: 'WAITER',
     branchId: '',
+    salaryType: 'MONTHLY',
+    hourlyRate: '',
+    monthlySalary: '',
   });
   const [showPassword, setShowPassword] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -94,7 +97,13 @@ export function UsersPage() {
   const [actionLoading, setActionLoading] = useState<Set<string>>(new Set());
   const [actionError, setActionError] = useState('');
   const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [editForm, setEditForm] = useState({ role: 'WAITER', branchId: '' });
+  const [editForm, setEditForm] = useState({
+    role: 'WAITER',
+    branchId: '',
+    salaryType: 'MONTHLY',
+    hourlyRate: '',
+    monthlySalary: '',
+  });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -213,13 +222,26 @@ export function UsersPage() {
     try {
       const payload: any = { ...form };
       if (!payload.branchId) delete payload.branchId;
+      if (payload.hourlyRate) payload.hourlyRate = Number(payload.hourlyRate);
+      else delete payload.hourlyRate;
+      if (payload.monthlySalary) payload.monthlySalary = Number(payload.monthlySalary);
+      else delete payload.monthlySalary;
       const { success, error: err, data } = await api.post('/api/users', payload);
       if (!success) {
         setCreateError(err || 'Failed to create user');
         return;
       }
       setUsers((prev) => [data, ...prev]);
-      setForm({ name: '', email: '', password: '', role: 'WAITER', branchId: '' });
+      setForm({
+        name: '',
+        email: '',
+        password: '',
+        role: 'WAITER',
+        branchId: '',
+        salaryType: 'MONTHLY',
+        hourlyRate: '',
+        monthlySalary: '',
+      });
       setShowCreate(false);
     } catch {
       setCreateError('Failed to create user');
@@ -352,7 +374,9 @@ export function UsersPage() {
         }
       }
 
-      const payload: any = { role };
+      const payload: any = { role, salaryType: editForm.salaryType };
+      if (editForm.hourlyRate) payload.hourlyRate = Number(editForm.hourlyRate);
+      if (editForm.monthlySalary) payload.monthlySalary = Number(editForm.monthlySalary);
       if (isOrgAdmin) payload.branchId = branchId;
       const {
         success,
@@ -621,6 +645,51 @@ export function UsersPage() {
                   </div>
                 )}
             </div>
+            {/* Pay rate */}
+            <div className="border-t border-[var(--border)] pt-3 space-y-3">
+              <p className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider">
+                Payroll
+              </p>
+              <div>
+                <label className="text-xs text-[var(--muted)]">Pay Type</label>
+                <select
+                  className="w-full text-sm mt-1"
+                  value={form.salaryType}
+                  onChange={(e) => setForm((f) => ({ ...f, salaryType: e.target.value }))}
+                >
+                  <option value="MONTHLY">Monthly Salary</option>
+                  <option value="HOURLY">Hourly Rate</option>
+                </select>
+              </div>
+              {form.salaryType === 'MONTHLY' ? (
+                <div>
+                  <label className="text-xs text-[var(--muted)]">Monthly Salary (optional)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={100}
+                    className="w-full text-sm mt-1"
+                    placeholder="e.g. 80000"
+                    value={form.monthlySalary}
+                    onChange={(e) => setForm((f) => ({ ...f, monthlySalary: e.target.value }))}
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="text-xs text-[var(--muted)]">Hourly Rate (optional)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={100}
+                    className="w-full text-sm mt-1"
+                    placeholder="e.g. 1500"
+                    value={form.hourlyRate}
+                    onChange={(e) => setForm((f) => ({ ...f, hourlyRate: e.target.value }))}
+                  />
+                </div>
+              )}
+            </div>
+
             {createError && <p className="text-red-400 text-sm">{createError}</p>}
             <div className="flex gap-2">
               <button
@@ -870,7 +939,17 @@ export function UsersPage() {
                         <button
                           onClick={() => {
                             setEditingUser(u);
-                            setEditForm({ role: u.role, branchId: u.branchId ?? '' });
+                            setEditForm({
+                              role: u.role,
+                              branchId: u.branchId ?? '',
+                              salaryType: (u as any).salaryType ?? 'MONTHLY',
+                              hourlyRate: (u as any).hourlyRate
+                                ? String((u as any).hourlyRate)
+                                : '',
+                              monthlySalary: (u as any).monthlySalary
+                                ? String((u as any).monthlySalary)
+                                : '',
+                            });
                             setEditError('');
                           }}
                           disabled={actionLoading.has(u.id)}
@@ -1089,6 +1168,53 @@ export function UsersPage() {
                     </select>
                   </div>
                 )}
+
+              {/* Pay rate */}
+              <div className="border-t border-[var(--border)] pt-3 space-y-3">
+                <p className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider">
+                  Payroll
+                </p>
+                <div>
+                  <label className="text-xs text-[var(--muted)]">Pay Type</label>
+                  <select
+                    className="w-full text-sm mt-1"
+                    value={editForm.salaryType}
+                    onChange={(e) => setEditForm((f) => ({ ...f, salaryType: e.target.value }))}
+                  >
+                    <option value="MONTHLY">Monthly Salary</option>
+                    <option value="HOURLY">Hourly Rate</option>
+                  </select>
+                </div>
+                {editForm.salaryType === 'MONTHLY' ? (
+                  <div>
+                    <label className="text-xs text-[var(--muted)]">Monthly Salary</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={100}
+                      className="w-full text-sm mt-1"
+                      placeholder="e.g. 80000"
+                      value={editForm.monthlySalary}
+                      onChange={(e) =>
+                        setEditForm((f) => ({ ...f, monthlySalary: e.target.value }))
+                      }
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-xs text-[var(--muted)]">Hourly Rate</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={100}
+                      className="w-full text-sm mt-1"
+                      placeholder="e.g. 1500"
+                      value={editForm.hourlyRate}
+                      onChange={(e) => setEditForm((f) => ({ ...f, hourlyRate: e.target.value }))}
+                    />
+                  </div>
+                )}
+              </div>
 
               {editError && <div className="text-red-400 text-sm">{editError}</div>}
 

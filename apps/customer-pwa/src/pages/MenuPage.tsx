@@ -49,6 +49,7 @@ interface TableInfo {
   organizationName: string;
   organizationLogo?: string;
   branchName: string | null;
+  qrOrderingEnabled?: boolean;
 }
 interface OrderPreviewItem {
   id: string;
@@ -101,6 +102,7 @@ export function MenuPage() {
   const [tabModal, setTabModal] = useState(false);
   const [fullBill, setFullBill] = useState<any>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [pendingOrderCount, setPendingOrderCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -562,10 +564,29 @@ export function MenuPage() {
     return () => window.clearTimeout(t);
   }, [activeOrderIds, orderPreviews, ordersExpanded]);
 
+  // Load pending order count from IndexedDB on mount so the banner shows immediately
   useEffect(() => {
-    const handleOnline = () => {
+    db.pendingOrders
+      .count()
+      .then(setPendingOrderCount)
+      .catch(() => void 0);
+  }, []);
+
+  useEffect(() => {
+    const handleOnline = async () => {
       setIsOnline(true);
-      syncPendingOrders(CUSTOMER_API_BASE);
+      const countBefore = await db.pendingOrders.count().catch(() => 0);
+      if (countBefore > 0) {
+        await syncPendingOrders(CUSTOMER_API_BASE);
+        const countAfter = await db.pendingOrders.count().catch(() => 0);
+        setPendingOrderCount(countAfter);
+        if (countAfter < countBefore) {
+          showToast(
+            `Your ${countBefore - countAfter === 1 ? 'order has' : `${countBefore - countAfter} orders have`} been placed successfully.`,
+            'success',
+          );
+        }
+      }
     };
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
@@ -919,6 +940,10 @@ export function MenuPage() {
     });
   };
 
+  const updateCartItemNotes = (menuItemId: string, notes: string) => {
+    setCart((prev) => prev.map((i) => (i.menuItem.id === menuItemId ? { ...i, notes } : i)));
+  };
+
   const cartTotal = cart.reduce((sum, i) => sum + i.menuItem.price * i.quantity, 0);
   const cartCount = cart.reduce((sum, i) => sum + i.quantity, 0);
 
@@ -930,6 +955,10 @@ export function MenuPage() {
 
   const placeOrder = async () => {
     if (cart.length === 0 || !orgId || !tableId) return;
+    if (tableInfo?.qrOrderingEnabled === false) {
+      showToast('Online ordering is not available. Please ask your server.', 'error');
+      return;
+    }
     setSubmitting(true);
 
     const idempotencyKey = generateIdempotencyKey();
@@ -999,7 +1028,9 @@ export function MenuPage() {
         });
         clearCart();
         setCartOpen(false);
-        showToast('Order queued — will be sent when you reconnect', 'success');
+        const newCount = await db.pendingOrders.count().catch(() => 1);
+        setPendingOrderCount(newCount);
+        showToast('Order saved — will be placed when you reconnect', 'success');
       }
     } catch (err: any) {
       showToast(err.message || 'Failed to place order', 'error');
@@ -1229,6 +1260,18 @@ export function MenuPage() {
             </button>
           </div>
         </div>
+
+        {/* Persistent offline order banner — stays visible until the queued order is sent */}
+        {pendingOrderCount > 0 && (
+          <div className="mx-4 mb-2 px-3 py-2 border border-[var(--warning)]/40 bg-[var(--warning)]/8 flex items-center gap-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--warning)] animate-pulse shrink-0" />
+            <p className="text-xs text-[var(--warning)] font-medium flex-1">
+              {pendingOrderCount === 1
+                ? 'Your order is queued and will be placed when you reconnect.'
+                : `${pendingOrderCount} orders queued — will be placed when you reconnect.`}
+            </p>
+          </div>
+        )}
 
         {activeOrderIds.length > 0 && ordersExpanded && (
           <div className="mx-4 mt-3 p-3 border border-[var(--border)] bg-[var(--surface)] rounded-sm">
@@ -1511,8 +1554,31 @@ export function MenuPage() {
         </p>
       </main>
 
-      {/* Cart FAB */}
-      {cartCount > 0 && (
+      {/* Staff-only mode banner — shown instead of cart FAB */}
+      {tableInfo && tableInfo.qrOrderingEnabled === false && (
+        <div className="fixed bottom-0 left-0 right-0 z-20 px-4 safe-bottom pb-4">
+          <div className="w-full flex items-center justify-center gap-3 py-3 px-4 bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)] text-sm font-medium">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="shrink-0 text-[var(--accent)]"
+            >
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+            Your server will take your order
+          </div>
+        </div>
+      )}
+
+      {/* Cart FAB — only shown when QR ordering is enabled */}
+      {cartCount > 0 && tableInfo?.qrOrderingEnabled !== false && (
         <div className="fixed bottom-0 left-0 right-0 z-20 px-4 safe-bottom">
           <button
             onClick={() => setCartOpen(true)}
@@ -1565,28 +1631,39 @@ export function MenuPage() {
                 </svg>
               </button>
             </div>
-            <div className="overflow-y-auto flex-1 p-4 space-y-3">
+            <div className="overflow-y-auto flex-1 p-4 space-y-4">
               {cart.map((item) => (
-                <div key={item.menuItem.id} className="flex items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => removeFromCart(item.menuItem.id)}
-                      className="w-7 h-7 border border-[var(--border)] flex items-center justify-center text-[var(--muted)] hover:border-red-500 hover:text-red-400 transition-colors"
-                    >
-                      −
-                    </button>
-                    <span className="w-5 text-center text-sm font-semibold">{item.quantity}</span>
-                    <button
-                      onClick={() => addToCart(item.menuItem)}
-                      className="w-7 h-7 border border-[var(--border)] flex items-center justify-center text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
-                    >
-                      +
-                    </button>
+                <div key={item.menuItem.id} className="space-y-1.5">
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => removeFromCart(item.menuItem.id)}
+                        className="w-7 h-7 border border-[var(--border)] flex items-center justify-center text-[var(--muted)] hover:border-red-500 hover:text-red-400 transition-colors"
+                      >
+                        −
+                      </button>
+                      <span className="w-5 text-center text-sm font-semibold">{item.quantity}</span>
+                      <button
+                        onClick={() => addToCart(item.menuItem)}
+                        className="w-7 h-7 border border-[var(--border)] flex items-center justify-center text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors"
+                      >
+                        +
+                      </button>
+                    </div>
+                    <span className="flex-1 text-sm font-medium">{item.menuItem.name}</span>
+                    <span className="text-[var(--accent)] text-sm font-semibold shrink-0">
+                      {formatPrice(item.menuItem.price * item.quantity)}
+                    </span>
                   </div>
-                  <span className="flex-1 text-sm font-medium">{item.menuItem.name}</span>
-                  <span className="text-[var(--accent)] text-sm font-semibold">
-                    {formatPrice(item.menuItem.price * item.quantity)}
-                  </span>
+                  {/* Per-item notes */}
+                  <input
+                    type="text"
+                    maxLength={200}
+                    placeholder="Special instructions (optional)"
+                    value={item.notes ?? ''}
+                    onChange={(e) => updateCartItemNotes(item.menuItem.id, e.target.value)}
+                    className="w-full bg-[var(--surface2)] border border-[var(--border)] text-xs text-[var(--text)] px-3 py-1.5 placeholder-[var(--muted)] focus:border-[var(--accent)] outline-none transition-colors rounded-none"
+                  />
                 </div>
               ))}
             </div>

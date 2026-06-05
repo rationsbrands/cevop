@@ -30,25 +30,30 @@ tablesRouter.get('/public/:orgId/:tableId', async (req: Request, res: Response) 
     const { orgId, tableId } = req.params;
 
     // Try direct ID lookup first
-    let table = await prisma.table.findFirst({
+    let table = await (prisma.table as any).findFirst({
       where: { id: tableId, organizationId: orgId, isActive: true },
-      include: { organization: { select: { name: true, logo: true, id: true } }, branch: true },
+      include: {
+        organization: { select: { name: true, logo: true, id: true, qrOrderingEnabled: true } },
+        branch: true,
+      },
     });
 
     if (!table) {
       // Try lookup by organization slug
-      const organization = await prisma.organization.findUnique({
+      const organization = await (prisma.organization as any).findUnique({
         where: { slug: orgId },
-        select: { id: true, name: true, logo: true },
+        select: { id: true, name: true, logo: true, qrOrderingEnabled: true },
       });
 
       if (organization) {
         const tableNumber = parseInt(tableId.replace(/\D/g, ''), 10);
         if (!isNaN(tableNumber)) {
-          table = await prisma.table.findFirst({
+          table = await (prisma.table as any).findFirst({
             where: { organizationId: organization.id, number: tableNumber, isActive: true },
             include: {
-              organization: { select: { name: true, logo: true, id: true } },
+              organization: {
+                select: { name: true, logo: true, id: true, qrOrderingEnabled: true },
+              },
               branch: true,
             },
           });
@@ -77,6 +82,7 @@ tablesRouter.get('/public/:orgId/:tableId', async (req: Request, res: Response) 
         organizationLogo: table.organization.logo,
         branchName: table.branch?.name ?? null,
         activeSessionId: sessionId,
+        qrOrderingEnabled: (table.organization as any).qrOrderingEnabled ?? true,
       },
     });
   } catch {

@@ -47,6 +47,22 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
     logger.debug('POST /orders/public payload', { body: req.body });
     const data = createOrderSchema.parse(req.body);
 
+    // Check QR ordering is enabled before any DB work
+    const orgCheck = await (prisma.organization as any).findFirst({
+      where: {
+        OR: [{ id: data.organizationId }, { slug: data.organizationId }],
+      },
+      select: { qrOrderingEnabled: true },
+    });
+    if (orgCheck && (orgCheck as any).qrOrderingEnabled === false) {
+      res.status(403).json({
+        success: false,
+        code: 'QR_ORDERING_DISABLED',
+        error: 'Online ordering is not available at this restaurant. Please ask your server.',
+      });
+      return;
+    }
+
     const [existing, table] = await Promise.all([
       prisma.order.findUnique({
         where: { idempotencyKey: data.idempotencyKey },
@@ -163,13 +179,13 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
     };
     const itemMap = new Map<string, MenuItemLike>(menuItems.map((m: any) => [m.id, m]));
 
-    // Check stock for all items
+    // Check stock for all items — return generic message to avoid leaking inventory data
     for (const item of data.items) {
       const menuItem = itemMap.get(item.menuItemId)!;
       if (menuItem.trackStock && menuItem.stockCount < item.quantity) {
         res.status(400).json({
           success: false,
-          error: `Insufficient stock for "${menuItem.name}". Only ${menuItem.stockCount} left.`,
+          error: `One or more items are no longer available. Please update your order.`,
         });
         return;
       }
@@ -266,6 +282,7 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
     }
 
     io.to(`${actualOrgId}:${actualBranchId}`).emit('ORDER_CREATED', order);
+    io.to(`pub:${actualOrgId}:${actualBranchId}`).emit('ORDER_CREATED', order);
     io.to(`order:${order.id}`).emit('ORDER_UPDATED', order);
 
     res.status(201).json({ success: true, data: order });
@@ -916,9 +933,11 @@ ordersRouter.patch(
       }
 
       io.to(`${req.user!.organizationId}:${finalOrder.branchId}`).emit('ORDER_UPDATED', finalOrder);
+      io.to(`pub:${req.user!.organizationId}:${finalOrder.branchId}`).emit(
+        'ORDER_UPDATED',
+        finalOrder,
+      );
       io.to(`order:${finalOrder.id}`).emit('ORDER_UPDATED', finalOrder);
-
-      // Emit sync signal for status changes
 
       analyticsCache.delete(`${req.user!.organizationId}:${req.branchScope || 'all'}`);
 
@@ -1650,3 +1669,179 @@ ordersRouter.get('/', async (req: AuthRequest, res: Response) => {
       .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to fetch orders' });
   }
 });
+
+// ─── Add items to an existing active order ────────────────────────────────────
+// Used when a waiter takes additional requests from a table that already has an order in progress.
+
+ordersRouter.post(
+  '/:id/add-items',
+  requireRole('WAITER', 'ADMIN', 'ORG_OWNER', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER', 'HOST'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { items } = z
+        .object({
+          items: z
+            .array(
+              z.object({
+                menuItemId: z.string(),
+                quantity: z.number().int().positive(),
+                notes: z.string().max(200).optional(),
+              }),
+            )
+            .min(1),
+        })
+        .parse(req.body);
+
+      const orgId = req.user!.organizationId;
+
+      // Load existing order — must belong to this org and still be active
+      const existing = await prisma.order.findFirst({
+        where: {
+          id: req.params.id,
+          organizationId: orgId,
+          status: { in: ['RECEIVED', 'PREPARING'] },
+          ...(req.branchScope ? { branchId: req.branchScope } : {}),
+        },
+        include: { items: { include: { menuItem: true } } },
+      });
+
+      if (!existing) {
+        return res.status(404).json({
+          success: false,
+          code: 'NOT_FOUND',
+          error: 'Order not found or cannot be modified (must be RECEIVED or PREPARING)',
+        });
+      }
+
+      // Fetch menu items + validate they belong to this org
+      const menuItemIds = items.map((i) => i.menuItemId);
+      const menuItems = await prisma.menuItem.findMany({
+        where: { id: { in: menuItemIds }, organizationId: orgId, isAvailable: true },
+        select: {
+          id: true,
+          price: true,
+          name: true,
+          stationId: true,
+          trackStock: true,
+          stockCount: true,
+        } as any,
+      });
+
+      if (menuItems.length !== menuItemIds.length) {
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_REQUEST',
+          error: 'One or more items are unavailable or do not belong to this branch',
+        });
+      }
+
+      type MenuItemLike = {
+        id: string;
+        price: any;
+        name: string;
+        stationId: string | null;
+        trackStock: boolean;
+        stockCount: number;
+      };
+      const itemMap = new Map<string, MenuItemLike>(menuItems.map((m: any) => [m.id, m]));
+
+      // Check stock
+      for (const item of items) {
+        const mi = itemMap.get(item.menuItemId)!;
+        if (mi.trackStock && mi.stockCount < item.quantity) {
+          return res.status(400).json({
+            success: false,
+            error: 'One or more items are no longer available. Please update your selection.',
+          });
+        }
+      }
+
+      // Calculate additional amount
+      let addedSubtotal = 0;
+      const newOrderItems = items.map((item) => {
+        const mi = itemMap.get(item.menuItemId)!;
+        const unitPrice = Number(mi.price);
+        addedSubtotal += unitPrice * item.quantity;
+        return {
+          menuItemId: item.menuItemId,
+          quantity: item.quantity,
+          unitPrice,
+          notes: item.notes || null,
+          stationId: mi.stationId,
+        };
+      });
+
+      // Recalculate totals — use existing rates from the order's branch/org
+      const branch = await prisma.branch.findFirst({
+        where: { id: existing.branchId as string, organizationId: orgId },
+        select: { taxRate: true, serviceChargeRate: true },
+      });
+      const orgRates = await prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { taxRate: true, serviceChargeRate: true },
+      });
+      const effectiveTaxRate = Number(branch?.taxRate ?? orgRates?.taxRate ?? 0);
+      const effectiveServiceRate = Number(
+        branch?.serviceChargeRate ?? orgRates?.serviceChargeRate ?? 0,
+      );
+
+      const newSubtotal = Number(existing.subtotal) + addedSubtotal;
+      const newTaxAmount = Number(((newSubtotal * effectiveTaxRate) / 100).toFixed(2));
+      const newServiceChargeAmount = Number(
+        ((newSubtotal * effectiveServiceRate) / 100).toFixed(2),
+      );
+      const newTotal = newSubtotal + newTaxAmount + newServiceChargeAmount;
+
+      const updatedOrder = await prisma.$transaction(async (tx) => {
+        // Decrement stock for tracked items
+        for (const item of items) {
+          const mi = itemMap.get(item.menuItemId)!;
+          if (mi.trackStock) {
+            await (tx.menuItem as any).update({
+              where: { id: mi.id },
+              data: {
+                stockCount: { decrement: item.quantity },
+                isAvailable: { set: mi.stockCount - item.quantity > 0 },
+              },
+            });
+          }
+        }
+
+        // Add the new items
+        await tx.orderItem.createMany({
+          data: newOrderItems.map((i) => ({
+            orderId: existing.id,
+            ...i,
+          })) as any,
+        });
+
+        // Update the order totals
+        return tx.order.update({
+          where: { id: existing.id },
+          data: {
+            subtotal: newSubtotal,
+            taxAmount: newTaxAmount,
+            serviceChargeAmount: newServiceChargeAmount,
+            total: newTotal,
+          },
+          include: { items: { include: { menuItem: true } }, table: true },
+        });
+      });
+
+      io.to(`${orgId}:${existing.branchId}`).emit('ORDER_UPDATED', updatedOrder);
+      io.to(`pub:${orgId}:${existing.branchId}`).emit('ORDER_UPDATED', updatedOrder);
+      io.to(`order:${existing.id}`).emit('ORDER_UPDATED', updatedOrder);
+
+      analyticsCache.delete(`${orgId}:${req.branchScope || 'all'}`);
+
+      res.json({ success: true, data: updatedOrder });
+    } catch (err) {
+      if (err instanceof z.ZodError)
+        return res.status(400).json({ success: false, error: err.errors[0].message });
+      logger.error('POST /orders/:id/add-items error:', err);
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to add items to order' });
+    }
+  },
+);

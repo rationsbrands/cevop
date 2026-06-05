@@ -57,6 +57,7 @@ export function OrdersPage() {
       return res.success ? res.data : [];
     },
     enabled: !!api.effectiveBranchId,
+    refetchInterval: 20_000, // waiter calls are urgent — poll as socket fallback
   });
 
   const { data: serviceData, refetch: refetchService } = useQuery({
@@ -67,6 +68,7 @@ export function OrdersPage() {
       return res.success ? res.data : [];
     },
     enabled: !!api.effectiveBranchId,
+    refetchInterval: 20_000, // service requests are urgent — poll as socket fallback
   });
 
   // Filters
@@ -191,13 +193,13 @@ export function OrdersPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(ordersFetching);
   }, [ordersFetching]);
-  // Background Heartbeat Sync
+  // Background Heartbeat Sync — 20s keeps the ops console tight without hammering the server
   useEffect(() => {
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && navigator.onLine) {
         load(true);
       }
-    }, 60000);
+    }, 20_000);
     return () => clearInterval(interval);
   }, [load]);
 

@@ -66,13 +66,22 @@ export function KDSPage() {
       return res.success ? res.data : [];
     },
     enabled: !!api.effectiveBranchId && !!selectedStationId,
-    refetchInterval: 30000, // 30s auto-refresh fallback
+    refetchInterval: 15_000, // 15s fallback — kitchen needs to be fast
   });
 
-  // Socket sync
+  // Refetch on socket reconnect (catches missed events during disconnect) + syncSignal
   useEffect(() => {
     refetch();
   }, [syncSignal, refetch]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleReconnect = () => refetch();
+    socket.on('connect', handleReconnect);
+    return () => {
+      socket.off('connect', handleReconnect);
+    };
+  }, [socket, refetch]);
 
   // Transform Orders into a flat list of Items for this station
   const stationItems = useMemo(() => {

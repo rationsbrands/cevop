@@ -301,15 +301,17 @@ menuRouter.patch(
         categoryId: req.params.id,
       });
 
-      // After updating all items, emit per-item events
+      // After updating all items, emit per-item events to staff room and public room
       for (const item of updatedItems) {
         const evt = item.isAvailable ? 'MENU_ITEM_AVAILABLE' : 'MENU_ITEM_UNAVAILABLE';
-        io.to(req.user!.organizationId).emit(evt, {
+        const payload = {
           menuItemId: item.id,
           name: item.name,
           isAvailable: item.isAvailable,
           branchId: req.branchScope,
-        });
+        };
+        io.to(req.user!.organizationId).emit(evt, payload);
+        io.to(`pub:${req.user!.organizationId}`).emit(evt, payload);
       }
 
       res.json({ success: true, message: 'Items updated' });
@@ -336,6 +338,7 @@ const menuItemSchema = z.object({
   stockCount: z.number().int().min(0).default(0),
   sortOrder: z.number().int().default(0),
   branchId: z.string().nullable().optional(),
+  stationId: z.string().nullable().optional(),
 });
 
 menuRouter.post(
@@ -504,17 +507,17 @@ menuRouter.patch(
         item: updated,
       });
 
-      // Emit specific availability event to the org room so customer PWA can update without refresh
-      // Org room: orgId (no branch suffix) — customer PWA joins this room
       const availabilityEvent = updated.isAvailable
         ? 'MENU_ITEM_AVAILABLE'
         : 'MENU_ITEM_UNAVAILABLE';
-      io.to(req.user!.organizationId).emit(availabilityEvent, {
+      const availPayload = {
         menuItemId: updated.id,
         name: updated.name,
         isAvailable: updated.isAvailable,
         branchId: req.branchScope,
-      });
+      };
+      io.to(req.user!.organizationId).emit(availabilityEvent, availPayload);
+      io.to(`pub:${req.user!.organizationId}`).emit(availabilityEvent, availPayload);
 
       res.json({ success: true, data: updated });
     } catch {
@@ -573,6 +576,342 @@ menuRouter.delete(
       res.json({ success: true, message: 'Item deleted' });
     } catch {
       res.status(500).json({ success: false, error: 'Failed to delete menu item' });
+    }
+  },
+);
+
+// ─── CSV Export ───────────────────────────────────────────────────────────────
+
+menuRouter.get(
+  '/export.csv',
+  authenticate,
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'SUPERADMIN'),
+  requireBranchAccess,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const orgId = req.user!.organizationId;
+      const branchScope = req.branchScope;
+
+      const categories = await prisma.category.findMany({
+        where: {
+          organizationId: orgId,
+          ...(branchScope ? { OR: [{ branchId: branchScope }, { branchId: null }] } : {}),
+        },
+        include: {
+          menuItems: {
+            where: branchScope ? { OR: [{ branchId: branchScope }, { branchId: null }] } : {},
+            orderBy: { sortOrder: 'asc' },
+          },
+        },
+        orderBy: { sortOrder: 'asc' },
+      });
+
+      function cell(v: any) {
+        const s = v == null ? '' : String(v);
+        return s.includes(',') || s.includes('"') || s.includes('\n')
+          ? `"${s.replace(/"/g, '""')}"`
+          : s;
+      }
+
+      const CRLF = '\r\n';
+      const header = [
+        'Category',
+        'Item Name',
+        'Description',
+        'Price',
+        'Available (yes/no)',
+        'Track Stock (yes/no)',
+        'Stock Count',
+      ]
+        .map(cell)
+        .join(',');
+
+      const rows: string[] = [];
+      for (const cat of categories) {
+        if (cat.menuItems.length === 0) {
+          rows.push([cat.name, '', '', '', '', '', ''].map(cell).join(','));
+        }
+        for (const item of cat.menuItems) {
+          rows.push(
+            [
+              cat.name,
+              item.name,
+              item.description ?? '',
+              Number(item.price).toFixed(2),
+              item.isAvailable ? 'yes' : 'no',
+              item.trackStock ? 'yes' : 'no',
+              item.stockCount ?? 0,
+            ]
+              .map(cell)
+              .join(','),
+          );
+        }
+      }
+
+      const csv = [header, ...rows].join(CRLF);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="menu-template.csv"');
+      res.send('﻿' + csv);
+    } catch (err) {
+      res.status(500).json({ success: false, error: 'Failed to export menu' });
+    }
+  },
+);
+
+// ─── CSV Import preview ─���─────────────────────────────────────────────────────
+
+function parseMenuCSV(
+  csvText: string,
+): {
+  category: string;
+  name: string;
+  description: string;
+  price: number;
+  available: boolean;
+  trackStock: boolean;
+  stockCount: number;
+}[] {
+  const lines = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  if (lines.length < 2) return [];
+
+  // Skip header row
+  const dataLines = lines.slice(1).filter((l) => l.trim());
+
+  const rows: any[] = [];
+  for (const line of dataLines) {
+    // Simple CSV parse that handles quoted fields
+    const fields: string[] = [];
+    let cur = '';
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (inQuote && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuote = !inQuote;
+        }
+      } else if (c === ',' && !inQuote) {
+        fields.push(cur.trim());
+        cur = '';
+      } else {
+        cur += c;
+      }
+    }
+    fields.push(cur.trim());
+
+    const [category, name, description, priceStr, availableStr, trackStockStr, stockCountStr] =
+      fields;
+    if (!category?.trim() || !name?.trim()) continue;
+    const price = parseFloat(priceStr ?? '0');
+    if (isNaN(price) || price < 0) continue;
+
+    rows.push({
+      category: category.trim(),
+      name: name.trim(),
+      description: (description ?? '').trim(),
+      price,
+      available: (availableStr ?? 'yes').toLowerCase() !== 'no',
+      trackStock: (trackStockStr ?? 'no').toLowerCase() === 'yes',
+      stockCount: Math.max(0, parseInt(stockCountStr ?? '0', 10) || 0),
+    });
+  }
+  return rows;
+}
+
+menuRouter.post(
+  '/import/preview',
+  authenticate,
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'SUPERADMIN'),
+  requireBranchAccess,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { csv } = z.object({ csv: z.string().min(1).max(500_000) }).parse(req.body);
+      const rows = parseMenuCSV(csv);
+
+      if (rows.length === 0) {
+        res
+          .status(400)
+          .json({
+            success: false,
+            error: 'No valid rows found in CSV. Check the format matches the template.',
+          });
+        return;
+      }
+
+      const orgId = req.user!.organizationId;
+      const branchScope = req.branchScope;
+
+      // Load existing categories and items for diff
+      const existingCats = await prisma.category.findMany({
+        where: {
+          organizationId: orgId,
+          ...(branchScope ? { OR: [{ branchId: branchScope }, { branchId: null }] } : {}),
+        },
+        include: { menuItems: true },
+      });
+
+      const catMap = new Map(existingCats.map((c) => [c.name.toLowerCase(), c]));
+
+      const preview: {
+        action: 'create' | 'update';
+        type: 'category' | 'item';
+        name: string;
+        category: string;
+        changes?: Record<string, any>;
+      }[] = [];
+
+      const seenCategories = new Set<string>();
+      for (const row of rows) {
+        const catKey = row.category.toLowerCase();
+        if (!seenCategories.has(catKey)) {
+          seenCategories.add(catKey);
+          if (!catMap.has(catKey)) {
+            preview.push({
+              action: 'create',
+              type: 'category',
+              name: row.category,
+              category: row.category,
+            });
+          }
+        }
+
+        const existingCat = catMap.get(catKey);
+        const existingItem = existingCat?.menuItems.find(
+          (i) => i.name.toLowerCase() === row.name.toLowerCase(),
+        );
+
+        if (existingItem) {
+          const changes: Record<string, any> = {};
+          if (Math.abs(Number(existingItem.price) - row.price) > 0.001)
+            changes.price = { from: Number(existingItem.price), to: row.price };
+          if (existingItem.isAvailable !== row.available)
+            changes.available = { from: existingItem.isAvailable, to: row.available };
+          if (existingItem.trackStock !== row.trackStock)
+            changes.trackStock = { from: existingItem.trackStock, to: row.trackStock };
+          if (Object.keys(changes).length > 0) {
+            preview.push({
+              action: 'update',
+              type: 'item',
+              name: row.name,
+              category: row.category,
+              changes,
+            });
+          }
+        } else {
+          preview.push({ action: 'create', type: 'item', name: row.name, category: row.category });
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          preview,
+          stats: {
+            totalRows: rows.length,
+            newCategories: preview.filter((p) => p.action === 'create' && p.type === 'category')
+              .length,
+            newItems: preview.filter((p) => p.action === 'create' && p.type === 'item').length,
+            updatedItems: preview.filter((p) => p.action === 'update').length,
+          },
+          rows,
+        },
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError)
+        return res.status(400).json({ success: false, error: 'Invalid request' });
+      res.status(500).json({ success: false, error: 'Failed to preview import' });
+    }
+  },
+);
+
+// ─── CSV Import confirm ────────────────────────────────────────────────────────
+
+menuRouter.post(
+  '/import/confirm',
+  authenticate,
+  requireRole('ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'SUPERADMIN'),
+  requireBranchAccess,
+  requireBranchSelected,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { csv } = z.object({ csv: z.string().min(1).max(500_000) }).parse(req.body);
+      const rows = parseMenuCSV(csv);
+      if (rows.length === 0) {
+        res.status(400).json({ success: false, error: 'No valid rows found' });
+        return;
+      }
+
+      const orgId = req.user!.organizationId;
+      const branchId = req.branchScope!;
+
+      const existingCats = await prisma.category.findMany({
+        where: { organizationId: orgId, OR: [{ branchId }, { branchId: null }] },
+        include: { menuItems: true },
+      });
+      const catMap = new Map(existingCats.map((c) => [c.name.toLowerCase(), c]));
+
+      let created = 0,
+        updated = 0;
+
+      for (const row of rows) {
+        const catKey = row.category.toLowerCase();
+        let cat = catMap.get(catKey);
+
+        if (!cat) {
+          cat = await prisma.category.create({
+            data: { organizationId: orgId, branchId, name: row.category, sortOrder: 0 },
+            include: { menuItems: true },
+          });
+          catMap.set(catKey, cat);
+          created++;
+        }
+
+        const existingItem = cat.menuItems.find(
+          (i) => i.name.toLowerCase() === row.name.toLowerCase(),
+        );
+
+        if (existingItem) {
+          await prisma.menuItem.update({
+            where: { id: existingItem.id },
+            data: {
+              price: row.price,
+              description: row.description || null,
+              isAvailable: row.available,
+              trackStock: row.trackStock,
+              stockCount: row.trackStock ? row.stockCount : 0,
+            },
+          });
+          updated++;
+        } else {
+          const newItem = await prisma.menuItem.create({
+            data: {
+              organizationId: orgId,
+              branchId,
+              categoryId: cat.id,
+              name: row.name,
+              description: row.description || null,
+              price: row.price,
+              isAvailable: row.available,
+              trackStock: row.trackStock,
+              stockCount: row.trackStock ? row.stockCount : 0,
+              sortOrder: 0,
+            },
+          });
+          // Update local cache so subsequent rows see this item
+          cat.menuItems.push(newItem as any);
+          created++;
+        }
+      }
+
+      io.to(`${orgId}:${branchId}`).emit('MENU_UPDATED', { action: 'import', created, updated });
+
+      res.json({ success: true, data: { created, updated, total: rows.length } });
+    } catch (err) {
+      if (err instanceof z.ZodError)
+        return res.status(400).json({ success: false, error: 'Invalid request' });
+      res.status(500).json({ success: false, error: 'Failed to apply import' });
     }
   },
 );

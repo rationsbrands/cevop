@@ -13,11 +13,13 @@ interface Metrics {
     selfSignup: number;
     newThisMonth: number;
     free: number;
+    byPlan: { starter: number; growth: number; enterprise: number };
   };
   users: { total: number };
-  orders: { total: number; today: number };
+  orders: { total: number; today: number; thisMonth: number };
   branches: { total: number };
   revenue: { byCurrency: Record<string, number> };
+  gmvThisMonth: { byCurrency: Record<string, number> };
 }
 
 function StatCard({
@@ -65,6 +67,7 @@ export function MetricsPage() {
   const canViewOrgDetail = can('view_org_detail');
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [expiring, setExpiring] = useState<any[]>([]);
+  const [atRisk, setAtRisk] = useState<any[]>([]);
   const [activity, setActivity] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -74,11 +77,17 @@ export function MetricsPage() {
       ? api.get('/api/ops/trials/expiring')
       : Promise.resolve({ success: true, data: [] });
 
-    Promise.all([api.get('/api/ops/metrics'), expiringPromise, api.get('/api/ops/activity')])
-      .then(([m, e, a]) => {
+    Promise.all([
+      api.get('/api/ops/metrics'),
+      expiringPromise,
+      api.get('/api/ops/activity'),
+      api.get('/api/ops/at-risk'),
+    ])
+      .then(([m, e, a, r]) => {
         if (m.success) setMetrics(m.data);
         if (e.success) setExpiring(e.data);
         if (a.success) setActivity(a.data);
+        if (r.success) setAtRisk(r.data);
       })
       .finally(() => setLoading(false));
   }, [api, canViewMetrics, canViewTrialsExpiring]);
@@ -114,6 +123,17 @@ export function MetricsPage() {
       ? revenueCurrencyCodes.map((c) => formatPrice(revenueByCurrency[c] ?? 0, c)).join(' · ')
       : 'All time, all orgs';
 
+  const gmvThisMonth = metrics?.gmvThisMonth?.byCurrency ?? {};
+  const gmvCurrencies = Object.keys(gmvThisMonth)
+    .filter((c) => Number.isFinite(gmvThisMonth[c]))
+    .sort();
+  const gmvDisplay =
+    gmvCurrencies.length === 1
+      ? formatPrice(gmvThisMonth[gmvCurrencies[0]] ?? 0, gmvCurrencies[0])
+      : gmvCurrencies.length > 1
+        ? gmvCurrencies.map((c) => formatPrice(gmvThisMonth[c] ?? 0, c)).join(' · ')
+        : '—';
+
   return (
     <div className="space-y-8 animate-in">
       <div>
@@ -132,23 +152,62 @@ export function MetricsPage() {
         <StatCard label="Active" value={metrics?.orgs.active ?? 0} sub="Paying customers" />
         <StatCard label="On Trial" value={metrics?.orgs.trialing ?? 0} sub="7-day trial" />
         <StatCard label="Free Tier" value={metrics?.orgs.free ?? 0} sub="Forever free" />
-        <StatCard label="Total Revenue" value={revenueDisplay} sub={revenueSub} accent />
+        <StatCard label="All-Time GMV" value={revenueDisplay} sub={revenueSub} accent />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Users" value={metrics?.users.total ?? 0} sub="Across all orgs" />
-        <StatCard label="Total Orders" value={metrics?.orders.total ?? 0} sub="All time" />
+        <StatCard label="GMV This Month" value={gmvDisplay} sub="Order value processed" accent />
         <StatCard
-          label="Orders Today"
-          value={metrics?.orders.today ?? 0}
+          label="Orders This Month"
+          value={metrics?.orders.thisMonth ?? 0}
           sub="Platform-wide"
-          accent
         />
+        <StatCard label="Orders Today" value={metrics?.orders.today ?? 0} sub="Platform-wide" />
         <StatCard
           label="Active Branches"
           value={metrics?.branches.total ?? 0}
           sub="Across all orgs"
         />
+      </div>
+
+      {/* Plan breakdown */}
+      <div className="card">
+        <div className="px-5 py-4 border-b border-[var(--border)]">
+          <h2 className="font-semibold text-sm">Plan Distribution</h2>
+          <p className="text-xs text-[var(--muted)] mt-0.5">Active paying customers by tier</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-[var(--border)]">
+          {[
+            { label: 'Starter', value: metrics?.orgs.byPlan.starter ?? 0, color: 'text-blue-400' },
+            { label: 'Growth', value: metrics?.orgs.byPlan.growth ?? 0, color: 'text-green-400' },
+            {
+              label: 'Enterprise',
+              value: metrics?.orgs.byPlan.enterprise ?? 0,
+              color: 'text-purple-400',
+            },
+            {
+              label: 'Total Users',
+              value: metrics?.users.total ?? 0,
+              color: 'text-[var(--accent)]',
+            },
+          ].map((item) => (
+            <div key={item.label} className="p-5">
+              <p className="text-[10px] text-[var(--muted)] uppercase tracking-widest font-semibold mb-1">
+                {item.label}
+              </p>
+              <p className={`font-display text-3xl ${item.color}`}>{item.value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-2 gap-4">
+        <StatCard
+          label="Total Orgs"
+          value={metrics?.orgs.total ?? 0}
+          sub={`${metrics?.orgs.newThisMonth ?? 0} new this month`}
+        />
+        <StatCard label="Total Orders" value={metrics?.orders.total ?? 0} sub="All time" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -189,6 +248,44 @@ export function MetricsPage() {
             </div>
           </div>
         )}
+
+        {/* At-risk orgs */}
+        <div className="card">
+          <div className="card-header">
+            <h2 className="font-semibold text-sm">At Risk</h2>
+            <span className="text-xs text-[var(--muted)]">
+              {atRisk.length} org{atRisk.length !== 1 ? 's' : ''} — active but quiet for 7+ days
+            </span>
+          </div>
+          <div className="divide-y divide-[var(--border)]">
+            {atRisk.length === 0 && (
+              <p className="card-body text-[var(--muted)] text-sm">No at-risk orgs right now.</p>
+            )}
+            {atRisk.map((org: any) => (
+              <div key={org.id} className="px-5 py-3 flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-sm text-[var(--text)]">{org.name}</p>
+                  <p className="text-xs text-[var(--muted)]">
+                    {org._count?.orders} total orders · {org.plan}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-red-400 font-semibold">
+                    {org.daysSilent != null ? `${org.daysSilent}d silent` : '—'}
+                  </p>
+                  {canViewOrgDetail && (
+                    <a
+                      href={`/orgs/${org.id}`}
+                      className="text-xs text-[var(--accent)] hover:underline"
+                    >
+                      View →
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
 
         {/* Recent signups */}
         <div className="card">

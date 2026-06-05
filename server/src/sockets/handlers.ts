@@ -138,24 +138,25 @@ export function initSocketHandlers(io: Server): void {
       socket.emit('JOINED', { orgId });
     });
 
-    // Unauthenticated join — customer PWA only, for menu availability updates
-    // No sensitive data in these events — only menu item availability changes
+    // Unauthenticated join — customer PWA only.
+    // Joins a pub: shadow room instead of the staff room so customers only
+    // receive customer-safe events (menu availability, order status, session/payment).
+    // Staff-only events (TASK_ASSIGNED, WAITER_ONLINE, STALE_ORDERS, etc.) are never
+    // emitted to pub: rooms.
     socket.on('JOIN_ORG_PUBLIC', (orgId: string) => {
       if (!socketRateLimit(socket.id)) return;
-      if (typeof orgId !== 'string' || orgId.length > 100) return; // basic validation
-      socket.join(orgId);
-      logger.info('Customer PWA joined org room for menu updates', { orgId, socketId: socket.id });
+      if (typeof orgId !== 'string' || orgId.length > 100) return;
+      socket.join(`pub:${orgId}`);
+      logger.info('Customer PWA joined public org room', { orgId, socketId: socket.id });
     });
 
     socket.on('JOIN_BRANCH_PUBLIC', ({ orgId, branchId }: { orgId: string; branchId: string }) => {
       if (!socketRateLimit(socket.id)) return;
       if (typeof orgId !== 'string' || typeof branchId !== 'string') return;
-      const room = `${orgId}:${branchId}`;
+      if (orgId.length > 100 || branchId.length > 100) return;
+      const room = `pub:${orgId}:${branchId}`;
       socket.join(room);
-      logger.info('Customer PWA joined branch room for order updates', {
-        room,
-        socketId: socket.id,
-      });
+      logger.info('Customer PWA joined public branch room', { room, socketId: socket.id });
     });
 
     // Join a specific branch room (for branch-scoped service displays)

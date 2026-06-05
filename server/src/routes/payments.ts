@@ -209,9 +209,42 @@ paymentsRouter.post('/', requireRole(...CASHIER_ROLES), async (req: AuthRequest,
       return { payment, totalPaid, grandTotal, sessionClosed };
     });
 
-    // 4. Notifications
+    // 4. Resolve any pending BILL_REQUEST service requests for this session
+    //    so they disappear from the service desk immediately after payment
+    const resolvedBillRequests = await prisma.serviceRequest.findMany({
+      where: {
+        sessionId: body.sessionId,
+        serviceType: 'BILL_REQUEST',
+        status: { not: 'RESOLVED' },
+      },
+      select: { id: true, branchId: true },
+    });
+
+    if (resolvedBillRequests.length > 0) {
+      await prisma.serviceRequest.updateMany({
+        where: { id: { in: resolvedBillRequests.map((r) => r.id) } },
+        data: { status: 'RESOLVED', resolvedAt: new Date(), resolvedBy: req.user!.userId } as any,
+      });
+      const orgBranchTemp = `${orgId}:${branchId}`;
+      for (const req of resolvedBillRequests) {
+        io.to(orgBranchTemp).emit('SERVICE_REQUEST_UPDATED', {
+          id: req.id,
+          status: 'RESOLVED',
+          sessionId: body.sessionId,
+        });
+      }
+    }
+
+    // 5. Notifications
     const orgBranch = `${orgId}:${branchId}`;
     io.to(orgBranch).emit('PAYMENT_RECORDED', {
+      sessionId: body.sessionId,
+      payment: result.payment,
+      totalPaid: result.totalPaid,
+      grandTotal: result.grandTotal,
+      sessionClosed: result.sessionClosed,
+    });
+    io.to(`pub:${orgBranch}`).emit('PAYMENT_RECORDED', {
       sessionId: body.sessionId,
       payment: result.payment,
       totalPaid: result.totalPaid,

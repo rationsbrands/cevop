@@ -23,6 +23,7 @@ interface MenuItem {
   sortOrder: number;
   categoryId: string;
   branchId: string | null;
+  stationId?: string | null;
 }
 
 type ModalMode = 'add-cat' | 'edit-cat' | 'add-item' | 'edit-item' | null;
@@ -44,11 +45,13 @@ export function MenuPage() {
     isActive: true,
     scope: 'branch',
   });
+  const [stations, setStations] = useState<{ id: string; name: string }[]>([]);
   const [itemForm, setItemForm] = useState({
     name: '',
     description: '',
     price: '',
     categoryId: '',
+    stationId: '',
     sortOrder: 0,
     isAvailable: true,
     trackStock: false,
@@ -58,6 +61,13 @@ export function MenuPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [activeCat, setActiveCat] = useState<string>('');
+  const [importOpen, setImportOpen] = useState(false);
+  const [importCsv, setImportCsv] = useState('');
+  const [importPreview, setImportPreview] = useState<any>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importApplying, setImportApplying] = useState(false);
+  const [importError, setImportError] = useState('');
+  const [importSuccess, setImportSuccess] = useState('');
   const [draggingCategoryId, setDraggingCategoryId] = useState<string | null>(null);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -121,9 +131,10 @@ export function MenuPage() {
         }
         return;
       }
-      const [menuRes, branchRes] = await Promise.all([
+      const [menuRes, branchRes, stationsRes] = await Promise.all([
         api.get('/api/menu'),
         api.get('/api/branches/' + api.effectiveBranchId),
+        api.get(`/api/stations?branchId=${api.effectiveBranchId}`),
       ]);
       if (!cancelled) {
         if (menuRes.success) {
@@ -133,11 +144,61 @@ export function MenuPage() {
         if (branchRes.success) {
           setUseOrgMenu(branchRes.data.useOrgMenu ?? true);
         }
+        if (stationsRes.success) {
+          setStations(stationsRes.data ?? []);
+        }
         setLoading(false);
       }
     },
     [api],
   );
+
+  async function previewImport() {
+    if (!importCsv.trim()) {
+      setImportError('Paste your CSV content first.');
+      return;
+    }
+    setImportLoading(true);
+    setImportError('');
+    setImportPreview(null);
+    try {
+      const res = await api.post('/api/menu/import/preview', { csv: importCsv });
+      if (res.success) {
+        setImportPreview(res.data);
+      } else {
+        setImportError(res.error ?? 'Preview failed');
+      }
+    } catch {
+      setImportError('Network error');
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  async function applyImport() {
+    if (!importPreview) return;
+    setImportApplying(true);
+    setImportError('');
+    try {
+      const res = await api.post('/api/menu/import/confirm', { csv: importCsv });
+      if (res.success) {
+        setImportSuccess(`Done! Created ${res.data.created} items, updated ${res.data.updated}.`);
+        setImportPreview(null);
+        setImportCsv('');
+        void load();
+        setTimeout(() => {
+          setImportOpen(false);
+          setImportSuccess('');
+        }, 2500);
+      } else {
+        setImportError(res.error ?? 'Import failed');
+      }
+    } catch {
+      setImportError('Network error');
+    } finally {
+      setImportApplying(false);
+    }
+  }
 
   const persistCategoryOrder = useCallback(
     async (nextCategories: Category[]) => {
@@ -212,6 +273,7 @@ export function MenuPage() {
       description: '',
       price: '',
       categoryId: catId,
+      stationId: '',
       sortOrder: nextSort,
       isAvailable: true,
       trackStock: false,
@@ -227,6 +289,7 @@ export function MenuPage() {
       description: item.description || '',
       price: String(item.price),
       categoryId: item.categoryId,
+      stationId: item.stationId ?? '',
       sortOrder: item.sortOrder,
       isAvailable: item.isAvailable,
       trackStock: item.trackStock,
@@ -284,10 +347,11 @@ export function MenuPage() {
     setSaving(true);
     setError('');
     try {
-      const body = {
+      const body: any = {
         name: itemForm.name,
         description: itemForm.description,
         categoryId: itemForm.categoryId,
+        stationId: itemForm.stationId || null,
         isAvailable: itemForm.isAvailable,
         trackStock: itemForm.trackStock,
         stockCount: parseInt(itemForm.stockCount, 10) || 0,
@@ -384,11 +448,22 @@ export function MenuPage() {
         }}
         onConfirm={() => void onConfirm()}
       />
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="font-display text-4xl">MENU</h1>
-        <button className="btn btn-primary btn-sm" onClick={openAddCat}>
-          + Add Category
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => window.open('/api/menu/export.csv', '_blank')}
+          >
+            ↓ Export CSV
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => setImportOpen(true)}>
+            ↑ Import CSV
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={openAddCat}>
+            + Add Category
+          </button>
+        </div>
       </div>
 
       {/* Branch menu mode banner */}
@@ -869,6 +944,28 @@ export function MenuPage() {
                     ))}
                   </select>
                 </div>
+
+                {/* Station assignment — routes item to the right KDS station */}
+                {stations.length > 0 && (
+                  <div>
+                    <label htmlFor="menu_item_station">Kitchen Station</label>
+                    <select
+                      id="menu_item_station"
+                      name="stationId"
+                      value={itemForm.stationId}
+                      onChange={(e) => setItemForm({ ...itemForm, stationId: e.target.value })}
+                      autoComplete="off"
+                    >
+                      <option value="">No station (appears on all)</option>
+                      {stations.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <div className="flex items-center gap-4">
                   <div className="flex items-center gap-2">
                     <input
@@ -961,6 +1058,221 @@ export function MenuPage() {
                 {saving ? 'Saving…' : 'Save'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* CSV Import Modal */}
+      {importOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => {
+            setImportOpen(false);
+            setImportPreview(null);
+            setImportCsv('');
+            setImportError('');
+            setImportSuccess('');
+          }}
+        >
+          <div
+            className="card w-full max-w-2xl max-h-[85vh] flex flex-col p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between shrink-0">
+              <h2 className="font-display text-2xl">IMPORT MENU</h2>
+              <button
+                onClick={() => {
+                  setImportOpen(false);
+                  setImportPreview(null);
+                  setImportCsv('');
+                  setImportError('');
+                }}
+                className="text-[var(--muted)] text-2xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            {importSuccess ? (
+              <div className="text-center py-8 space-y-2">
+                <p className="text-4xl">✓</p>
+                <p className="font-bold text-[var(--ready)]">{importSuccess}</p>
+              </div>
+            ) : !importPreview ? (
+              <div className="space-y-4 flex-1 min-h-0">
+                <div className="space-y-1">
+                  <p className="text-sm text-[var(--muted)]">
+                    Download the{' '}
+                    <button
+                      onClick={() => window.open('/api/menu/export.csv', '_blank')}
+                      className="text-[var(--accent)] underline"
+                    >
+                      CSV template
+                    </button>
+                    , fill it in Excel or Google Sheets, then paste the contents below.
+                  </p>
+                  <p className="text-xs text-[var(--muted)]">
+                    Columns:{' '}
+                    <code className="bg-[var(--surface2)] px-1 text-[10px]">
+                      Category, Item Name, Description, Price, Available (yes/no), Track Stock
+                      (yes/no), Stock Count
+                    </code>
+                  </p>
+                </div>
+
+                {/* File upload OR paste */}
+                <div className="space-y-2">
+                  <label
+                    className="flex flex-col items-center justify-center border-2 border-dashed border-[var(--border)] hover:border-[var(--accent)] p-6 cursor-pointer transition-colors"
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const file = e.dataTransfer.files[0];
+                      if (file) {
+                        const r = new FileReader();
+                        r.onload = (ev) => setImportCsv((ev.target?.result as string) ?? '');
+                        r.readAsText(file);
+                      }
+                    }}
+                  >
+                    <span className="text-sm text-[var(--muted)]">Drop CSV file here or</span>
+                    <span className="text-[var(--accent)] text-sm font-bold mt-1">
+                      browse to upload
+                    </span>
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      className="sr-only"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const r = new FileReader();
+                          r.onload = (ev) => setImportCsv((ev.target?.result as string) ?? '');
+                          r.readAsText(file);
+                        }
+                      }}
+                    />
+                  </label>
+                  <p className="text-center text-xs text-[var(--muted)]">
+                    or paste CSV content directly
+                  </p>
+                  <textarea
+                    className="w-full h-40 font-mono text-xs resize-none bg-[var(--surface2)] border border-[var(--border)] p-3 focus:border-[var(--accent)] outline-none"
+                    placeholder="Category,Item Name,Description,Price,Available (yes/no),Track Stock (yes/no),Stock Count&#10;Mains,Jollof Rice,Classic party jollof,3500,yes,no,0"
+                    value={importCsv}
+                    onChange={(e) => {
+                      setImportCsv(e.target.value);
+                      setImportError('');
+                    }}
+                  />
+                </div>
+
+                {importError && <p className="text-xs text-[var(--danger)]">{importError}</p>}
+
+                <div className="flex gap-2">
+                  <button onClick={() => setImportOpen(false)} className="btn btn-secondary flex-1">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={previewImport}
+                    disabled={importLoading || !importCsv.trim()}
+                    className="btn btn-primary flex-1 disabled:opacity-50"
+                  >
+                    {importLoading ? 'Previewing…' : 'Preview Changes'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col min-h-0 space-y-4 flex-1">
+                {/* Stats */}
+                <div className="grid grid-cols-3 gap-3 shrink-0">
+                  {[
+                    {
+                      label: 'New Categories',
+                      value: importPreview.stats.newCategories,
+                      color: 'text-[var(--accent)]',
+                    },
+                    {
+                      label: 'New Items',
+                      value: importPreview.stats.newItems,
+                      color: 'text-[var(--ready)]',
+                    },
+                    {
+                      label: 'Updated Items',
+                      value: importPreview.stats.updatedItems,
+                      color: 'text-[var(--warning)]',
+                    },
+                  ].map((s) => (
+                    <div key={s.label} className="card p-3 text-center">
+                      <p className={`font-display text-2xl ${s.color}`}>{s.value}</p>
+                      <p className="text-[10px] text-[var(--muted)] uppercase tracking-wider">
+                        {s.label}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Preview list */}
+                <div className="flex-1 overflow-y-auto border border-[var(--border)] min-h-0">
+                  <table className="w-full text-xs">
+                    <thead className="bg-[var(--surface2)] sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Action</th>
+                        <th className="px-3 py-2 text-left">Type</th>
+                        <th className="px-3 py-2 text-left">Category</th>
+                        <th className="px-3 py-2 text-left">Name</th>
+                        <th className="px-3 py-2 text-left">Changes</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--border)]">
+                      {importPreview.preview.map((p: any, i: number) => (
+                        <tr key={i} className="hover:bg-[var(--surface2)]">
+                          <td className="px-3 py-1.5">
+                            <span
+                              className={`font-bold uppercase ${p.action === 'create' ? 'text-[var(--ready)]' : 'text-[var(--warning)]'}`}
+                            >
+                              {p.action}
+                            </span>
+                          </td>
+                          <td className="px-3 py-1.5 text-[var(--muted)] capitalize">{p.type}</td>
+                          <td className="px-3 py-1.5">{p.category}</td>
+                          <td className="px-3 py-1.5 font-medium">{p.name}</td>
+                          <td className="px-3 py-1.5 text-[var(--muted)]">
+                            {p.changes
+                              ? Object.entries(p.changes)
+                                  .map(([k, v]: any) => `${k}: ${v.from} → ${v.to}`)
+                                  .join(', ')
+                              : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {importError && (
+                  <p className="text-xs text-[var(--danger)] shrink-0">{importError}</p>
+                )}
+
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    onClick={() => setImportPreview(null)}
+                    className="btn btn-secondary flex-1"
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    onClick={applyImport}
+                    disabled={importApplying}
+                    className="btn btn-primary flex-1 disabled:opacity-50"
+                  >
+                    {importApplying
+                      ? 'Importing…'
+                      : `Apply Import (${importPreview.stats.newItems + importPreview.stats.updatedItems + importPreview.stats.newCategories} changes)`}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

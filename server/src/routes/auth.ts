@@ -93,13 +93,28 @@ function getClientIp(req: Request): string {
   );
 }
 
-function getImpersonationCodeStore(): Map<
+// In-memory fallback (mirrors ops.ts — used only when Redis isn't configured)
+const _localImpersonationStore = new Map<
   string,
   { token: string; expiresAt: number; orgId: string; opsUserId: string; createdAt: number }
-> {
-  const g = globalThis as any;
-  if (!g.__cevopImpersonationCodeStore) g.__cevopImpersonationCodeStore = new Map();
-  return g.__cevopImpersonationCodeStore;
+>();
+
+async function consumeImpersonationCode(
+  code: string,
+): Promise<{ token: string; expiresAt: number } | null> {
+  const { getRedisClient } = await import('../services/redis');
+  const redis = getRedisClient();
+  if (redis) {
+    const raw = await redis.get(`cevop:impersonate:${code}`);
+    if (!raw) return null;
+    await redis.del(`cevop:impersonate:${code}`);
+    return JSON.parse(raw as string);
+  }
+  // Fallback: in-memory (single-instance only)
+  const entry = _localImpersonationStore.get(code);
+  if (!entry) return null;
+  _localImpersonationStore.delete(code);
+  return entry;
 }
 
 authRouter.get('/impersonate/exchange', async (req: Request, res: Response) => {
@@ -107,17 +122,8 @@ authRouter.get('/impersonate/exchange', async (req: Request, res: Response) => {
     const schema = z.object({ code: z.string().min(10).max(256) });
     const { code } = schema.parse(req.query);
 
-    const store = getImpersonationCodeStore();
-    const entry = store.get(code);
-    if (!entry) {
-      res
-        .status(400)
-        .json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid or expired code' });
-      return;
-    }
-    store.delete(code);
-
-    if (Date.now() > entry.expiresAt) {
+    const entry = await consumeImpersonationCode(code);
+    if (!entry || Date.now() > entry.expiresAt) {
       res
         .status(400)
         .json({ success: false, code: 'INVALID_REQUEST', error: 'Invalid or expired code' });
@@ -398,14 +404,12 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res
-        .status(400)
-        .json({
-          success: false,
-          code: 'VALIDATION_ERROR',
-          error: 'Validation error',
-          details: err.errors,
-        });
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        error: 'Validation error',
+        details: err.errors,
+      });
       return;
     }
     logger.error('Login error', { err });
@@ -640,14 +644,12 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
     res.json({ success: true, message: 'Password updated successfully' });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res
-        .status(400)
-        .json({
-          success: false,
-          code: 'VALIDATION_ERROR',
-          error: 'Validation error',
-          details: err.errors,
-        });
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        error: 'Validation error',
+        details: err.errors,
+      });
       return;
     }
     res
@@ -750,13 +752,11 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
       },
     });
     if (existing) {
-      res
-        .status(409)
-        .json({
-          success: false,
-          code: 'CONFLICT',
-          error: 'An account with this email already exists',
-        });
+      res.status(409).json({
+        success: false,
+        code: 'CONFLICT',
+        error: 'An account with this email already exists',
+      });
       return;
     }
 
@@ -849,14 +849,12 @@ authRouter.post('/accept-invite', async (req: Request, res: Response) => {
     });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res
-        .status(400)
-        .json({
-          success: false,
-          code: 'VALIDATION_ERROR',
-          error: 'Validation error',
-          details: err.errors,
-        });
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        error: 'Validation error',
+        details: err.errors,
+      });
       return;
     }
     res
@@ -967,6 +965,113 @@ authRouter.post(
       });
     } catch (err: unknown) {
       if (err instanceof z.ZodError) {
+        res.status(400).json({
+          success: false,
+          code: 'VALIDATION_ERROR',
+          error: 'Validation error',
+          details: err.errors,
+        });
+        return;
+      }
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to onboard organisation' });
+    }
+  },
+);
+
+// ─── POST /auth/onboard/bulk ──────────────────────────────────────────────────
+// Provision multiple organisations from a CSV-parsed array in a single request.
+
+authRouter.post(
+  '/onboard/bulk',
+  authenticate,
+  requireOpsPermission('onboard_org'),
+  async (req: AuthRequest, res: Response) => {
+    if (req.user!.role !== 'SUPERADMIN') {
+      res
+        .status(403)
+        .json({ success: false, code: 'FORBIDDEN', error: 'Superadmin access required' });
+      return;
+    }
+
+    try {
+      const rowSchema = z.object({
+        orgName: z.string().min(2).max(200),
+        orgSlug: z
+          .string()
+          .min(2)
+          .max(100)
+          .regex(/^[a-z0-9-]+$/),
+        adminName: z.string().min(1).max(200),
+        adminEmail: z.string().email().toLowerCase(),
+        adminPassword: z.string().min(8).max(128),
+        timezone: z.string().optional(),
+        currency: z.string().optional(),
+      });
+
+      const { rows } = z.object({ rows: z.array(rowSchema).min(1).max(100) }).parse(req.body);
+
+      const results: {
+        row: number;
+        status: 'created' | 'error';
+        slug?: string;
+        orgId?: string;
+        error?: string;
+      }[] = [];
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        try {
+          const slugExists = await prisma.organization.findUnique({ where: { slug: row.orgSlug } });
+          if (slugExists) {
+            results.push({
+              row: i + 1,
+              status: 'error',
+              slug: row.orgSlug,
+              error: 'Slug already taken',
+            });
+            continue;
+          }
+
+          const org = await prisma.organization.create({
+            data: {
+              name: row.orgName,
+              slug: row.orgSlug,
+              timezone: row.timezone ?? 'Africa/Lagos',
+              currency: row.currency ?? 'NGN',
+            },
+          });
+
+          const passwordHash = await bcrypt.hash(row.adminPassword, 12);
+          await prisma.user.create({
+            data: {
+              organizationId: org.id,
+              name: row.adminName,
+              email: row.adminEmail,
+              passwordHash,
+              role: 'ORG_OWNER' as any,
+            },
+          });
+
+          logger.info('Bulk onboard: org created', { orgId: org.id, slug: org.slug });
+          results.push({ row: i + 1, status: 'created', slug: org.slug, orgId: org.id });
+        } catch (rowErr: any) {
+          results.push({
+            row: i + 1,
+            status: 'error',
+            slug: row.orgSlug,
+            error: rowErr?.message ?? 'Unknown error',
+          });
+        }
+      }
+
+      const created = results.filter((r) => r.status === 'created').length;
+      const errors = results.filter((r) => r.status === 'error').length;
+
+      res.status(201).json({ success: true, data: { created, errors, results } });
+    } catch (err: unknown) {
+      if (err instanceof z.ZodError) {
         res
           .status(400)
           .json({
@@ -979,7 +1084,7 @@ authRouter.post(
       }
       res
         .status(500)
-        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to onboard organisation' });
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to bulk onboard' });
     }
   },
 );
@@ -1107,14 +1212,12 @@ authRouter.post('/signup', async (req: Request, res: Response) => {
     });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res
-        .status(400)
-        .json({
-          success: false,
-          code: 'VALIDATION_ERROR',
-          error: 'Validation error',
-          details: err.errors,
-        });
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        error: 'Validation error',
+        details: err.errors,
+      });
       return;
     }
     logger.error('Signup error', { err });
@@ -1135,13 +1238,11 @@ authRouter.post('/verify-email', async (req: Request, res: Response) => {
     });
 
     if (!user) {
-      res
-        .status(400)
-        .json({
-          success: false,
-          code: 'INVALID_REQUEST',
-          error: 'Invalid or expired verification token',
-        });
+      res.status(400).json({
+        success: false,
+        code: 'INVALID_REQUEST',
+        error: 'Invalid or expired verification token',
+      });
       return;
     }
 
@@ -1206,14 +1307,12 @@ authRouter.post('/verify-email', async (req: Request, res: Response) => {
     });
   } catch (err: unknown) {
     if (err instanceof z.ZodError) {
-      res
-        .status(400)
-        .json({
-          success: false,
-          code: 'VALIDATION_ERROR',
-          error: 'Validation error',
-          details: err.errors,
-        });
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        error: 'Validation error',
+        details: err.errors,
+      });
       return;
     }
     logger.error('Email verification error', { err });

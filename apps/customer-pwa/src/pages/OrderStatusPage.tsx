@@ -75,6 +75,15 @@ export function OrderStatusPage() {
       return data;
     },
     enabled: !!orderId,
+    // Poll every 10s as socket fallback — catches missed updates when socket drops on mobile
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status === 'SERVED' || status === 'CANCELLED') return false;
+      return 10_000;
+    },
+    refetchIntervalInBackground: false,
+    // Override global refetchOnWindowFocus:false — customer coming back to tab/app must see latest state
+    refetchOnWindowFocus: true,
   });
 
   const error = queryError ? 'Order not found' : '';
@@ -106,6 +115,8 @@ export function OrderStatusPage() {
 
     socket.on('connect', () => {
       socket.emit('JOIN_ORDER', { orderId });
+      // Re-fetch on every (re)connect — catches any status changes that happened while disconnected
+      queryClient.invalidateQueries({ queryKey: ['order-status', orderId] });
     });
 
     socket.on('ORDER_UPDATED', (updated: Order) => {
@@ -149,6 +160,10 @@ export function OrderStatusPage() {
         setTimeout(() => setCancelledItemAlert(null), 8000);
       },
     );
+
+    socket.on('disconnect', () => {
+      // Will reconnect automatically — the 'connect' handler above re-syncs state
+    });
 
     return () => {
       socket.disconnect();

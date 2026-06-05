@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth, useApi } from '../context/auth';
+import { useSocket } from '../context/socket';
 import { ConfirmDialog, showToast } from '../components/Popup';
 
 interface Table {
@@ -30,10 +31,17 @@ interface ServiceTask {
 export function ServiceDeskPage() {
   const { user, activeBranchFilter } = useAuth();
   const api = useApi();
+  const { socket } = useSocket();
 
   const [tasks, setTasks] = useState<ServiceTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTitle, setConfirmTitle] = useState('');
@@ -79,6 +87,59 @@ export function ServiceDeskPage() {
     const interval = setInterval(load, 15000); // poll every 15s
     return () => clearInterval(interval);
   }, [load]);
+
+  // Real-time socket updates — remove resolved tasks instantly
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleServiceRequestUpdated = (req: any) => {
+      if (req.status === 'RESOLVED') {
+        setTasks((prev) => prev.filter((t) => !(t.type === 'SERVICE_REQUEST' && t.id === req.id)));
+      } else {
+        // Status changed to ACKNOWLEDGED — update in place
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.type === 'SERVICE_REQUEST' && t.id === req.id ? { ...t, status: req.status } : t,
+          ),
+        );
+      }
+    };
+
+    const handleWaiterCallUpdated = (call: any) => {
+      if (call.status === 'RESOLVED') {
+        setTasks((prev) => prev.filter((t) => !(t.type === 'WAITER_CALL' && t.id === call.id)));
+      } else {
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.type === 'WAITER_CALL' && t.id === call.id ? { ...t, status: call.status } : t,
+          ),
+        );
+      }
+    };
+
+    // Payment recorded = any pending BILL_REQUEST for that session is now resolved
+    const handlePaymentRecorded = ({ sessionId }: { sessionId: string }) => {
+      setTasks((prev) =>
+        prev.filter(
+          (t) =>
+            !(
+              t.type === 'SERVICE_REQUEST' &&
+              (t as any).sessionId === sessionId &&
+              (t as any).serviceType === 'BILL_REQUEST'
+            ),
+        ),
+      );
+    };
+
+    socket.on('SERVICE_REQUEST_UPDATED', handleServiceRequestUpdated);
+    socket.on('WAITER_CALL_UPDATED', handleWaiterCallUpdated);
+    socket.on('PAYMENT_RECORDED', handlePaymentRecorded);
+    return () => {
+      socket.off('SERVICE_REQUEST_UPDATED', handleServiceRequestUpdated);
+      socket.off('WAITER_CALL_UPDATED', handleWaiterCallUpdated);
+      socket.off('PAYMENT_RECORDED', handlePaymentRecorded);
+    };
+  }, [socket]);
 
   async function updateStatus(task: ServiceTask, newStatus: 'ACKNOWLEDGED' | 'RESOLVED') {
     try {
@@ -168,10 +229,7 @@ export function ServiceDeskPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {tasks.map((task) => {
             const isAcknowledged = task.status === 'ACKNOWLEDGED';
-            // eslint-disable-next-line react-hooks/purity
-            const elapsedMins = Math.floor(
-              (Date.now() - new Date(task.createdAt).getTime()) / 60000,
-            );
+            const elapsedMins = Math.floor((now - new Date(task.createdAt).getTime()) / 60000);
 
             let timeColor = 'text-[var(--muted)]';
             if (elapsedMins >= 10) timeColor = 'text-red-400 font-bold';

@@ -144,6 +144,7 @@ export async function closeSession(
   };
 
   io.to(orgBranch).emit('SESSION_CLOSED', sessionClosedPayload);
+  io.to(`pub:${orgBranch}`).emit('SESSION_CLOSED', sessionClosedPayload);
 
   // Also emit SESSION_CLOSED to individual order rooms so customers who joined via
   // JOIN_ORDER receive the event and clear their running tab immediately
