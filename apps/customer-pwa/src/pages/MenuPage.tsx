@@ -50,6 +50,7 @@ interface TableInfo {
   organizationLogo?: string;
   branchName: string | null;
   qrOrderingEnabled?: boolean;
+  serviceModel?: 'TABLE_SERVICE' | 'COUNTER_SERVICE' | 'BOTH';
 }
 interface OrderPreviewItem {
   id: string;
@@ -1125,8 +1126,20 @@ export function MenuPage() {
   };
 
   const displayName = tableInfo?.branchName ?? tableInfo?.organizationName ?? 'Cevop';
-  const hasWaiterOptions = helpOptions.some((o) => o.type === 'WAITER');
-  const hasServiceOptions = helpOptions.some((o) => o.type === 'SERVICE');
+  // Counter-service branches (food trucks, takeout counters) have no waiters,
+  // so table-service buttons never apply there.
+  const isCounterOnly = tableInfo?.serviceModel === 'COUNTER_SERVICE';
+  // Show a button only when (a) it makes sense for this branch's service model
+  // and (b) the restaurant has actually configured options of that type.
+  const showWaiterButton = !isCounterOnly && helpOptions.some((o) => o.type === 'WAITER');
+  const showServiceButton = !isCounterOnly && helpOptions.some((o) => o.type === 'SERVICE');
+  // BILL options stand on their own (a counter customer may still ask for their bill),
+  // but only surface them once there is an actual unpaid bill to settle — same rule
+  // the navbar Request Bill button uses.
+  const hasUnpaidBill = !!sessionBill && sessionBill.grandTotal > 0 && !sessionBill.isPaid;
+  const hasBillOptions = helpOptions.some((o) => o.type === 'BILL');
+  const showBillSection = hasBillOptions && hasUnpaidBill;
+  const showHelpSection = showWaiterButton || showServiceButton || showBillSection;
 
   if (loading)
     return (
@@ -1229,40 +1242,37 @@ export function MenuPage() {
           </div>
         </div>
 
-        <div className="px-4 pb-3 relative z-20">
-          {(() => {
-            // Bill button only shows when there's an unpaid bill to settle
-            const showBillButton =
-              !!sessionBill && sessionBill.grandTotal > 0 && !sessionBill.isPaid;
-            return (
-              <div className={`grid ${showBillButton ? 'grid-cols-3' : 'grid-cols-2'} gap-2`}>
-                <button
-                  onClick={() => {
-                    if (!hasWaiterOptions) {
-                      showToast('Not available at this time.', 'error');
-                      return;
-                    }
-                    setWaiterModal(true);
-                  }}
-                  className="min-h-11 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
-                  aria-label="Call waiter"
-                >
-                  Waiter
-                </button>
+        {(() => {
+          // Bill button only shows when there's an unpaid bill to settle
+          const showBillButton = hasUnpaidBill;
+          const visibleCount =
+            (showWaiterButton ? 1 : 0) + (showServiceButton ? 1 : 0) + (showBillButton ? 1 : 0);
+          // Nothing to show (e.g. counter-only branch with no bill due) — skip the bar entirely.
+          if (visibleCount === 0) return null;
+          const gridCols =
+            visibleCount === 1 ? 'grid-cols-1' : visibleCount === 2 ? 'grid-cols-2' : 'grid-cols-3';
+          return (
+            <div className="px-4 pb-3 relative z-20">
+              <div className={`grid ${gridCols} gap-2`}>
+                {showWaiterButton && (
+                  <button
+                    onClick={() => setWaiterModal(true)}
+                    className="min-h-11 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
+                    aria-label="Call waiter"
+                  >
+                    Waiter
+                  </button>
+                )}
 
-                <button
-                  onClick={() => {
-                    if (!hasServiceOptions) {
-                      showToast('Not available at this time.', 'error');
-                      return;
-                    }
-                    setServiceModal(true);
-                  }}
-                  className="min-h-11 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
-                  aria-label="Request service"
-                >
-                  Service
-                </button>
+                {showServiceButton && (
+                  <button
+                    onClick={() => setServiceModal(true)}
+                    className="min-h-11 px-3 py-2 rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-xs sm:text-sm font-semibold hover:border-[var(--accent)] transition-colors font-display"
+                    aria-label="Request service"
+                  >
+                    Service
+                  </button>
+                )}
 
                 {showBillButton && (
                   <button
@@ -1297,9 +1307,9 @@ export function MenuPage() {
                   </button>
                 )}
               </div>
-            );
-          })()}
-        </div>
+            </div>
+          );
+        })()}
 
         {/* Persistent offline order banner — stays visible until the queued order is sent */}
         {pendingOrderCount > 0 && (
@@ -1515,60 +1525,17 @@ export function MenuPage() {
         ))}
 
         {/* Services */}
-        <div className="px-4 pt-6 pb-4">
-          <div className="border-t border-[var(--border)] pt-6">
-            <h2 className="font-display text-xl text-[var(--muted)] mb-3">NEED HELP?</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <button
-                onClick={() => setWaiterModal(true)}
-                className="card p-4 text-left hover:border-[var(--accent)] transition-colors active:scale-[0.99]"
-              >
-                <div className="w-10 h-10 border border-[var(--accent)]/40 rounded-xl mx-auto mb-3 flex items-center justify-center bg-[var(--accent-dim)] text-[var(--accent)]">
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-                  </svg>
-                </div>
-                <div className="font-semibold text-sm">Call Waiter</div>
-                <div className="text-[var(--muted)] text-xs mt-0.5">We'll be right over</div>
-              </button>
-              <button
-                onClick={() => setServiceModal(true)}
-                className="card p-4 text-left hover:border-[var(--accent)] transition-colors active:scale-[0.99]"
-              >
-                <div className="w-10 h-10 border border-[var(--border)] rounded-xl mx-auto mb-3 flex items-center justify-center bg-[var(--surface2)] text-[var(--text)]">
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-                  </svg>
-                </div>
-                <div className="font-semibold text-sm">Request Service</div>
-                <div className="text-[var(--muted)] text-xs mt-0.5">Refills, extras & more</div>
-              </button>
-
-              {/* Dynamic BILL type options */}
-              {helpOptions
-                .filter((o) => o.type === 'BILL')
-                .map((opt) => (
+        {showHelpSection && (
+          <div className="px-4 pt-6 pb-4">
+            <div className="border-t border-[var(--border)] pt-6">
+              <h2 className="font-display text-xl text-[var(--muted)] mb-3">NEED HELP?</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {showWaiterButton && (
                   <button
-                    key={opt.id}
-                    onClick={() => handleHelpOptionClick(opt)}
-                    className="card p-4 text-left hover:border-[var(--accent)] transition-colors border-[var(--accent)]/30 active:scale-[0.99]"
+                    onClick={() => setWaiterModal(true)}
+                    className="card p-4 text-left hover:border-[var(--accent)] transition-colors active:scale-[0.99]"
                   >
-                    <div className="w-10 h-10 border border-amber-500/40 rounded-xl mx-auto mb-3 flex items-center justify-center bg-amber-500/10 text-amber-400">
+                    <div className="w-10 h-10 border border-[var(--accent)]/40 rounded-xl mx-auto mb-3 flex items-center justify-center bg-[var(--accent-dim)] text-[var(--accent)]">
                       <svg
                         width="16"
                         height="16"
@@ -1576,20 +1543,70 @@ export function MenuPage() {
                         fill="none"
                         stroke="currentColor"
                         strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
                       >
-                        <rect x="2" y="5" width="20" height="14" rx="2" ry="2" />
-                        <line x1="2" y1="10" x2="22" y2="10" />
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
                       </svg>
                     </div>
-                    <div className="font-semibold text-sm">{opt.label}</div>
-                    <div className="text-[var(--muted)] text-xs mt-0.5">Instant request</div>
+                    <div className="font-semibold text-sm">Call Waiter</div>
+                    <div className="text-[var(--muted)] text-xs mt-0.5">We'll be right over</div>
                   </button>
-                ))}
+                )}
+                {showServiceButton && (
+                  <button
+                    onClick={() => setServiceModal(true)}
+                    className="card p-4 text-left hover:border-[var(--accent)] transition-colors active:scale-[0.99]"
+                  >
+                    <div className="w-10 h-10 border border-[var(--border)] rounded-xl mx-auto mb-3 flex items-center justify-center bg-[var(--surface2)] text-[var(--text)]">
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                      </svg>
+                    </div>
+                    <div className="font-semibold text-sm">Request Service</div>
+                    <div className="text-[var(--muted)] text-xs mt-0.5">Refills, extras & more</div>
+                  </button>
+                )}
+
+                {/* Dynamic BILL type options — only while there is an unpaid bill to settle */}
+                {showBillSection &&
+                  helpOptions
+                    .filter((o) => o.type === 'BILL')
+                    .map((opt) => (
+                      <button
+                        key={opt.id}
+                        onClick={() => handleHelpOptionClick(opt)}
+                        className="card p-4 text-left hover:border-[var(--accent)] transition-colors border-[var(--accent)]/30 active:scale-[0.99]"
+                      >
+                        <div className="w-10 h-10 border border-amber-500/40 rounded-xl mx-auto mb-3 flex items-center justify-center bg-amber-500/10 text-amber-400">
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <rect x="2" y="5" width="20" height="14" rx="2" ry="2" />
+                            <line x1="2" y1="10" x2="22" y2="10" />
+                          </svg>
+                        </div>
+                        <div className="font-semibold text-sm">{opt.label}</div>
+                        <div className="text-[var(--muted)] text-xs mt-0.5">Instant request</div>
+                      </button>
+                    ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         <p className="text-[10px] text-[var(--muted)] text-center font-bold tracking-widest opacity-50 uppercase mb-8 flex items-center justify-center gap-2">
           <span>Powered by</span>

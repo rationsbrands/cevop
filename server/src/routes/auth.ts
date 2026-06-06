@@ -1072,14 +1072,12 @@ authRouter.post(
       res.status(201).json({ success: true, data: { created, errors, results } });
     } catch (err: unknown) {
       if (err instanceof z.ZodError) {
-        res
-          .status(400)
-          .json({
-            success: false,
-            code: 'VALIDATION_ERROR',
-            error: 'Validation error',
-            details: err.errors,
-          });
+        res.status(400).json({
+          success: false,
+          code: 'VALIDATION_ERROR',
+          error: 'Validation error',
+          details: err.errors,
+        });
         return;
       }
       res
@@ -1113,6 +1111,9 @@ authRouter.get('/table/:orgId/:tableId', async (req: Request, res: Response) => 
         organizationName: table.organization.name,
         organizationLogo: table.organization.logo,
         branchName: table.branch?.name ?? null,
+        qrOrderingEnabled: (table.organization as any).qrOrderingEnabled ?? true,
+        // Drives which customer help buttons make sense. Branch overrides org default.
+        serviceModel: (table.branch as any)?.serviceModel ?? 'TABLE_SERVICE',
       },
     });
   } catch {

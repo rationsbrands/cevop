@@ -83,6 +83,8 @@ tablesRouter.get('/public/:orgId/:tableId', async (req: Request, res: Response) 
         branchName: table.branch?.name ?? null,
         activeSessionId: sessionId,
         qrOrderingEnabled: (table.organization as any).qrOrderingEnabled ?? true,
+        // Drives which customer help buttons make sense (counter-only branches hide waiter/service).
+        serviceModel: (table.branch as any)?.serviceModel ?? 'TABLE_SERVICE',
       },
     });
   } catch {
