@@ -11,6 +11,7 @@ interface Branch {
   phone?: string;
   maxTablesPerWaiter?: number | null;
   isActive: boolean;
+  serviceModel?: 'TABLE_SERVICE' | 'COUNTER_SERVICE' | 'BOTH';
   taxRate?: string | number | null;
   serviceChargeRate?: string | number | null;
   createdAt: string;
@@ -56,6 +57,7 @@ export function BranchesPage() {
     address: '',
     phone: '',
     maxTablesPerWaiter: '',
+    serviceModel: 'TABLE_SERVICE',
     taxRate: '',
     serviceChargeRate: '',
   });
@@ -445,6 +447,33 @@ export function BranchesPage() {
                         placeholder="Unlimited"
                       />
                     </div>
+                    <div className="col-span-2 md:col-span-4">
+                      <label
+                        htmlFor={`branch_edit_service_model_${branch.id}`}
+                        className="text-xs text-[var(--muted)] uppercase tracking-wider"
+                      >
+                        Service Model
+                      </label>
+                      <select
+                        id={`branch_edit_service_model_${branch.id}`}
+                        name="serviceModel"
+                        value={editForm.serviceModel}
+                        onChange={(e) =>
+                          setEditForm((f) => ({ ...f, serviceModel: e.target.value }))
+                        }
+                      >
+                        <option value="TABLE_SERVICE">Table service (dine-in with tables)</option>
+                        <option value="BOTH">Both (dine-in tables + takeaway counter)</option>
+                        <option value="COUNTER_SERVICE">Counter only (takeaway, no tables)</option>
+                      </select>
+                      <p className="text-[10px] text-[var(--muted)] mt-1">
+                        {editForm.serviceModel === 'COUNTER_SERVICE'
+                          ? 'Staff take orders without tables; each gets a takeaway ticket number.'
+                          : editForm.serviceModel === 'BOTH'
+                            ? 'Staff choose dine-in (table) or takeaway per order.'
+                            : 'All orders are attached to a table.'}
+                      </p>
+                    </div>
                     <div>
                       <label
                         htmlFor={`branch_edit_tax_${branch.id}`}
@@ -537,6 +566,7 @@ export function BranchesPage() {
                           address: branch.address ?? '',
                           phone: branch.phone ?? '',
                           maxTablesPerWaiter: branch.maxTablesPerWaiter?.toString() ?? '',
+                          serviceModel: branch.serviceModel ?? 'TABLE_SERVICE',
                           taxRate: branch.taxRate?.toString() ?? '',
                           serviceChargeRate: branch.serviceChargeRate?.toString() ?? '',
                         });

@@ -378,12 +378,23 @@ export function DashboardPage() {
 
         {role === 'CASHIER' && !orgMode && (
           <>
+            <Link
+              to="/register"
+              className="card p-4 border-[var(--accent)]/40 bg-[var(--accent)]/5 hover:bg-[var(--accent)]/10 transition-colors"
+            >
+              <div className="text-xs text-[var(--accent)] uppercase font-bold tracking-widest">
+                Register
+              </div>
+              <div className="mt-1 text-sm font-semibold text-[var(--text)]">
+                Ring up counter & takeaway sales
+              </div>
+            </Link>
             <Link to="/cashier" className="card p-4 hover:bg-[var(--surface2)] transition-colors">
               <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
                 Cashier
               </div>
               <div className="mt-1 text-sm font-semibold text-[var(--text)]">
-                Manage payments and sessions
+                Settle table bills and payments
               </div>
             </Link>
             <Link to="/orders" className="card p-4 hover:bg-[var(--surface2)] transition-colors">

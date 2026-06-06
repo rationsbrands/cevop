@@ -27,6 +27,9 @@ interface SessionWithPayments {
   closedAt: string | null;
   guestCount: number;
   table: TableInfo | null;
+  isTakeaway?: boolean;
+  orderNumber?: number | null;
+  customerName?: string | null;
   assignedWaiter: AssignedWaiter | null;
   grandTotal: number;
   amountPaid: number;
@@ -98,6 +101,9 @@ export function PaymentsPage() {
       },
       items,
       totals: {
+        subtotal: bill.grandSubtotal,
+        taxAmount: bill.grandTax,
+        serviceChargeAmount: bill.grandServiceCharge,
         grandTotal: bill.grandTotal,
         amountPaid: bill.amountPaid,
         balance: bill.balance,
@@ -182,7 +188,11 @@ export function PaymentsPage() {
                         : 'Open'}
                     </td>
                     <td className="px-4 py-3 font-medium text-[var(--text)]">
-                      {s.table ? s.table.label || `Table ${s.table.number}` : 'No Table'}
+                      {s.table
+                        ? s.table.label || `Table ${s.table.number}`
+                        : s.orderNumber
+                          ? `Takeaway #${String(s.orderNumber).padStart(3, '0')}${s.customerName ? ` · ${s.customerName}` : ''}`
+                          : 'Counter / Takeaway'}
                     </td>
                     <td className="px-4 py-3">{s.assignedWaiter ? s.assignedWaiter.name : '—'}</td>
                     <td className="px-4 py-3">

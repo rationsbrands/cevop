@@ -20,6 +20,7 @@ const branchSchema = z.object({
   phone: z.string().optional(),
   isActive: z.boolean().optional(),
   useOrgMenu: z.boolean().optional(),
+  serviceModel: z.enum(['TABLE_SERVICE', 'COUNTER_SERVICE', 'BOTH']).optional(),
   taxRate: z.coerce.number().min(0).max(100).nullable().optional(),
   serviceChargeRate: z.coerce.number().min(0).max(100).nullable().optional(),
 });

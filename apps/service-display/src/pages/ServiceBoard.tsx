@@ -728,7 +728,10 @@ export function ServiceBoard() {
                               maxFontSize="1.125rem"
                               minFontSize="0.875rem"
                             >
-                              {order.table?.label || `T-${order.tableId.slice(-4)}`}
+                              {(order as any).orderType === 'TAKEAWAY'
+                                ? `Takeaway #${String((order as any).orderNumber ?? 0).padStart(3, '0')}`
+                                : order.table?.label ||
+                                  (order.tableId ? `T-${order.tableId.slice(-4)}` : 'Order')}
                             </AutoFitText>
                             <div className="text-[9px] text-[var(--muted)] font-mono truncate">
                               {order.id.slice(-6).toUpperCase()}

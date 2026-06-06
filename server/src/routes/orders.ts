@@ -1319,9 +1319,11 @@ ordersRouter.post(
   requireRole('WAITER', 'ADMIN', 'ORG_OWNER', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER'),
   async (req: AuthRequest, res: Response) => {
     try {
-      const { tableId, items, notes } = z
+      const { tableId, items, notes, orderType, customerName } = z
         .object({
-          tableId: z.string(),
+          tableId: z.string().optional(),
+          orderType: z.enum(['DINE_IN', 'TAKEAWAY']).default('DINE_IN'),
+          customerName: z.string().max(100).optional(),
           notes: z.string().optional(),
           items: z
             .array(
@@ -1337,73 +1339,129 @@ ordersRouter.post(
 
       const orgId = req.user!.organizationId;
       const branchId = req.branchScope!;
+      const isTakeaway = orderType === 'TAKEAWAY';
 
-      const table = await prisma.table.findUnique({
-        where: { id: tableId, organizationId: orgId, branchId },
-      });
-      if (!table) {
-        res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Table not found' });
-        return;
+      // Dine-in requires a table; takeaway never has one
+      let table: any = null;
+      if (!isTakeaway) {
+        if (!tableId) {
+          res
+            .status(400)
+            .json({
+              success: false,
+              code: 'INVALID_REQUEST',
+              error: 'Table is required for dine-in orders',
+            });
+          return;
+        }
+        table = await prisma.table.findUnique({
+          where: { id: tableId, organizationId: orgId, branchId },
+        });
+        if (!table) {
+          res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'Table not found' });
+          return;
+        }
       }
 
-      // Calculate total
+      // Validate items
       const itemIds = items.map((i) => i.menuItemId);
       const menuItems = await prisma.menuItem.findMany({
         where: { id: { in: itemIds }, organizationId: orgId, isAvailable: true },
+        select: { id: true, price: true, stationId: true } as any,
       });
-
       if (menuItems.length !== itemIds.length) {
-        res.status(400).json({
-          success: false,
-          code: 'INVALID_REQUEST',
-          error: 'One or more items are invalid',
-        });
+        res
+          .status(400)
+          .json({
+            success: false,
+            code: 'INVALID_REQUEST',
+            error: 'One or more items are invalid',
+          });
         return;
       }
 
-      type MenuItemLike = { id: string; price: any };
-      const itemMap = new Map<string, MenuItemLike>(menuItems.map((m) => [m.id, m]));
-      let total = 0;
+      type MenuItemLike = { id: string; price: any; stationId: string | null };
+      const itemMap = new Map<string, MenuItemLike>(menuItems.map((m: any) => [m.id, m]));
+      let subtotal = 0;
       const orderItems = items.map((item) => {
         const menuItem = itemMap.get(item.menuItemId)!;
         const unitPrice = Number(menuItem.price);
-        total += unitPrice * item.quantity;
+        subtotal += unitPrice * item.quantity;
         return {
           menuItemId: item.menuItemId,
           quantity: item.quantity,
           unitPrice,
           notes: item.notes,
+          stationId: menuItem.stationId,
         };
       });
 
-      const { getOrCreateSession } = await import('../services/tableSession');
-      const sessionId = await getOrCreateSession(table.id, orgId, branchId);
-      if (!sessionId) {
-        res.status(400).json({
-          success: false,
-          code: 'INVALID_REQUEST',
-          error: 'Could not create table session',
-        });
-        return;
-      }
+      // Tax + service charge from branch (fallback org)
+      const branch = await prisma.branch.findFirst({
+        where: { id: branchId, organizationId: orgId },
+        select: { taxRate: true, serviceChargeRate: true },
+      });
+      const orgRates = await prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { taxRate: true, serviceChargeRate: true },
+      });
+      const taxRate = Number(branch?.taxRate ?? orgRates?.taxRate ?? 0);
+      const serviceRate = Number(branch?.serviceChargeRate ?? orgRates?.serviceChargeRate ?? 0);
+      const taxAmount = Number(((subtotal * taxRate) / 100).toFixed(2));
+      const serviceChargeAmount = Number(((subtotal * serviceRate) / 100).toFixed(2));
+      const total = subtotal + taxAmount + serviceChargeAmount;
 
-      // Claim table session for the waiter
-      const { claimTableSession } = await import('../services/waiterAssignment');
-      await claimTableSession(req.user!.userId, table.id, sessionId, branchId);
+      // Dine-in: open/claim the table session. Takeaway: generate a daily ticket number.
+      let sessionId: string | null = null;
+      let orderNumber: number | null = null;
+
+      if (!isTakeaway) {
+        const { getOrCreateSession } = await import('../services/tableSession');
+        sessionId = await getOrCreateSession(table.id, orgId, branchId);
+        if (!sessionId) {
+          res
+            .status(400)
+            .json({
+              success: false,
+              code: 'INVALID_REQUEST',
+              error: 'Could not create table session',
+            });
+          return;
+        }
+        const { claimTableSession } = await import('../services/waiterAssignment');
+        await claimTableSession(req.user!.userId, table.id, sessionId, branchId);
+      } else {
+        // Next takeaway number for this branch today (resets daily)
+        const dayStart = new Date();
+        dayStart.setHours(0, 0, 0, 0);
+        const todaysTakeaways = await prisma.order.count({
+          where: { branchId, orderType: 'TAKEAWAY', createdAt: { gte: dayStart } } as any,
+        });
+        orderNumber = todaysTakeaways + 1;
+        // Give the takeaway order its own table-less session so it can be paid later
+        const { createTakeawaySession } = await import('../services/tableSession');
+        sessionId = await createTakeawaySession(orgId, branchId, req.user!.userId);
+      }
 
       const order = await prisma.order.create({
         data: {
           organizationId: orgId,
           branchId,
-          tableId,
+          tableId: isTakeaway ? null : tableId,
           sessionId,
+          orderType,
+          orderNumber,
+          customerName: customerName || null,
           idempotencyKey: 'manual-' + Date.now() + '-' + Math.random().toString().substring(2, 8),
+          subtotal,
+          taxAmount,
+          serviceChargeAmount,
           total,
           notes,
           items: { create: orderItems },
           assignedWaiter: req.user!.userId,
           assignedWaiterAt: new Date(),
-        },
+        } as any,
         include: { items: { include: { menuItem: true } }, table: true },
       });
 
@@ -1411,14 +1469,17 @@ ordersRouter.post(
       io.to(`${orgId}:${branchId}`).emit('ORDER_CREATED', order);
       io.to(`order:${order.id}`).emit('ORDER_UPDATED', order);
 
-      // Notify kitchen/service
+      const label = isTakeaway
+        ? `Takeaway #${String(orderNumber).padStart(3, '0')}`
+        : table.label || 'Table';
+
       const { notifyStaffWebPush } = await import('../services/notifications');
       notifyStaffWebPush({
         organizationId: orgId,
         branchId,
         roles: ['KITCHEN', 'SERVICE'],
-        title: 'New Manual Order',
-        body: `${table.label || 'Table'} — #${String(order.id).slice(-6).toUpperCase()}`,
+        title: isTakeaway ? 'New Takeaway Order' : 'New Manual Order',
+        body: `${label} — #${String(order.id).slice(-6).toUpperCase()}`,
         url: '/',
         tag: `order:${order.id}`,
       }).catch(() => {});
@@ -1429,6 +1490,218 @@ ordersRouter.post(
       res
         .status(500)
         .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to place order' });
+    }
+  },
+);
+
+// ─── POST /api/orders/counter (Register / counter sale) ─────────────────────────
+// Atomic: creates a table-less takeaway order, records full payment, and closes
+// the session — one call for the register's "Charge" button.
+ordersRouter.post(
+  '/counter',
+  requireRole('CASHIER', 'ADMIN', 'ORG_OWNER', 'ORG_MANAGER', 'BRANCH_ADMIN'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { items, notes, customerName, method, reference } = z
+        .object({
+          customerName: z.string().max(100).optional(),
+          notes: z.string().max(1000).optional(),
+          method: z.enum(['CASH', 'CARD', 'TRANSFER']),
+          reference: z.string().max(100).optional(),
+          items: z
+            .array(
+              z.object({
+                menuItemId: z.string(),
+                quantity: z.number().int().positive(),
+                notes: z.string().max(200).optional(),
+              }),
+            )
+            .min(1),
+        })
+        .parse(req.body);
+
+      const orgId = req.user!.organizationId;
+      const branchId = req.branchScope!;
+
+      // Validate items
+      const itemIds = items.map((i) => i.menuItemId);
+      const menuItems = await prisma.menuItem.findMany({
+        where: { id: { in: itemIds }, organizationId: orgId, isAvailable: true },
+        select: {
+          id: true,
+          price: true,
+          name: true,
+          stationId: true,
+          trackStock: true,
+          stockCount: true,
+        } as any,
+      });
+      if (menuItems.length !== itemIds.length) {
+        res
+          .status(400)
+          .json({
+            success: false,
+            code: 'INVALID_REQUEST',
+            error: 'One or more items are unavailable',
+          });
+        return;
+      }
+      const itemMap = new Map<string, any>(menuItems.map((m: any) => [m.id, m]));
+
+      // Stock check
+      for (const item of items) {
+        const mi = itemMap.get(item.menuItemId)!;
+        if (mi.trackStock && mi.stockCount < item.quantity) {
+          res.status(400).json({ success: false, error: 'One or more items are out of stock.' });
+          return;
+        }
+      }
+
+      let subtotal = 0;
+      const orderItems = items.map((item) => {
+        const mi = itemMap.get(item.menuItemId)!;
+        const unitPrice = Number(mi.price);
+        subtotal += unitPrice * item.quantity;
+        return {
+          menuItemId: item.menuItemId,
+          quantity: item.quantity,
+          unitPrice,
+          notes: item.notes || null,
+          stationId: mi.stationId,
+        };
+      });
+
+      // Rates
+      const branch = await prisma.branch.findFirst({
+        where: { id: branchId, organizationId: orgId },
+        select: { taxRate: true, serviceChargeRate: true },
+      });
+      const orgRates = await prisma.organization.findUnique({
+        where: { id: orgId },
+        select: { taxRate: true, serviceChargeRate: true, currency: true },
+      });
+      const taxRate = Number(branch?.taxRate ?? orgRates?.taxRate ?? 0);
+      const serviceRate = Number(branch?.serviceChargeRate ?? orgRates?.serviceChargeRate ?? 0);
+      const taxAmount = Number(((subtotal * taxRate) / 100).toFixed(2));
+      const serviceChargeAmount = Number(((subtotal * serviceRate) / 100).toFixed(2));
+      const total = Number((subtotal + taxAmount + serviceChargeAmount).toFixed(2));
+
+      // Daily takeaway number
+      const dayStart = new Date();
+      dayStart.setHours(0, 0, 0, 0);
+      const todaysTakeaways = await prisma.order.count({
+        where: { branchId, orderType: 'TAKEAWAY', createdAt: { gte: dayStart } } as any,
+      });
+      const orderNumber = todaysTakeaways + 1;
+
+      const { createTakeawaySession } = await import('../services/tableSession');
+      const sessionId = await createTakeawaySession(orgId, branchId, req.user!.userId);
+
+      const result = await prisma.$transaction(async (tx) => {
+        // Decrement stock
+        for (const item of items) {
+          const mi = itemMap.get(item.menuItemId)!;
+          if (mi.trackStock) {
+            await (tx.menuItem as any).update({
+              where: { id: mi.id },
+              data: {
+                stockCount: { decrement: item.quantity },
+                isAvailable: { set: mi.stockCount - item.quantity > 0 },
+              },
+            });
+          }
+        }
+
+        const order = await tx.order.create({
+          data: {
+            organizationId: orgId,
+            branchId,
+            tableId: null,
+            sessionId,
+            orderType: 'TAKEAWAY',
+            orderNumber,
+            customerName: customerName || null,
+            status: 'SERVED', // counter sale is fulfilled immediately
+            idempotencyKey:
+              'counter-' + Date.now() + '-' + Math.random().toString().substring(2, 8),
+            subtotal,
+            taxAmount,
+            serviceChargeAmount,
+            total,
+            notes,
+            items: { create: orderItems },
+            assignedWaiter: req.user!.userId,
+            assignedWaiterAt: new Date(),
+          } as any,
+          include: { items: { include: { menuItem: true } } },
+        });
+
+        const payment = await tx.payment.create({
+          data: {
+            sessionId,
+            organizationId: orgId,
+            branchId,
+            amount: total,
+            subtotal,
+            taxAmount,
+            serviceChargeAmount,
+            currency: orgRates?.currency ?? 'NGN',
+            method,
+            reference: reference || null,
+            ordersTotal: total,
+            processedBy: req.user!.userId,
+          } as any,
+        });
+
+        // Close the table-less session immediately
+        await tx.tableSession.update({
+          where: { id: sessionId },
+          data: { closedAt: new Date(), closedBy: req.user!.userId },
+        });
+
+        return { order, payment };
+      });
+
+      io.to(`${orgId}:${branchId}`).emit('ORDER_CREATED', result.order);
+      io.to(`${orgId}:${branchId}`).emit('PAYMENT_RECORDED', {
+        sessionId,
+        payment: result.payment,
+        totalPaid: total,
+        grandTotal: total,
+        sessionClosed: true,
+      });
+
+      // Notify kitchen (counter orders still need to be made)
+      notificationQueue.add('STAFF_WEB_PUSH', {
+        type: 'STAFF_WEB_PUSH',
+        data: {
+          organizationId: orgId,
+          branchId,
+          roles: ['KITCHEN', 'BAR'],
+          title: 'New Counter Order',
+          body: `Takeaway #${String(orderNumber).padStart(3, '0')}${customerName ? ` — ${customerName}` : ''}`,
+          url: '/',
+          tag: `order:${result.order.id}`,
+        },
+      });
+
+      res.status(201).json({
+        success: true,
+        data: {
+          order: result.order,
+          payment: result.payment,
+          orderNumber,
+          totals: { subtotal, taxAmount, serviceChargeAmount, total },
+          currency: orgRates?.currency ?? 'NGN',
+        },
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError)
+        return res.status(400).json({ success: false, error: err.errors[0].message });
+      logger.error('POST /orders/counter error', { err });
+      res
+        .status(500)
+        .json({ success: false, code: 'INTERNAL_ERROR', error: 'Failed to place counter order' });
     }
   },
 );

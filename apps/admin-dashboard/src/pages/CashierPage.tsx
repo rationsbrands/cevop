@@ -213,6 +213,9 @@ export function CashierPage() {
       },
       items,
       totals: {
+        subtotal: bill.grandSubtotal,
+        taxAmount: bill.grandTax,
+        serviceChargeAmount: bill.grandServiceCharge,
         grandTotal: bill.grandTotal,
         amountPaid: bill.amountPaid,
         balance: bill.balance,
@@ -274,7 +277,7 @@ export function CashierPage() {
       'Methods',
     ];
     const rows = filteredHistory.map((s) => [
-      `"${s.table.label}"`,
+      `"${s.table?.label ?? 'Counter'}"`,
       `"${s.assignedWaiter ? s.assignedWaiter.name + (s.assignedWaiter.staffCode ? ' (#' + s.assignedWaiter.staffCode + ')' : '') : '—'}"`,
       `"${new Date(s.openedAt).toLocaleString()}"`,
       `"${s.closedAt ? new Date(s.closedAt).toLocaleString() : ''}"`,
@@ -299,7 +302,7 @@ export function CashierPage() {
     if (!historyFilter) return true;
     const search = historyFilter.toLowerCase();
     return (
-      s.table.label.toLowerCase().includes(search) ||
+      s.table?.label?.toLowerCase().includes(search) ||
       s.payments.some((p) => p.method.toLowerCase().includes(search))
     );
   });
@@ -373,7 +376,9 @@ export function CashierPage() {
                 {/* Table header */}
                 <div className="flex items-start justify-between">
                   <div>
-                    <p className="font-bold text-lg text-[var(--text)]">{s.table.label}</p>
+                    <p className="font-bold text-lg text-[var(--text)]">
+                      {s.table?.label ?? 'Counter'}
+                    </p>
                     <p className="text-xs text-[var(--muted)]">
                       Opened{' '}
                       {new Date(s.openedAt).toLocaleTimeString([], {
@@ -541,7 +546,9 @@ export function CashierPage() {
                       className="hover:bg-[var(--surface2)] transition-colors cursor-pointer"
                       onClick={() => fetchBillDetails(s.sessionId)}
                     >
-                      <td className="px-4 py-3 font-medium text-[var(--text)]">{s.table.label}</td>
+                      <td className="px-4 py-3 font-medium text-[var(--text)]">
+                        {s.table?.label ?? 'Counter'}
+                      </td>
                       <td className="px-4 py-3">
                         {s.assignedWaiter ? (
                           <div className="flex flex-col">
@@ -606,7 +613,9 @@ export function CashierPage() {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="font-display text-2xl">PAYMENT</h2>
-                <p className="text-sm text-[var(--muted)]">{selectedSession.table.label}</p>
+                <p className="text-sm text-[var(--muted)]">
+                  {selectedSession.table?.label ?? 'Counter'}
+                </p>
               </div>
               <button
                 onClick={() => setSelectedSession(null)}
@@ -738,7 +747,9 @@ export function CashierPage() {
 
                 <div className="text-center space-y-1 pb-4 border-b border-[var(--border)] print:border-black/20">
                   <h1 className="font-bold text-xl">{user?.organization?.name}</h1>
-                  <p className="text-sm">Table: {selectedHistoryBill.table.label}</p>
+                  <p className="text-sm">
+                    Table: {selectedHistoryBill.table?.label ?? 'Counter / Takeaway'}
+                  </p>
                   {selectedHistoryBill.assignedWaiter && (
                     <p className="text-xs font-mono font-bold">
                       Waiter: #{selectedHistoryBill.assignedWaiter.staffCode || ''}{' '}

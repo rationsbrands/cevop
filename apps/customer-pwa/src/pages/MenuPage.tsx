@@ -2034,7 +2034,28 @@ export function MenuPage() {
             </div>
 
             <div className="p-6 bg-[var(--surface2)] border-t border-[var(--border)] space-y-4 safe-bottom">
-              <div className="flex justify-between items-center">
+              {/* Breakdown — subtotal, VAT, service charge */}
+              {!sessionBill?.isPaid && (
+                <div className="space-y-1.5 pb-1">
+                  <div className="flex justify-between text-sm text-[var(--text-secondary)]">
+                    <span>Subtotal</span>
+                    <span>{formatPrice(fullBill.grandSubtotal ?? 0, fullBill.currency)}</span>
+                  </div>
+                  {fullBill.grandTax > 0 && (
+                    <div className="flex justify-between text-sm text-[var(--text-secondary)]">
+                      <span>VAT / Tax</span>
+                      <span>{formatPrice(fullBill.grandTax, fullBill.currency)}</span>
+                    </div>
+                  )}
+                  {fullBill.grandServiceCharge > 0 && (
+                    <div className="flex justify-between text-sm text-[var(--text-secondary)]">
+                      <span>Service Charge</span>
+                      <span>{formatPrice(fullBill.grandServiceCharge, fullBill.currency)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="flex justify-between items-center pt-1 border-t border-[var(--border)]">
                 <span className="text-sm font-bold text-[var(--muted)] uppercase tracking-[0.2em]">
                   {sessionBill?.isPaid ? 'Balance Due' : 'Grand Total'}
                 </span>

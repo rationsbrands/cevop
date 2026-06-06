@@ -18,6 +18,9 @@ interface OrderItem {
 interface Order {
   id: string;
   status: string;
+  subtotal?: number;
+  taxAmount?: number;
+  serviceChargeAmount?: number;
   total: number;
   items: OrderItem[];
   table?: { label: string };
@@ -336,7 +339,28 @@ export function OrderStatusPage() {
               </div>
             ))}
           </div>
-          <div className="px-4 py-3 border-t border-[var(--border)] flex items-center justify-between gap-4">
+          {/* Breakdown */}
+          {(order.taxAmount || order.serviceChargeAmount) && order.subtotal != null ? (
+            <div className="px-4 pt-3 space-y-1.5">
+              <div className="flex justify-between text-sm text-[var(--muted)]">
+                <span>Subtotal</span>
+                <span>{formatPrice(order.subtotal)}</span>
+              </div>
+              {order.taxAmount ? (
+                <div className="flex justify-between text-sm text-[var(--muted)]">
+                  <span>VAT / Tax</span>
+                  <span>{formatPrice(order.taxAmount)}</span>
+                </div>
+              ) : null}
+              {order.serviceChargeAmount ? (
+                <div className="flex justify-between text-sm text-[var(--muted)]">
+                  <span>Service Charge</span>
+                  <span>{formatPrice(order.serviceChargeAmount)}</span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="px-4 py-3 border-t border-[var(--border)] flex items-center justify-between gap-4 mt-1">
             <span className="font-semibold shrink-0">Total</span>
             <div className="flex-1 text-right max-w-[200px]">
               <AutoFitText className="font-display text-[var(--accent)]" maxFontSize="1.5rem">

@@ -88,6 +88,9 @@ const ServiceDeskPage = React.lazy(() =>
 const CashierPage = React.lazy(() =>
   import('./pages/CashierPage').then((m) => ({ default: m.CashierPage })),
 );
+const RegisterPage = React.lazy(() =>
+  import('./pages/RegisterPage').then((m) => ({ default: m.RegisterPage })),
+);
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -207,6 +210,14 @@ function AppRoutes() {
             element={
               <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER']}>
                 <CashierPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/register"
+            element={
+              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER']}>
+                <RegisterPage />
               </RequireRole>
             }
           />

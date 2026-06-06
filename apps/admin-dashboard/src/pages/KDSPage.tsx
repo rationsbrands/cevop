@@ -177,7 +177,9 @@ export function KDSPage() {
                     {formatTime(order.createdAt)}
                   </div>
                   <div className="font-bold text-lg text-[var(--accent)]">
-                    {order.table?.label || 'Takeaway'}
+                    {(order as any).orderType === 'TAKEAWAY'
+                      ? `Takeaway #${String((order as any).orderNumber ?? 0).padStart(3, '0')}`
+                      : order.table?.label || 'Takeaway'}
                   </div>
                 </div>
                 <div className="text-xl font-bold mb-1">
@@ -222,7 +224,9 @@ export function KDSPage() {
                     {formatTime(order.createdAt)}
                   </div>
                   <div className="font-bold text-lg text-[var(--accent)]">
-                    {order.table?.label || 'Takeaway'}
+                    {(order as any).orderType === 'TAKEAWAY'
+                      ? `Takeaway #${String((order as any).orderNumber ?? 0).padStart(3, '0')}`
+                      : order.table?.label || 'Takeaway'}
                   </div>
                 </div>
                 <div className="text-xl font-bold mb-1">

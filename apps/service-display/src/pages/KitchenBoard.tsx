@@ -407,7 +407,9 @@ export function KitchenBoard() {
             <div className="min-w-0">
               <div className="flex justify-between items-start gap-2">
                 <AutoFitText className="font-black" maxFontSize="1.5rem" minFontSize="1.125rem">
-                  {order.table?.label || 'T?'}
+                  {order.orderType === 'TAKEAWAY'
+                    ? `Takeaway #${String(order.orderNumber ?? 0).padStart(3, '0')}`
+                    : order.table?.label || 'T?'}
                 </AutoFitText>
                 <TimeElapsed
                   createdAt={order.createdAt}

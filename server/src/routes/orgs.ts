@@ -45,6 +45,7 @@ orgsRouter.get('/me', async (req: AuthRequest, res: Response) => {
         notifyNewOrders: true,
         notifyWaiterCalls: true,
         notifyServiceRequests: true,
+        qrOrderingEnabled: true,
         taxRate: true,
         serviceChargeRate: true,
         createdAt: true,

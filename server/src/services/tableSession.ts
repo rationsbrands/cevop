@@ -77,6 +77,29 @@ export async function getOrCreateSession(
 }
 
 /**
+ * Create a fresh table-less session for a counter / takeaway order.
+ * No table is involved — each takeaway transaction gets its own session so the
+ * existing payment, receipt and bill machinery works unchanged.
+ */
+export async function createTakeawaySession(
+  organizationId: string,
+  branchId: string,
+  assignedWaiterId?: string | null,
+): Promise<string> {
+  const session = await (prisma as any).tableSession.create({
+    data: {
+      organizationId,
+      branchId,
+      tableId: null,
+      assignedWaiterId: assignedWaiterId ?? null,
+      assignedWaiterAt: assignedWaiterId ? new Date() : null,
+    },
+  });
+  logger.info('Takeaway session opened', { sessionId: session.id, branchId });
+  return session.id;
+}
+
+/**
  * Close a session and update table status.
  * Called by staff when they clear the table.
  */
@@ -93,37 +116,44 @@ export async function closeSession(
   if (!session) throw new Error('Session not found');
   if (session.closedAt) throw new Error('Session already closed');
 
-  // Find all pending tasks for this TABLE before resolving them
-  const [waiterCalls, serviceRequests] = await Promise.all([
-    prisma.waiterCall.findMany({
-      where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
-      select: { id: true },
-    }),
-    prisma.serviceRequest.findMany({
-      where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
-      select: { id: true },
-    }),
-  ]);
+  // Find all pending tasks for this TABLE before resolving them (table-less sessions have none)
+  const [waiterCalls, serviceRequests] = session.tableId
+    ? await Promise.all([
+        prisma.waiterCall.findMany({
+          where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
+          select: { id: true },
+        }),
+        prisma.serviceRequest.findMany({
+          where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
+          select: { id: true },
+        }),
+      ])
+    : [[], []];
 
   await prisma.$transaction([
     (prisma as any).tableSession.update({
       where: { id: sessionId },
       data: { closedAt: new Date(), closedBy: closedByUserId },
     }),
-    prisma.table.update({
-      where: { id: session.tableId },
-      data: { status: nextStatus, activeSessionId: null } as any,
-    }),
-    // Resolve all pending waiter calls for this TABLE (not just session) to be safe
-    prisma.waiterCall.updateMany({
-      where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
-      data: { status: 'RESOLVED', resolvedAt: new Date(), resolvedBy: closedByUserId },
-    }),
-    // Resolve all pending service requests for this TABLE (not just session) to be safe
-    prisma.serviceRequest.updateMany({
-      where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
-      data: { status: 'RESOLVED', resolvedAt: new Date(), resolvedBy: closedByUserId },
-    }),
+    // Table-less (counter / takeaway) sessions have no table or table-scoped tasks.
+    ...(session.tableId
+      ? [
+          prisma.table.update({
+            where: { id: session.tableId },
+            data: { status: nextStatus, activeSessionId: null } as any,
+          }),
+          // Resolve all pending waiter calls for this TABLE (not just session) to be safe
+          prisma.waiterCall.updateMany({
+            where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
+            data: { status: 'RESOLVED', resolvedAt: new Date(), resolvedBy: closedByUserId },
+          }),
+          // Resolve all pending service requests for this TABLE (not just session) to be safe
+          prisma.serviceRequest.updateMany({
+            where: { tableId: session.tableId, status: { not: 'RESOLVED' } },
+            data: { status: 'RESOLVED', resolvedAt: new Date(), resolvedBy: closedByUserId },
+          }),
+        ]
+      : []),
   ]);
 
   const orgBranch = `${session.organizationId}:${session.branchId}`;

@@ -293,7 +293,7 @@ paymentsRouter.get(
           table: { select: { label: true, number: true } },
           orders: {
             where: { status: { not: 'CANCELLED' } },
-            select: { total: true },
+            select: { total: true, orderType: true, orderNumber: true, customerName: true } as any,
           },
           payments: {
             select: { id: true, amount: true, method: true, processedAt: true },
@@ -305,12 +305,17 @@ paymentsRouter.get(
       const result = sessions.map((s) => {
         const grandTotal = s.orders.reduce((sum, o) => sum + Number(o.total), 0);
         const amountPaid = s.payments.reduce((sum, p) => sum + Number(p.amount), 0);
+        // Counter/takeaway sessions have no table — surface the ticket number instead
+        const takeawayOrder = (s.orders as any[]).find((o) => o.orderType === 'TAKEAWAY');
         return {
           sessionId: s.id,
           openedAt: s.openedAt,
           closedAt: s.closedAt,
           guestCount: s.guestCount,
           table: s.table,
+          isTakeaway: !s.table && !!takeawayOrder,
+          orderNumber: takeawayOrder?.orderNumber ?? null,
+          customerName: takeawayOrder?.customerName ?? null,
           assignedWaiter: s.assignedWaiter,
           grandTotal,
           amountPaid,

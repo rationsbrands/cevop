@@ -27,6 +27,9 @@ export interface ReceiptData {
     lineTotal: number;
   }[];
   totals: {
+    subtotal?: number;
+    taxAmount?: number;
+    serviceChargeAmount?: number;
     grandTotal: number;
     amountPaid: number;
     balance: number;
@@ -124,6 +127,33 @@ export function printReceipt(data: ReceiptData) {
         <div class="divider"></div>
         
         <table class="totals-table">
+          ${
+            totals.subtotal != null
+              ? `
+          <tr>
+            <td>Subtotal</td>
+            <td class="text-right">${formatPrice(totals.subtotal, curr)}</td>
+          </tr>`
+              : ''
+          }
+          ${
+            totals.taxAmount
+              ? `
+          <tr>
+            <td>VAT / Tax</td>
+            <td class="text-right">${formatPrice(totals.taxAmount, curr)}</td>
+          </tr>`
+              : ''
+          }
+          ${
+            totals.serviceChargeAmount
+              ? `
+          <tr>
+            <td>Service Charge</td>
+            <td class="text-right">${formatPrice(totals.serviceChargeAmount, curr)}</td>
+          </tr>`
+              : ''
+          }
           <tr>
             <td class="font-bold">Total</td>
             <td class="font-bold text-right">${formatPrice(totals.grandTotal, curr)}</td>

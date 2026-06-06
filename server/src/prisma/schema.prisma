@@ -67,6 +67,7 @@ model Branch {
   phone              String?
   isActive           Boolean          @default(true)
   useOrgMenu         Boolean          @default(true)
+  serviceModel       ServiceModel     @default(TABLE_SERVICE)
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   email              String?
@@ -440,6 +441,9 @@ model Order {
   organizationId      String
   tableId             String?
   idempotencyKey      String        @unique
+  orderType           OrderType     @default(DINE_IN)
+  orderNumber         Int?
+  customerName        String?
   status              OrderStatus   @default(RECEIVED)
   subtotal            Decimal       @default(0.00) @db.Decimal(10, 2)
   taxAmount           Decimal       @default(0.00) @db.Decimal(10, 2)
@@ -473,6 +477,7 @@ model Order {
   @@index([organizationId, branchId, status])
   @@index([organizationId, branchId, createdAt(sort: Desc)])
   @@index([assignedWaiter])
+  @@index([branchId, orderType, createdAt])
   @@map("orders")
 }
 
@@ -681,6 +686,17 @@ enum OrderItemStatus {
   SERVED
   PAID
   CANCELLED
+}
+
+enum OrderType {
+  DINE_IN
+  TAKEAWAY
+}
+
+enum ServiceModel {
+  TABLE_SERVICE
+  COUNTER_SERVICE
+  BOTH
 }
 
 enum SalaryType {

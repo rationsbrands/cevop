@@ -29,6 +29,31 @@ export function WaiterPOS({ onClose, onOrderSuccess, initialTableId }: WaiterPOS
   const [orderNotes, setOrderNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [orderType, setOrderType] = useState<'DINE_IN' | 'TAKEAWAY'>('DINE_IN');
+  const [customerName, setCustomerName] = useState('');
+
+  // Branch service model decides which order types are available
+  const { data: branch } = useQuery({
+    queryKey: ['pos-branch', user?.branchId],
+    queryFn: async () => {
+      if (!user?.branchId) return null;
+      const res = await fetch(`${API_BASE}/api/branches/${user.branchId}`, {
+        headers: { Authorization: `Bearer ${tokenRef.current}` },
+      });
+      const json = await res.json();
+      return json.success ? json.data : null;
+    },
+    enabled: !!token && !!user?.branchId,
+  });
+  const serviceModel: 'TABLE_SERVICE' | 'COUNTER_SERVICE' | 'BOTH' =
+    branch?.serviceModel ?? 'TABLE_SERVICE';
+
+  // Counter-only branches are takeaway by default; table-service branches stay dine-in.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (serviceModel === 'COUNTER_SERVICE') setOrderType('TAKEAWAY');
+    else if (serviceModel === 'TABLE_SERVICE') setOrderType('DINE_IN');
+  }, [serviceModel]);
 
   const { data: tables = [] } = useQuery({
     queryKey: ['tables', user?.branchId],
@@ -112,15 +137,23 @@ export function WaiterPOS({ onClose, onOrderSuccess, initialTableId }: WaiterPOS
     );
   }
 
+  const isTakeaway = orderType === 'TAKEAWAY';
+
   async function handleSubmit() {
-    if (!selectedTableId || cart.length === 0 || !token) return;
+    if (cart.length === 0 || !token) return;
+    if (!isTakeaway && !selectedTableId) {
+      alert('Please choose a table, or switch to Takeaway.');
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await fetch(`${API_BASE}/api/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          tableId: selectedTableId,
+          orderType,
+          tableId: isTakeaway ? undefined : selectedTableId,
+          customerName: isTakeaway ? customerName || undefined : undefined,
           notes: orderNotes,
           items: cart.map((c: any) => ({
             menuItemId: c.menuItemId,
@@ -347,25 +380,59 @@ export function WaiterPOS({ onClose, onOrderSuccess, initialTableId }: WaiterPOS
           </button>
         </div>
 
-        {/* Table Selection & Notes */}
+        {/* Order type + Table/Customer + Notes */}
         <div className="p-4 border-b border-[var(--border)] space-y-4 bg-[var(--surface2)]/50">
-          <div>
-            <label className="block text-[10px] font-bold text-[var(--muted)] uppercase tracking-widest mb-1.5 ml-1">
-              ASSIGN TO TABLE
-            </label>
-            <select
-              value={selectedTableId}
-              onChange={(e) => setSelectedTableId(e.target.value)}
-              className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl py-3 px-4 text-sm focus:border-[var(--accent)] outline-none appearance-none font-bold"
-            >
-              <option value="">-- CHOOSE TABLE --</option>
-              {tables.map((t: any) => (
-                <option key={t.id} value={t.id}>
-                  {t.label || t.number}
-                </option>
+          {/* Dine-in / Takeaway toggle — only when the branch allows both */}
+          {serviceModel === 'BOTH' && (
+            <div className="grid grid-cols-2 gap-2">
+              {(['DINE_IN', 'TAKEAWAY'] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setOrderType(t)}
+                  className={`py-2.5 rounded-xl text-xs font-bold uppercase tracking-widest transition-all border ${
+                    orderType === t
+                      ? 'bg-[var(--accent)] text-black border-[var(--accent)]'
+                      : 'bg-[var(--bg)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--text)]'
+                  }`}
+                >
+                  {t === 'DINE_IN' ? 'Dine-in' : 'Takeaway'}
+                </button>
               ))}
-            </select>
-          </div>
+            </div>
+          )}
+
+          {isTakeaway ? (
+            <div>
+              <label className="block text-[10px] font-bold text-[var(--muted)] uppercase tracking-widest mb-1.5 ml-1">
+                Customer Name (optional)
+              </label>
+              <input
+                type="text"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                placeholder="e.g. John — for calling out the order"
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl py-3 px-4 text-sm focus:border-[var(--accent)] outline-none"
+              />
+            </div>
+          ) : (
+            <div>
+              <label className="block text-[10px] font-bold text-[var(--muted)] uppercase tracking-widest mb-1.5 ml-1">
+                ASSIGN TO TABLE
+              </label>
+              <select
+                value={selectedTableId}
+                onChange={(e) => setSelectedTableId(e.target.value)}
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl py-3 px-4 text-sm focus:border-[var(--accent)] outline-none appearance-none font-bold"
+              >
+                <option value="">-- CHOOSE TABLE --</option>
+                {tables.map((t: any) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label || t.number}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div>
             <label className="block text-[10px] font-bold text-[var(--muted)] uppercase tracking-widest mb-1.5 ml-1">
               ORDER NOTES (OPTIONAL)
@@ -466,7 +533,7 @@ export function WaiterPOS({ onClose, onOrderSuccess, initialTableId }: WaiterPOS
           </div>
           <button
             onClick={handleSubmit}
-            disabled={submitting || !selectedTableId || cart.length === 0}
+            disabled={submitting || cart.length === 0 || (!isTakeaway && !selectedTableId)}
             className="w-full h-16 rounded-2xl bg-[var(--accent)] text-black font-display font-black text-lg tracking-widest shadow-xl shadow-[var(--accent)]/20 active:scale-[0.98] disabled:opacity-30 disabled:grayscale transition-all flex items-center justify-center gap-3"
           >
             {submitting ? (
@@ -474,6 +541,8 @@ export function WaiterPOS({ onClose, onOrderSuccess, initialTableId }: WaiterPOS
                 <span className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin" />
                 PLACING...
               </>
+            ) : isTakeaway ? (
+              'PLACE TAKEAWAY ORDER'
             ) : (
               'PLACE ORDER'
             )}

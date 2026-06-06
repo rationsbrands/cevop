@@ -606,6 +606,43 @@ export function WaiterBoard() {
     return () => stopCamera();
   }, []);
 
+  // Attach the camera stream to the video element + run the QR scan loop.
+  // Runs after cameraActive flips true, so the <video> is already in the DOM.
+  useEffect(() => {
+    if (!cameraActive || !cameraStreamRef.current || !videoRef.current) return;
+    const video = videoRef.current;
+    video.srcObject = cameraStreamRef.current;
+    video.play().catch(() => void 0);
+
+    if (!('BarcodeDetector' in window)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCameraError('no-detector');
+      return;
+    }
+    const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+    let cancelled = false;
+    const scan = async () => {
+      if (cancelled || !videoRef.current || !cameraStreamRef.current) return;
+      try {
+        const codes = await detector.detect(videoRef.current);
+        if (codes.length > 0) {
+          stopCamera();
+          await attachToTableByQR(codes[0].rawValue);
+          return;
+        }
+      } catch {
+        // frame decode error — keep scanning
+      }
+      if (!cancelled) scanFrameRef.current = requestAnimationFrame(scan);
+    };
+    scanFrameRef.current = requestAnimationFrame(scan);
+    return () => {
+      cancelled = true;
+      if (scanFrameRef.current) cancelAnimationFrame(scanFrameRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraActive]);
+
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
@@ -840,45 +877,32 @@ export function WaiterBoard() {
 
   async function startCamera() {
     setCameraError('');
+
+    // Camera APIs only work over HTTPS (or localhost). On a plain http:// LAN
+    // address the browser silently blocks getUserMedia — surface a clear message.
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      setCameraError(
+        'Camera needs a secure (https) connection. Use the "Pick Table" tab instead, or open this app over https.',
+      );
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
+        video: { facingMode: { ideal: 'environment' } },
       });
       cameraStreamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
+      // Mount the <video> element first; the effect below attaches the stream
+      // once the element is in the DOM. (Attaching before setCameraActive fails
+      // because the element isn't rendered yet — that was the black screen.)
       setCameraActive(true);
-
-      // Start QR detection loop — uses BarcodeDetector if available
-      if (!('BarcodeDetector' in window)) {
-        setCameraError('no-detector');
-        return;
-      }
-      const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
-      const scan = async () => {
-        if (!videoRef.current || !cameraStreamRef.current) return;
-        try {
-          const codes = await detector.detect(videoRef.current);
-          if (codes.length > 0) {
-            stopCamera();
-            await attachToTableByQR(codes[0].rawValue);
-            return;
-          }
-        } catch {
-          // frame decode error — keep going
-        }
-        scanFrameRef.current = requestAnimationFrame(scan);
-      };
-      scanFrameRef.current = requestAnimationFrame(scan);
     } catch (err: any) {
       const msg =
         err?.name === 'NotAllowedError'
-          ? 'Camera permission denied. Please allow camera access and try again.'
+          ? 'Camera permission denied. Allow camera access in your browser settings and try again.'
           : err?.name === 'NotFoundError'
-            ? 'No camera found on this device.'
-            : 'Could not start camera.';
+            ? 'No camera found on this device. Use the "Pick Table" tab instead.'
+            : 'Could not start camera. Use the "Pick Table" tab instead.';
       setCameraError(msg);
     }
   }
@@ -1982,7 +2006,7 @@ export function WaiterBoard() {
                             disabled={attachingTable}
                             onClick={() => {
                               if (!user?.organizationId) return;
-                              // eslint-disable-next-line
+
                               attachToTableById(user.organizationId, t.id);
                             }}
                             className="w-full flex items-center justify-between px-3 py-3 border border-[var(--border)] hover:border-[var(--accent)] bg-[var(--surface2)] hover:bg-[var(--surface2)] transition-all text-left group disabled:opacity-50"

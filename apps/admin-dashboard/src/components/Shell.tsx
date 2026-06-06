@@ -176,6 +176,12 @@ export function Shell() {
     },
     { to: '/orders', label: 'Orders', Icon: IconOrders, show: canViewOrders && hasBranchContext },
     {
+      to: '/register',
+      label: 'Register',
+      Icon: IconCashier,
+      show: canViewCashier && hasBranchContext,
+    },
+    {
       to: '/cashier',
       label: 'Cashier',
       Icon: IconCashier,
