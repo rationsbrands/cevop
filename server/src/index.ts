@@ -51,6 +51,8 @@ import { orderItemsRouter } from './routes/orderItems';
 import { notificationsRouter } from './routes/notifications';
 import { timesheetsRouter } from './routes/timesheets';
 import { shiftsRouter } from './routes/shifts';
+import { inventoryRouter } from './routes/inventory';
+import { financeRouter } from './routes/finance';
 import { initSocketHandlers } from './sockets/handlers';
 import { errorHandler } from './middleware/errorHandler';
 import { planGuard } from './middleware/planGuard';
@@ -378,6 +380,8 @@ app.use('/api/push', pushRouter);
 app.use('/api/stations', stationsRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/payments', paymentsRouter);
+app.use('/api/inventory', inventoryRouter);
+app.use('/api/finance', financeRouter);
 
 // WebSocket
 initSocketHandlers(io);

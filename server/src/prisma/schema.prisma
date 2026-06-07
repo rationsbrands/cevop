@@ -54,6 +54,16 @@ model Organization {
   pushSubscriptions      PushSubscription[]
   payments               Payment[]
   StaffShift             StaffShift[]
+  // Inventory
+  inventoryCategories    InventoryCategory[]
+  inventoryItems         InventoryItem[]
+  stockMovements         StockMovement[]
+  purchaseOrders         PurchaseOrder[]
+  stocktakes             Stocktake[]
+  wastageEntries         WastageEntry[]
+  suppliers              Supplier[]
+  // Finance
+  expenses               Expense[]
 
   @@map("organizations")
 }
@@ -89,6 +99,7 @@ model Branch {
   payments           Payment[]
   stations           Station[]
   StaffShift         StaffShift[]
+  expenses           Expense[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -176,6 +187,8 @@ model User {
   resolvedWaiterCalls       WaiterCall[]       @relation("WaiterCallResolutions")
   resolvedServiceRequests   ServiceRequest[]   @relation("ServiceRequestResolutions")
   shifts                    StaffShift[]
+  recordedExpenses          Expense[]          @relation("ExpenseRecorder")
+  approvedExpenses          Expense[]          @relation("ExpenseApprover")
   branch                    Branch?            @relation(fields: [branchId], references: [id])
   organization              Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -426,6 +439,7 @@ model MenuItem {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   station        Station?     @relation(fields: [stationId], references: [id], onDelete: SetNull)
   orderItems     OrderItem[]
+  recipeLines    RecipeLine[]
 
   @@index([organizationId])
   @@index([branchId])
@@ -721,4 +735,346 @@ enum TableStatus {
   OCCUPIED
   RESERVED
   CLEANING
+}
+
+// ─── INVENTORY ────────────────────────────────────────────────────────────────
+
+enum UnitOfMeasure {
+  KG
+  G
+  LB
+  OZ
+  L
+  ML
+  PCS
+  BOX
+  CARTON
+  BAG
+  BOTTLE
+  PACK
+  PORTION
+  SERVING
+}
+
+enum StockMovementType {
+  PURCHASE_RECEIPT
+  SALE
+  MANUAL_ADJUSTMENT
+  TRANSFER_OUT
+  TRANSFER_IN
+  RETURN
+  WRITE_OFF
+  STOCKTAKE_ADJUSTMENT
+  PRODUCTION_IN
+  PRODUCTION_OUT
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  SENT
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum WastageReason {
+  EXPIRED
+  SPILLAGE
+  DAMAGED
+  OVER_PREP
+  QUALITY_REJECTION
+  THEFT
+  OTHER
+}
+
+model InventoryCategory {
+  id             String       @id @default(cuid())
+  organizationId String
+  branchId       String?
+  name           String
+  description    String?
+  sortOrder      Int          @default(0)
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  items          InventoryItem[]
+
+  @@index([organizationId])
+  @@map("inventory_categories")
+}
+
+model Supplier {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  contactName    String?
+  email          String?
+  phone          String?
+  address        String?
+  paymentTerms   String?
+  leadTimeDays   Int?
+  notes          String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  items          InventoryItem[] @relation("SupplierItems")
+  purchaseOrders PurchaseOrder[]
+
+  @@index([organizationId])
+  @@map("suppliers")
+}
+
+model InventoryItem {
+  id               String        @id @default(cuid())
+  organizationId   String
+  branchId         String
+  categoryId       String?
+  supplierId       String?       // preferred supplier
+  name             String
+  sku              String?
+  barcode          String?
+  description      String?
+  unitOfMeasure    UnitOfMeasure @default(PCS)
+  packSize         Decimal?      @db.Decimal(10, 3) // e.g. 12 if sold in packs of 12
+  costPrice        Decimal       @default(0.00) @db.Decimal(12, 2)
+  sellingPrice     Decimal?      @db.Decimal(12, 2)
+  currentStock     Decimal       @default(0.00) @db.Decimal(12, 3)
+  reorderPoint     Decimal       @default(0.00) @db.Decimal(12, 3)
+  reorderQuantity  Decimal       @default(0.00) @db.Decimal(12, 3)
+  expiryTracking   Boolean       @default(false)
+  yieldPercent     Decimal       @default(100.00) @db.Decimal(5, 2) // for food: usable % after prep
+  isActive         Boolean       @default(true)
+  imageUrl         String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  createdBy        String?
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category        InventoryCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  supplier        Supplier?        @relation("SupplierItems", fields: [supplierId], references: [id], onDelete: SetNull)
+  movements       StockMovement[]
+  wastageEntries  WastageEntry[]
+  recipeLines     RecipeLine[]
+  poLines         PurchaseOrderLine[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([categoryId])
+  @@index([organizationId, isActive])
+  @@map("inventory_items")
+}
+
+model StockMovement {
+  id             String            @id @default(cuid())
+  organizationId String
+  branchId       String
+  itemId         String
+  type           StockMovementType
+  quantity       Decimal           @db.Decimal(12, 3) // positive = in, negative = out
+  unitCost       Decimal           @default(0.00) @db.Decimal(12, 2)
+  referenceId    String?           // orderId, poId, stocktakeId, etc.
+  referenceType  String?           // 'ORDER' | 'PO' | 'STOCKTAKE' | 'MANUAL' etc.
+  note           String?
+  createdBy      String?
+  createdAt      DateTime          @default(now())
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  item           InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([itemId])
+  @@index([createdAt])
+  @@index([referenceId, referenceType])
+  @@map("stock_movements")
+}
+
+model PurchaseOrder {
+  id               String              @id @default(cuid())
+  organizationId   String
+  branchId         String
+  supplierId       String
+  poNumber         String?             // human-readable e.g. PO-2026-001
+  status           PurchaseOrderStatus @default(DRAFT)
+  expectedDelivery DateTime?
+  deliveredAt      DateTime?
+  subtotal         Decimal             @default(0.00) @db.Decimal(12, 2)
+  taxAmount        Decimal             @default(0.00) @db.Decimal(12, 2)
+  total            Decimal             @default(0.00) @db.Decimal(12, 2)
+  notes            String?
+  createdBy        String?
+  approvedBy       String?
+  approvedAt       DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplier       Supplier            @relation(fields: [supplierId], references: [id])
+  lines          PurchaseOrderLine[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([supplierId])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLine {
+  id              String   @id @default(cuid())
+  purchaseOrderId String
+  itemId          String
+  quantityOrdered Decimal  @db.Decimal(12, 3)
+  quantityReceived Decimal @default(0.00) @db.Decimal(12, 3)
+  unitCost        Decimal  @db.Decimal(12, 2)
+  totalCost       Decimal  @db.Decimal(12, 2)
+  notes           String?
+
+  purchaseOrder  PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  item           InventoryItem @relation(fields: [itemId], references: [id])
+
+  @@index([purchaseOrderId])
+  @@index([itemId])
+  @@map("purchase_order_lines")
+}
+
+model Stocktake {
+  id             String    @id @default(cuid())
+  organizationId String
+  branchId       String
+  reference      String?   // e.g. "June Weekly Count"
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+  approvedAt     DateTime?
+  approvedBy     String?
+  conductedBy    String?
+  notes          String?
+  varianceValue  Decimal?  @db.Decimal(12, 2)
+  isBlindCount   Boolean   @default(true) // staff can't see expected qty
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lines          StocktakeLine[]
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("stocktakes")
+}
+
+model StocktakeLine {
+  id           String    @id @default(cuid())
+  stocktakeId  String
+  itemId       String
+  expectedQty  Decimal   @db.Decimal(12, 3)
+  countedQty   Decimal?  @db.Decimal(12, 3)
+  variance     Decimal?  @db.Decimal(12, 3) // counted - expected
+  varianceCost Decimal?  @db.Decimal(12, 2)
+  note         String?
+
+  stocktake    Stocktake     @relation(fields: [stocktakeId], references: [id], onDelete: Cascade)
+
+  @@index([stocktakeId])
+  @@index([itemId])
+  @@map("stocktake_lines")
+}
+
+model WastageEntry {
+  id             String        @id @default(cuid())
+  organizationId String
+  branchId       String
+  itemId         String
+  quantity       Decimal       @db.Decimal(12, 3)
+  unitCost       Decimal       @db.Decimal(12, 2)
+  totalCost      Decimal       @db.Decimal(12, 2)
+  reason         WastageReason @default(OTHER)
+  notes          String?
+  loggedBy       String?
+  createdAt      DateTime      @default(now())
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  item           InventoryItem @relation(fields: [itemId], references: [id])
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([itemId])
+  @@index([createdAt])
+  @@map("wastage_entries")
+}
+
+// Recipe — links MenuItem (Restaurant OS) to InventoryItems
+// Only used by Restaurant OS; Inventory module has no dependency on this
+model RecipeLine {
+  id          String   @id @default(cuid())
+  menuItemId  String   // FK to MenuItem
+  itemId      String   // FK to InventoryItem
+  quantity    Decimal  @db.Decimal(12, 4) // quantity of ingredient per 1 portion
+  unit        UnitOfMeasure
+  notes       String?
+
+  item        InventoryItem @relation(fields: [itemId], references: [id])
+  menuItem    MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, itemId])
+  @@index([menuItemId])
+  @@index([itemId])
+  @@map("recipe_lines")
+}
+
+// ─── Finance Module ────────────────────────────────────────────────────────────
+
+enum ExpenseCategory {
+  RENT
+  UTILITIES
+  MAINTENANCE
+  MARKETING
+  SALARY_SUPPLEMENT
+  EQUIPMENT
+  SUPPLIES
+  TRANSPORT
+  INSURANCE
+  PROFESSIONAL_FEES
+  OTHER
+}
+
+enum RecurringFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  ANNUALLY
+}
+
+model Expense {
+  id                  String              @id @default(cuid())
+  organizationId      String
+  branchId            String?
+  category            ExpenseCategory
+  amount              Decimal             @db.Decimal(12, 2)
+  currency            String              @default("NGN")
+  description         String
+  date                DateTime
+  isRecurring         Boolean             @default(false)
+  recurringFrequency  RecurringFrequency?
+  attachmentUrl       String?
+  recordedBy          String?
+  approvedBy          String?
+  notes               String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch        Branch?      @relation(fields: [branchId], references: [id])
+  recorder      User?        @relation("ExpenseRecorder", fields: [recordedBy], references: [id])
+  approver      User?        @relation("ExpenseApprover", fields: [approvedBy], references: [id])
+
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([date])
+  @@map("expenses")
 }

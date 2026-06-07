@@ -19,6 +19,8 @@ import {
   IconX,
   IconOverview,
   IconCashier,
+  IconInventory,
+  IconOverview as IconFinance,
 } from './Icons';
 
 interface BranchOption {
@@ -100,6 +102,15 @@ export function Shell() {
   const canViewCashier = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER'].includes(
     role,
   );
+  const canViewInventory = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(role);
+  const canViewFinance = [
+    'ORG_OWNER',
+    'ADMIN',
+    'ORG_MANAGER',
+    'ORG_FINANCE',
+    'BRANCH_ADMIN',
+    'BRANCH_FINANCE',
+  ].includes(role);
   const canViewServiceDesk = [
     'ORG_OWNER',
     'ADMIN',
@@ -160,77 +171,116 @@ export function Shell() {
     return () => window.clearTimeout(t);
   }, [location.pathname]);
 
-  const NAV = [
-    { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true, show: true },
+  type NavItem = {
+    to: string;
+    label: string;
+    Icon: React.ComponentType<{ size?: number }>;
+    exact?: boolean;
+    indent?: boolean;
+  };
+  type NavGroup = { group: string; items: NavItem[] };
+
+  const inFinance = location.pathname.startsWith('/finance');
+  const inInventory = location.pathname.startsWith('/inventory');
+
+  const NAV_GROUPS: NavGroup[] = [
     {
-      to: '/service-desk',
-      label: 'Service Desk',
-      Icon: IconOrders,
-      show: canViewServiceDesk && hasBranchContext,
+      group: '',
+      items: [{ to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true }],
     },
     {
-      to: '/kds',
-      label: 'Kitchen Display',
-      Icon: IconOrders,
-      show: canViewKDS && hasBranchContext,
-    },
-    { to: '/orders', label: 'Orders', Icon: IconOrders, show: canViewOrders && hasBranchContext },
-    {
-      to: '/register',
-      label: 'Register',
-      Icon: IconCashier,
-      show: canViewCashier && hasBranchContext,
-    },
-    {
-      to: '/cashier',
-      label: 'Cashier',
-      Icon: IconCashier,
-      show: canViewCashier && hasBranchContext,
-    },
-    { to: '/reports', label: 'Reports', Icon: IconOverview, show: canViewReports },
-    {
-      to: '/payments',
-      label: 'Transactions',
-      Icon: IconOrders,
-      show: canViewCashier && hasBranchContext,
-    },
-    { to: '/menu', label: 'Menu', Icon: IconMenu, show: canManageOperations && hasBranchContext },
-    {
-      to: '/sections',
-      label: 'Sections',
-      Icon: IconSections,
-      show: canViewFloor && hasBranchContext,
+      group: 'Operations',
+      items: [
+        { to: '/service-desk', label: 'Service Desk', Icon: IconOrders },
+        { to: '/kds', label: 'Kitchen Display', Icon: IconOrders },
+        { to: '/orders', label: 'Orders', Icon: IconOrders },
+        { to: '/register', label: 'Register', Icon: IconCashier },
+        { to: '/cashier', label: 'Cashier', Icon: IconCashier },
+        { to: '/payments', label: 'Transactions', Icon: IconOrders },
+      ].filter(({ to }) => {
+        if (to === '/service-desk') return canViewServiceDesk && hasBranchContext;
+        if (to === '/kds') return canViewKDS && hasBranchContext;
+        if (to === '/orders') return canViewOrders && hasBranchContext;
+        if (to === '/register' || to === '/cashier') return canViewCashier && hasBranchContext;
+        if (to === '/payments') return canViewCashier && hasBranchContext;
+        return false;
+      }),
     },
     {
-      to: '/stations',
-      label: 'Stations',
-      Icon: IconSections,
-      show: canManageOperations && hasBranchContext,
+      group: 'Restaurant',
+      items: [
+        { to: '/menu', label: 'Menu', Icon: IconMenu },
+        { to: '/tables', label: 'Tables & QR', Icon: IconTables },
+        { to: '/sections', label: 'Sections', Icon: IconSections },
+        { to: '/stations', label: 'Stations', Icon: IconSections },
+        { to: '/help-options', label: 'Help Options', Icon: IconHelp },
+      ].filter(({ to }) => {
+        if (to === '/menu' || to === '/stations') return canManageOperations && hasBranchContext;
+        if (to === '/tables' || to === '/sections') return canViewFloor && hasBranchContext;
+        if (to === '/help-options') return canManageOperations && hasBranchContext;
+        return false;
+      }),
     },
     {
-      to: '/tables',
-      label: 'Tables & QR',
-      Icon: IconTables,
-      show: canViewFloor && hasBranchContext,
+      group: 'Finance',
+      items: [
+        { to: '/finance', label: 'Overview', Icon: IconFinance },
+        ...(inFinance
+          ? [
+              { to: '/finance/pnl', label: 'P&L', Icon: IconFinance, indent: true },
+              { to: '/finance/expenses', label: 'Expenses', Icon: IconFinance, indent: true },
+            ]
+          : []),
+        { to: '/reports', label: 'Reports', Icon: IconOverview },
+      ].filter(({ to }) => {
+        if (to === '/reports') return canViewReports;
+        return canViewFinance;
+      }),
     },
-    { to: '/users', label: 'Staff', Icon: IconStaff, show: canManageStaff },
-    { to: '/timesheets', label: 'Timesheets & Payroll', Icon: IconStaff, show: canManageStaff },
     {
-      to: '/help-options',
-      label: 'Help Options',
-      Icon: IconHelp,
-      show: canManageOperations && hasBranchContext,
+      group: 'Inventory',
+      items: [
+        { to: '/inventory', label: 'Overview', Icon: IconInventory },
+        ...(inInventory
+          ? [
+              { to: '/inventory/items', label: 'Items', Icon: IconInventory, indent: true },
+              { to: '/inventory/movements', label: 'Movements', Icon: IconInventory, indent: true },
+              { to: '/inventory/stocktake', label: 'Stocktake', Icon: IconInventory, indent: true },
+              { to: '/inventory/wastage', label: 'Wastage', Icon: IconInventory, indent: true },
+              { to: '/inventory/suppliers', label: 'Suppliers', Icon: IconInventory, indent: true },
+              {
+                to: '/inventory/purchase-orders',
+                label: 'Purchase Orders',
+                Icon: IconInventory,
+                indent: true,
+              },
+            ]
+          : []),
+      ].filter(() => canViewInventory),
     },
-    { to: '/branches', label: 'Branches', Icon: IconBranches, show: canManageOrg },
-    { to: '/audit-logs', label: 'Audit Logs', Icon: IconSettings, show: canViewAuditLogs },
     {
-      to: '/notifications',
-      label: 'Communication Logs',
-      Icon: IconSettings,
-      show: canViewAuditLogs,
+      group: 'People',
+      items: [
+        { to: '/users', label: 'Staff', Icon: IconStaff },
+        { to: '/timesheets', label: 'Timesheets & Payroll', Icon: IconStaff },
+      ].filter(() => canManageStaff),
     },
-    { to: '/settings', label: 'Settings', Icon: IconSettings, show: canManageOrg },
-  ].filter((n) => n.show);
+    {
+      group: 'Organisation',
+      items: [
+        { to: '/branches', label: 'Branches', Icon: IconBranches },
+        { to: '/audit-logs', label: 'Audit Logs', Icon: IconSettings },
+        { to: '/notifications', label: 'Comms Log', Icon: IconSettings },
+        { to: '/settings', label: 'Settings', Icon: IconSettings },
+      ].filter(({ to }) => {
+        if (to === '/branches' || to === '/settings') return canManageOrg;
+        if (to === '/audit-logs' || to === '/notifications') return canViewAuditLogs;
+        return false;
+      }),
+    },
+  ]
+    .map((g) => ({ ...g, items: g.items as NavItem[] }))
+    .filter((g) => g.items.length > 0);
 
   const [togglingShift, setTogglingShift] = useState(false);
   const { updateUser } = useAuth();
@@ -383,28 +433,54 @@ export function Shell() {
         )}
 
         {/* Nav links */}
-        <nav className="flex-1 py-4 space-y-1 px-2 mt-1 overflow-y-auto scrollbar-hide">
-          {NAV.map(({ to, label, Icon: NavIcon, exact }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={exact}
-              onClick={() => setMobileMenuOpen(false)}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 text-sm transition-all duration-150 rounded-lg ${
-                  isActive
-                    ? 'bg-[var(--accent-dim)] text-[var(--accent)] font-semibold shadow-sm'
-                    : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface2)]'
-                }`
-              }
-            >
-              <span className="shrink-0 w-5 flex items-center justify-center">
-                <NavIcon size={18} />
-              </span>
-              {(sidebarOpen || mobileMenuOpen) && (
-                <span className="whitespace-nowrap font-medium">{label}</span>
+        <nav className="flex-1 py-3 px-2 overflow-y-auto scrollbar-hide space-y-4">
+          {NAV_GROUPS.map(({ group, items }) => (
+            <div key={group || '__top'}>
+              {/* Group label */}
+              {group && (sidebarOpen || mobileMenuOpen) && (
+                <div className="px-3 mb-1 mt-1">
+                  <span className="text-[9px] font-black uppercase tracking-[0.12em] text-[var(--muted)]">
+                    {group}
+                  </span>
+                </div>
               )}
-            </NavLink>
+              {/* Group items */}
+              <div className="space-y-0.5">
+                {items.map(({ to, label, Icon: NavIcon, exact, indent }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={exact}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={({ isActive }) =>
+                      `flex items-center gap-3 text-sm transition-all duration-150 rounded-lg ${
+                        indent ? 'py-1.5 pl-8 pr-3' : 'py-2 px-3'
+                      } ${
+                        isActive
+                          ? 'bg-[var(--accent-dim)] text-[var(--accent)] font-semibold'
+                          : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface2)]'
+                      }`
+                    }
+                  >
+                    {!indent && (
+                      <span className="shrink-0 w-4 flex items-center justify-center">
+                        <NavIcon size={15} />
+                      </span>
+                    )}
+                    {indent && (sidebarOpen || mobileMenuOpen) && (
+                      <span className="w-1 h-1 rounded-full bg-current shrink-0 opacity-50 ml-0.5" />
+                    )}
+                    {(sidebarOpen || mobileMenuOpen) && (
+                      <span
+                        className={`whitespace-nowrap ${indent ? 'text-xs font-medium' : 'text-sm font-medium'}`}
+                      >
+                        {label}
+                      </span>
+                    )}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
 
