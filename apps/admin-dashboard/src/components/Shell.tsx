@@ -180,20 +180,30 @@ export function Shell() {
     toggle?: () => void;
     isOpen?: boolean;
   };
-  type NavGroup = { group: string; items: NavItem[] };
+  type NavGroup = {
+    group: string;
+    items: NavItem[];
+    collapsible?: boolean;
+    open?: boolean;
+    onToggle?: () => void;
+  };
 
   const inFinance = location.pathname.startsWith('/finance');
   const inInventory = location.pathname.startsWith('/inventory');
   const [financeOpen, setFinanceOpen] = useState(inFinance);
   const [inventoryOpen, setInventoryOpen] = useState(inInventory);
+  const [operationsOpen, setOperationsOpen] = useState(true);
+  const [restaurantOpen, setRestaurantOpen] = useState(true);
+  const [peopleOpen, setPeopleOpen] = useState(true);
+  const [orgOpen, setOrgOpen] = useState(true);
 
   // Keep open state in sync when navigating externally (e.g. browser back)
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (inFinance) setFinanceOpen(true);
   }, [inFinance]);
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (inInventory) setInventoryOpen(true);
   }, [inInventory]);
 
@@ -204,6 +214,9 @@ export function Shell() {
     },
     {
       group: 'Operations',
+      collapsible: true,
+      open: operationsOpen,
+      onToggle: () => setOperationsOpen((v) => !v),
       items: [
         { to: '/service-desk', label: 'Service Desk', Icon: IconOrders },
         { to: '/kds', label: 'Kitchen Display', Icon: IconOrders },
@@ -222,6 +235,9 @@ export function Shell() {
     },
     {
       group: 'Restaurant',
+      collapsible: true,
+      open: restaurantOpen,
+      onToggle: () => setRestaurantOpen((v) => !v),
       items: [
         { to: '/menu', label: 'Menu', Icon: IconMenu },
         { to: '/tables', label: 'Tables & QR', Icon: IconTables },
@@ -286,6 +302,9 @@ export function Shell() {
     },
     {
       group: 'People',
+      collapsible: true,
+      open: peopleOpen,
+      onToggle: () => setPeopleOpen((v) => !v),
       items: [
         { to: '/users', label: 'Staff', Icon: IconStaff },
         { to: '/timesheets', label: 'Timesheets & Payroll', Icon: IconStaff },
@@ -293,6 +312,9 @@ export function Shell() {
     },
     {
       group: 'Organisation',
+      collapsible: true,
+      open: orgOpen,
+      onToggle: () => setOrgOpen((v) => !v),
       items: [
         { to: '/branches', label: 'Branches', Icon: IconBranches },
         { to: '/audit-logs', label: 'Audit Logs', Icon: IconSettings },
@@ -460,69 +482,92 @@ export function Shell() {
 
         {/* Nav links */}
         <nav className="flex-1 py-3 px-2 overflow-y-auto scrollbar-hide space-y-4">
-          {NAV_GROUPS.map(({ group, items }) => (
+          {NAV_GROUPS.map(({ group, items, collapsible, open: groupOpen, onToggle }) => (
             <div key={group || '__top'}>
-              {/* Group label */}
-              {group && (sidebarOpen || mobileMenuOpen) && (
-                <div className="px-3 mb-1 mt-1">
-                  <span className="text-[9px] font-black uppercase tracking-[0.12em] text-[var(--muted)]">
-                    {group}
-                  </span>
+              {/* Group label — clickable if collapsible */}
+              {group &&
+                (sidebarOpen || mobileMenuOpen) &&
+                (collapsible ? (
+                  <button
+                    type="button"
+                    onClick={onToggle}
+                    className="w-full flex items-center justify-between px-3 mb-1 mt-1 group"
+                  >
+                    <span className="text-[9px] font-black uppercase tracking-[0.12em] text-[var(--muted)] group-hover:text-[var(--text)] transition-colors">
+                      {group}
+                    </span>
+                    <span
+                      className="text-[9px] text-[var(--muted)] group-hover:text-[var(--text)] transition-all duration-200"
+                      style={{
+                        transform: groupOpen ? 'rotate(0deg)' : 'rotate(-90deg)',
+                        display: 'inline-block',
+                      }}
+                    >
+                      ▾
+                    </span>
+                  </button>
+                ) : (
+                  <div className="px-3 mb-1 mt-1">
+                    <span className="text-[9px] font-black uppercase tracking-[0.12em] text-[var(--muted)]">
+                      {group}
+                    </span>
+                  </div>
+                ))}
+              {/* Group items — hidden when collapsed */}
+              {(collapsible ? groupOpen : true) && (
+                <div className="space-y-0.5">
+                  {items.map(({ to, label, Icon: NavIcon, exact, indent, toggle, isOpen }) => (
+                    <NavLink
+                      key={to}
+                      to={to}
+                      end={exact}
+                      onClick={(e) => {
+                        if (toggle) {
+                          // If already on this route, just toggle — don't re-navigate
+                          if (location.pathname === to || location.pathname.startsWith(to + '/')) {
+                            e.preventDefault();
+                          }
+                          toggle();
+                        }
+                        setMobileMenuOpen(false);
+                      }}
+                      className={({ isActive }) =>
+                        `flex items-center gap-3 text-sm transition-all duration-150 rounded-lg ${
+                          indent ? 'py-1.5 pl-8 pr-3' : 'py-2 px-3'
+                        } ${
+                          isActive
+                            ? 'bg-[var(--accent-dim)] text-[var(--accent)] font-semibold'
+                            : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface2)]'
+                        }`
+                      }
+                    >
+                      {!indent && (
+                        <span className="shrink-0 w-4 flex items-center justify-center">
+                          <NavIcon size={15} />
+                        </span>
+                      )}
+                      {indent && (sidebarOpen || mobileMenuOpen) && (
+                        <span className="w-1 h-1 rounded-full bg-current shrink-0 opacity-50 ml-0.5" />
+                      )}
+                      {(sidebarOpen || mobileMenuOpen) && (
+                        <span
+                          className={`whitespace-nowrap flex-1 ${indent ? 'text-xs font-medium' : 'text-sm font-medium'}`}
+                        >
+                          {label}
+                        </span>
+                      )}
+                      {toggle && (sidebarOpen || mobileMenuOpen) && (
+                        <span
+                          className="shrink-0 text-[10px] opacity-50 transition-transform duration-200"
+                          style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                        >
+                          ▾
+                        </span>
+                      )}
+                    </NavLink>
+                  ))}
                 </div>
               )}
-              {/* Group items */}
-              <div className="space-y-0.5">
-                {items.map(({ to, label, Icon: NavIcon, exact, indent, toggle, isOpen }) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    end={exact}
-                    onClick={(e) => {
-                      if (toggle) {
-                        // If already on this route, just toggle — don't re-navigate
-                        if (location.pathname === to || location.pathname.startsWith(to + '/')) {
-                          e.preventDefault();
-                        }
-                        toggle();
-                      }
-                      setMobileMenuOpen(false);
-                    }}
-                    className={({ isActive }) =>
-                      `flex items-center gap-3 text-sm transition-all duration-150 rounded-lg ${
-                        indent ? 'py-1.5 pl-8 pr-3' : 'py-2 px-3'
-                      } ${
-                        isActive
-                          ? 'bg-[var(--accent-dim)] text-[var(--accent)] font-semibold'
-                          : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface2)]'
-                      }`
-                    }
-                  >
-                    {!indent && (
-                      <span className="shrink-0 w-4 flex items-center justify-center">
-                        <NavIcon size={15} />
-                      </span>
-                    )}
-                    {indent && (sidebarOpen || mobileMenuOpen) && (
-                      <span className="w-1 h-1 rounded-full bg-current shrink-0 opacity-50 ml-0.5" />
-                    )}
-                    {(sidebarOpen || mobileMenuOpen) && (
-                      <span
-                        className={`whitespace-nowrap flex-1 ${indent ? 'text-xs font-medium' : 'text-sm font-medium'}`}
-                      >
-                        {label}
-                      </span>
-                    )}
-                    {toggle && (sidebarOpen || mobileMenuOpen) && (
-                      <span
-                        className="shrink-0 text-[10px] opacity-50 transition-transform duration-200"
-                        style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
-                      >
-                        ▾
-                      </span>
-                    )}
-                  </NavLink>
-                ))}
-              </div>
             </div>
           ))}
         </nav>

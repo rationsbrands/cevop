@@ -10,6 +10,8 @@ interface KioskResult {
   role: string;
   isOnShift: boolean;
   timestamp: string;
+  clockedInAt: string | null;
+  durationMinutes: number | null;
 }
 
 /** Compress a video frame to a 320×320 JPEG (~15-25 KB). */
@@ -259,13 +261,53 @@ export function KioskPage() {
             </div>
             <p className="text-2xl font-bold text-[var(--text)]">{result.name}</p>
             <p className="text-sm text-[var(--muted)]">{roleLabel[result.role] ?? result.role}</p>
-            <p className="text-xs text-[var(--muted)] font-mono">
-              {new Date(result.timestamp).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-              })}
-            </p>
+
+            {/* Clock-in time */}
+            <div className="text-sm space-y-1">
+              {result.isOnShift ? (
+                <div className="flex items-center justify-center gap-2">
+                  <span className="text-[var(--muted)]">Clocked in at</span>
+                  <span className="font-mono font-bold text-[var(--text)]">
+                    {new Date(result.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                </div>
+              ) : (
+                <>
+                  {result.clockedInAt && (
+                    <div className="flex items-center justify-center gap-2">
+                      <span className="text-[var(--muted)]">Clocked in at</span>
+                      <span className="font-mono font-bold text-[var(--text)]">
+                        {new Date(result.clockedInAt).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="text-[var(--muted)]">Clocked out at</span>
+                    <span className="font-mono font-bold text-[var(--text)]">
+                      {new Date(result.timestamp).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                  {result.durationMinutes != null && (
+                    <div className="flex items-center justify-center gap-2 pt-1">
+                      <span className="text-[var(--muted)]">Shift duration</span>
+                      <span className="font-mono font-bold text-[var(--text)]">
+                        {Math.floor(result.durationMinutes / 60)}h {result.durationMinutes % 60}m
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
             <p className="text-[10px] text-[var(--muted)] pt-2">Returning to kiosk in 5 seconds…</p>
           </div>
         </div>

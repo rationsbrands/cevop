@@ -250,6 +250,21 @@ shiftsRouter.post('/kiosk-toggle', async (req: Request, res: Response) => {
       isOnShift: nextState,
     });
 
+    // For clock-outs, include the shift start time and duration so the kiosk can display them
+    let clockedInAt: string | null = null;
+    let durationMinutes: number | null = null;
+    if (!nextState) {
+      const lastShift = await (prisma.staffShift as any).findFirst({
+        where: { userId: user.id, clockedOutAt: { not: null } },
+        orderBy: { clockedOutAt: 'desc' },
+        select: { clockedInAt: true, durationMinutes: true },
+      });
+      if (lastShift) {
+        clockedInAt = lastShift.clockedInAt.toISOString();
+        durationMinutes = lastShift.durationMinutes;
+      }
+    }
+
     res.json({
       success: true,
       data: {
@@ -257,6 +272,8 @@ shiftsRouter.post('/kiosk-toggle', async (req: Request, res: Response) => {
         role: user.role,
         isOnShift: nextState,
         timestamp: now.toISOString(),
+        clockedInAt,
+        durationMinutes,
       },
     });
   } catch (err) {
