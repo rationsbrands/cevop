@@ -196,15 +196,23 @@ export function Shell() {
   const [restaurantOpen, setRestaurantOpen] = useState(true);
   const [peopleOpen, setPeopleOpen] = useState(true);
   const [orgOpen, setOrgOpen] = useState(true);
+  const [financeGroupOpen, setFinanceGroupOpen] = useState(inFinance);
+  const [inventoryGroupOpen, setInventoryGroupOpen] = useState(inInventory);
 
   // Keep open state in sync when navigating externally (e.g. browser back)
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (inFinance) setFinanceOpen(true);
+    if (inFinance) {
+      setFinanceOpen(true);
+      setFinanceGroupOpen(true);
+    }
   }, [inFinance]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (inInventory) setInventoryOpen(true);
+    if (inInventory) {
+      setInventoryOpen(true);
+      setInventoryGroupOpen(true);
+    }
   }, [inInventory]);
 
   const NAV_GROUPS: NavGroup[] = [
@@ -253,6 +261,9 @@ export function Shell() {
     },
     {
       group: 'Finance',
+      collapsible: true,
+      open: financeGroupOpen,
+      onToggle: () => setFinanceGroupOpen((v) => !v),
       items: [
         {
           to: '/finance',
@@ -275,6 +286,9 @@ export function Shell() {
     },
     {
       group: 'Inventory',
+      collapsible: true,
+      open: inventoryGroupOpen,
+      onToggle: () => setInventoryGroupOpen((v) => !v),
       items: [
         {
           to: '/inventory',
