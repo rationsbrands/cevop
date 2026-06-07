@@ -390,8 +390,23 @@ initSocketHandlers(io);
 
 // Redis adapter — enables horizontal scaling across multiple server instances
 if (process.env.REDIS_URL) {
-  const pubClient = createClient({ url: process.env.REDIS_URL });
+  const pubClient = createClient({
+    url: process.env.REDIS_URL,
+    socket: {
+      reconnectStrategy: (retries) => Math.min(retries * 500, 10_000),
+      keepAlive: true,
+    },
+  });
   const subClient = pubClient.duplicate();
+
+  // Catch post-connection errors so they never crash the process
+  pubClient.on('error', (err) =>
+    logger.error('Socket.io Redis pub error', { message: err.message }),
+  );
+  subClient.on('error', (err) =>
+    logger.error('Socket.io Redis sub error', { message: err.message }),
+  );
+
   Promise.all([pubClient.connect(), subClient.connect()])
     .then(() => {
       io.adapter(createAdapter(pubClient, subClient));

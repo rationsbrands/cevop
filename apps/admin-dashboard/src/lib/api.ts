@@ -19,7 +19,9 @@ function buildUrl(path: string, params?: RequestOptions['params']): string {
       if (v !== undefined && v !== '') url.searchParams.set(k, String(v));
     });
   }
-  return url.pathname + url.search;
+  // Return full URL when API_BASE points to a different origin (production),
+  // otherwise return just the path (dev — Vite proxy handles it)
+  return API_BASE ? url.toString() : url.pathname + url.search;
 }
 
 export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
