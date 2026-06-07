@@ -240,7 +240,7 @@ export const updateSupplier = (token: string, id: string, body: Partial<Supplier
 // Purchase Orders
 export const getPurchaseOrders = (
   token: string,
-  params?: { status?: string; supplierId?: string },
+  params?: { branchId?: string; status?: string; supplierId?: string },
 ) =>
   apiFetch<{ success: boolean; data: PurchaseOrder[] }>('/api/inventory/purchase-orders', {
     ...h(token),
@@ -282,8 +282,11 @@ export const logWastage = (token: string, body: unknown) =>
   });
 
 // Stocktake
-export const getStocktakes = (token: string) =>
-  apiFetch<{ success: boolean; data: Stocktake[] }>('/api/inventory/stocktakes', h(token));
+export const getStocktakes = (token: string, params?: { branchId?: string }) =>
+  apiFetch<{ success: boolean; data: Stocktake[] }>('/api/inventory/stocktakes', {
+    ...h(token),
+    params,
+  });
 export const startStocktake = (token: string, body: unknown) =>
   apiFetch<{ success: boolean; data: Stocktake }>('/api/inventory/stocktakes', {
     ...h(token),

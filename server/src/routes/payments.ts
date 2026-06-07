@@ -180,6 +180,62 @@ paymentsRouter.post('/', requireRole(...CASHIER_ROLES), async (req: AuthRequest,
           where: { id: { in: targetItems.map((i: any) => i.id) } },
           data: { status: 'PAID' },
         });
+
+        // ── Recipe costing: deduct ingredients for each paid item ──────────
+        // Group paid items by menuItemId and total their quantities
+        const menuItemQtyMap = new Map<string, number>();
+        for (const item of targetItems) {
+          menuItemQtyMap.set(
+            item.menuItemId,
+            (menuItemQtyMap.get(item.menuItemId) ?? 0) + item.quantity,
+          );
+        }
+
+        // Fetch recipe lines for all involved menu items in one query
+        const recipeLines = await tx.recipeLine.findMany({
+          where: { menuItemId: { in: Array.from(menuItemQtyMap.keys()) } },
+          include: { item: { select: { id: true, costPrice: true, currentStock: true } } },
+        });
+
+        if (recipeLines.length > 0) {
+          // Aggregate total deduction per inventory item across all menu items sold
+          const deductions = new Map<string, { quantity: number; unitCost: number }>();
+          for (const line of recipeLines) {
+            const soldQty = menuItemQtyMap.get(line.menuItemId) ?? 0;
+            const totalQty = Number(line.quantity) * soldQty;
+            const existing = deductions.get(line.itemId);
+            if (existing) {
+              existing.quantity += totalQty;
+            } else {
+              deductions.set(line.itemId, {
+                quantity: totalQty,
+                unitCost: Number(line.item.costPrice),
+              });
+            }
+          }
+
+          // Create one SALE stock movement per inventory item and decrement stock
+          for (const [inventoryItemId, { quantity, unitCost }] of deductions) {
+            await tx.stockMovement.create({
+              data: {
+                organizationId: orgId,
+                branchId: branchId,
+                itemId: inventoryItemId,
+                type: 'SALE',
+                quantity: -quantity, // negative = stock out
+                unitCost,
+                referenceId: payment.id,
+                referenceType: 'PAYMENT',
+                createdBy: req.user!.userId,
+              },
+            });
+            await tx.inventoryItem.updateMany({
+              where: { id: inventoryItemId, organizationId: orgId },
+              data: { currentStock: { decrement: quantity } },
+            });
+          }
+        }
+        // ── End recipe costing ─────────────────────────────────────────────
       }
 
       // Re-calculate total paid to see if we should close the session

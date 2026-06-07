@@ -53,6 +53,7 @@ import { timesheetsRouter } from './routes/timesheets';
 import { shiftsRouter } from './routes/shifts';
 import { inventoryRouter } from './routes/inventory';
 import { financeRouter } from './routes/finance';
+import { recipesRouter } from './routes/recipes';
 import { initSocketHandlers } from './sockets/handlers';
 import { errorHandler } from './middleware/errorHandler';
 import { planGuard } from './middleware/planGuard';
@@ -382,6 +383,7 @@ app.use('/api/analytics', analyticsRouter);
 app.use('/api/payments', paymentsRouter);
 app.use('/api/inventory', inventoryRouter);
 app.use('/api/finance', financeRouter);
+app.use('/api/recipes', recipesRouter);
 
 // WebSocket
 initSocketHandlers(io);

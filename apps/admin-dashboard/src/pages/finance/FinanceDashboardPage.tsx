@@ -81,9 +81,9 @@ export default function FinanceDashboardPage() {
     },
     {
       label: 'Total Expenses',
-      value: s ? s.totalOpex + s.wastage + (s.otherExpenses ?? 0) : undefined,
+      value: s ? s.totalOpex + s.wastage : undefined,
       color: 'var(--warning)',
-      sub: `${s?.expenseCount ?? 0} expense entries`,
+      sub: `Labour + expenses + wastage`,
     },
   ];
 

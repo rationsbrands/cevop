@@ -308,7 +308,16 @@ inventoryRouter.post(
     const schema = z.object({
       branchId: z.string(),
       itemId: z.string(),
-      type: z.enum(['MANUAL_ADJUSTMENT', 'WRITE_OFF', 'RETURN', 'TRANSFER_IN', 'TRANSFER_OUT']),
+      type: z.enum([
+        'MANUAL_ADJUSTMENT',
+        'PURCHASE_RECEIPT',
+        'WRITE_OFF',
+        'RETURN',
+        'TRANSFER_IN',
+        'TRANSFER_OUT',
+        'PRODUCTION_IN',
+        'PRODUCTION_OUT',
+      ]),
       quantity: z.number().refine((v) => v !== 0, 'Quantity cannot be zero'),
       unitCost: z.number().min(0).default(0),
       note: z.string().max(500).optional(),
@@ -429,10 +438,11 @@ inventoryRouter.patch(
 // GET /api/inventory/purchase-orders
 inventoryRouter.get('/purchase-orders', async (req: AuthRequest, res) => {
   try {
-    const { status, supplierId } = req.query as Record<string, string>;
+    const { status, supplierId, branchId } = req.query as Record<string, string>;
     const where: Record<string, unknown> = { organizationId: orgId(req) };
     if (status) where.status = status;
     if (supplierId) where.supplierId = supplierId;
+    if (branchId) where.branchId = branchId;
 
     const pos = await prisma.purchaseOrder.findMany({
       where,
@@ -736,8 +746,11 @@ inventoryRouter.post(
 // GET /api/inventory/stocktakes
 inventoryRouter.get('/stocktakes', async (req: AuthRequest, res) => {
   try {
+    const { branchId } = req.query as Record<string, string>;
+    const where: Record<string, unknown> = { organizationId: orgId(req) };
+    if (branchId) where.branchId = branchId;
     const stocktakes = await prisma.stocktake.findMany({
-      where: { organizationId: orgId(req) },
+      where,
       include: { _count: { select: { lines: true } } },
       orderBy: { startedAt: 'desc' },
       take: 20,
@@ -906,15 +919,20 @@ inventoryRouter.get('/summary', async (req: AuthRequest, res) => {
       else if (stock <= reorder) lowCount++;
     }
 
-    // Low stock items (for alerts)
-    const lowStockItems = await prisma.inventoryItem.findMany({
-      where: {
-        ...where,
-        currentStock: { lte: prisma.inventoryItem.fields.reorderPoint },
-      },
-      orderBy: { currentStock: 'asc' },
-      take: 10,
-    });
+    // Low stock items (for alerts) — items where stock <= reorderPoint
+    // Computed from already-fetched items to avoid invalid field-reference query
+    const lowStockItems = items
+      .filter((item) => {
+        const stock = Number(item.currentStock);
+        return stock <= Number(item.reorderPoint);
+      })
+      .sort((a, b) => Number(a.currentStock) - Number(b.currentStock))
+      .slice(0, 10)
+      .map((item) => {
+        const stock = Number(item.currentStock);
+        const reorder = Number(item.reorderPoint);
+        return { ...item, stockStatus: stock <= 0 ? 'out' : stock <= reorder ? 'low' : 'ok' };
+      });
 
     res.json({
       success: true,

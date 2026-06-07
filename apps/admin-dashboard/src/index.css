@@ -398,6 +398,10 @@ label {
   color: var(--success);
   background: rgba(0, 210, 106, 0.1);
 }
+.badge-draft {
+  color: var(--muted);
+  background: rgba(107, 128, 128, 0.15);
+}
 .badge-inactive {
   color: var(--muted);
   background: rgba(107, 128, 128, 0.1);

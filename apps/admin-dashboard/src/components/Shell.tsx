@@ -177,11 +177,25 @@ export function Shell() {
     Icon: React.ComponentType<{ size?: number }>;
     exact?: boolean;
     indent?: boolean;
+    toggle?: () => void;
+    isOpen?: boolean;
   };
   type NavGroup = { group: string; items: NavItem[] };
 
   const inFinance = location.pathname.startsWith('/finance');
   const inInventory = location.pathname.startsWith('/inventory');
+  const [financeOpen, setFinanceOpen] = useState(inFinance);
+  const [inventoryOpen, setInventoryOpen] = useState(inInventory);
+
+  // Keep open state in sync when navigating externally (e.g. browser back)
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    if (inFinance) setFinanceOpen(true);
+  }, [inFinance]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    if (inInventory) setInventoryOpen(true);
+  }, [inInventory]);
 
   const NAV_GROUPS: NavGroup[] = [
     {
@@ -224,8 +238,14 @@ export function Shell() {
     {
       group: 'Finance',
       items: [
-        { to: '/finance', label: 'Overview', Icon: IconFinance },
-        ...(inFinance
+        {
+          to: '/finance',
+          label: 'Overview',
+          Icon: IconFinance,
+          toggle: () => setFinanceOpen((v) => !v),
+          isOpen: financeOpen,
+        },
+        ...(financeOpen
           ? [
               { to: '/finance/pnl', label: 'P&L', Icon: IconFinance, indent: true },
               { to: '/finance/expenses', label: 'Expenses', Icon: IconFinance, indent: true },
@@ -240,8 +260,14 @@ export function Shell() {
     {
       group: 'Inventory',
       items: [
-        { to: '/inventory', label: 'Overview', Icon: IconInventory },
-        ...(inInventory
+        {
+          to: '/inventory',
+          label: 'Overview',
+          Icon: IconInventory,
+          toggle: () => setInventoryOpen((v) => !v),
+          isOpen: inventoryOpen,
+        },
+        ...(inventoryOpen
           ? [
               { to: '/inventory/items', label: 'Items', Icon: IconInventory, indent: true },
               { to: '/inventory/movements', label: 'Movements', Icon: IconInventory, indent: true },
@@ -446,12 +472,21 @@ export function Shell() {
               )}
               {/* Group items */}
               <div className="space-y-0.5">
-                {items.map(({ to, label, Icon: NavIcon, exact, indent }) => (
+                {items.map(({ to, label, Icon: NavIcon, exact, indent, toggle, isOpen }) => (
                   <NavLink
                     key={to}
                     to={to}
                     end={exact}
-                    onClick={() => setMobileMenuOpen(false)}
+                    onClick={(e) => {
+                      if (toggle) {
+                        // If already on this route, just toggle — don't re-navigate
+                        if (location.pathname === to || location.pathname.startsWith(to + '/')) {
+                          e.preventDefault();
+                        }
+                        toggle();
+                      }
+                      setMobileMenuOpen(false);
+                    }}
                     className={({ isActive }) =>
                       `flex items-center gap-3 text-sm transition-all duration-150 rounded-lg ${
                         indent ? 'py-1.5 pl-8 pr-3' : 'py-2 px-3'
@@ -472,9 +507,17 @@ export function Shell() {
                     )}
                     {(sidebarOpen || mobileMenuOpen) && (
                       <span
-                        className={`whitespace-nowrap ${indent ? 'text-xs font-medium' : 'text-sm font-medium'}`}
+                        className={`whitespace-nowrap flex-1 ${indent ? 'text-xs font-medium' : 'text-sm font-medium'}`}
                       >
                         {label}
+                      </span>
+                    )}
+                    {toggle && (sidebarOpen || mobileMenuOpen) && (
+                      <span
+                        className="shrink-0 text-[10px] opacity-50 transition-transform duration-200"
+                        style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                      >
+                        ▾
                       </span>
                     )}
                   </NavLink>
