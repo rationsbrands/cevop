@@ -70,17 +70,11 @@ const SettingsPage = React.lazy(() =>
 const BranchesPage = React.lazy(() =>
   import('./pages/BranchesPage').then((m) => ({ default: m.BranchesPage })),
 );
-const ReportsPage = React.lazy(() =>
-  import('./pages/ReportsPage').then((m) => ({ default: m.ReportsPage })),
-);
 const AuditLogsPage = React.lazy(() =>
   import('./pages/AuditLogsPage').then((m) => ({ default: m.AuditLogsPage })),
 );
 const NotificationsPage = React.lazy(() =>
   import('./pages/NotificationsPage').then((m) => ({ default: m.NotificationsPage })),
-);
-const TimesheetsPage = React.lazy(() =>
-  import('./pages/TimesheetsPage').then((m) => ({ default: m.TimesheetsPage })),
 );
 const ServiceDeskPage = React.lazy(() =>
   import('./pages/ServiceDeskPage').then((m) => ({ default: m.ServiceDeskPage })),
@@ -91,18 +85,6 @@ const CashierPage = React.lazy(() =>
 const RegisterPage = React.lazy(() =>
   import('./pages/RegisterPage').then((m) => ({ default: m.RegisterPage })),
 );
-const FinanceDashboardPage = React.lazy(() => import('./pages/finance/FinanceDashboardPage'));
-const PnLPage = React.lazy(() => import('./pages/finance/PnLPage'));
-const ExpensesPage = React.lazy(() => import('./pages/finance/ExpensesPage'));
-const InventoryDashboardPage = React.lazy(() => import('./pages/inventory/DashboardPage'));
-const InventoryItemsPage = React.lazy(() => import('./pages/inventory/ItemsPage'));
-const InventoryMovementsPage = React.lazy(() => import('./pages/inventory/StockMovementsPage'));
-const InventorySuppliersPage = React.lazy(() => import('./pages/inventory/SuppliersPage'));
-const InventoryPOPage = React.lazy(() => import('./pages/inventory/PurchaseOrdersPage'));
-const InventoryStocktakePage = React.lazy(() => import('./pages/inventory/StocktakePage'));
-const InventoryWastagePage = React.lazy(() => import('./pages/inventory/WastagePage'));
-const InventoryReportsPage = React.lazy(() => import('./pages/inventory/ReportsPage'));
-const InventorySettingsPage = React.lazy(() => import('./pages/inventory/SettingsPage'));
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -316,37 +298,10 @@ function AppRoutes() {
             }
           />
           <Route
-            path="timesheets"
-            element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER']}>
-                <TimesheetsPage />
-              </RequireRole>
-            }
-          />
-          <Route
             path="branches"
             element={
               <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER']}>
                 <BranchesPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="reports"
-            element={
-              <RequireRole
-                roles={[
-                  'ORG_OWNER',
-                  'ADMIN',
-                  'ORG_MANAGER',
-                  'ORG_FINANCE',
-                  'ORG_AUDITOR',
-                  'BRANCH_ADMIN',
-                  'BRANCH_FINANCE',
-                  'SUPERADMIN',
-                ]}
-              >
-                <ReportsPage />
               </RequireRole>
             }
           />
@@ -378,128 +333,6 @@ function AppRoutes() {
               </RequireRole>
             }
           />
-
-          {/* Finance */}
-          <Route
-            path="finance"
-            element={
-              <RequireRole
-                roles={[
-                  'ORG_OWNER',
-                  'ADMIN',
-                  'ORG_MANAGER',
-                  'ORG_FINANCE',
-                  'BRANCH_ADMIN',
-                  'BRANCH_FINANCE',
-                ]}
-              >
-                <FinanceDashboardPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="finance/pnl"
-            element={
-              <RequireRole
-                roles={[
-                  'ORG_OWNER',
-                  'ADMIN',
-                  'ORG_MANAGER',
-                  'ORG_FINANCE',
-                  'BRANCH_ADMIN',
-                  'BRANCH_FINANCE',
-                ]}
-              >
-                <PnLPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="finance/expenses"
-            element={
-              <RequireRole
-                roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'ORG_FINANCE', 'BRANCH_ADMIN']}
-              >
-                <ExpensesPage />
-              </RequireRole>
-            }
-          />
-
-          {/* Inventory */}
-          <Route
-            path="inventory"
-            element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-                <InventoryDashboardPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="inventory/items"
-            element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-                <InventoryItemsPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="inventory/movements"
-            element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-                <InventoryMovementsPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="inventory/suppliers"
-            element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER']}>
-                <InventorySuppliersPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="inventory/purchase-orders"
-            element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER']}>
-                <InventoryPOPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="inventory/stocktake"
-            element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-                <InventoryStocktakePage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="inventory/wastage"
-            element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN']}>
-                <InventoryWastagePage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="inventory/reports"
-            element={
-              <RequireRole
-                roles={['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'ORG_FINANCE', 'BRANCH_ADMIN']}
-              >
-                <InventoryReportsPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="inventory/settings"
-            element={
-              <RequireRole roles={['ORG_OWNER', 'ADMIN']}>
-                <InventorySettingsPage />
-              </RequireRole>
-            }
-          />
         </Route>
       </Routes>
       <InstallPrompt />
@@ -520,7 +353,7 @@ Sentry.init({
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: true,
       staleTime: 60 * 1000,
     },
   },

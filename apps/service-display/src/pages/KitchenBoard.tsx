@@ -109,8 +109,8 @@ export function KitchenBoard() {
     },
     enabled: !!token && !!user,
     staleTime: 30000,
-    refetchInterval: 15_000, // 15s fallback — keeps board live if socket drops
-    refetchIntervalInBackground: false,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: true, // keep polling even when tab is backgrounded
   });
 
   const orders = useMemo(() => {
@@ -262,14 +262,23 @@ export function KitchenBoard() {
   useEffect(() => {
     const up = () => {
       setIsOnline(true);
+      if (socketRef.current && !socketRef.current.connected) socketRef.current.connect();
       refreshNowRef.current().catch(() => void 0);
     };
     const down = () => setIsOnline(false);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        if (socketRef.current && !socketRef.current.connected) socketRef.current.connect();
+        refreshNowRef.current().catch(() => void 0);
+      }
+    };
     window.addEventListener('online', up);
     window.addEventListener('offline', down);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       window.removeEventListener('online', up);
       window.removeEventListener('offline', down);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
 

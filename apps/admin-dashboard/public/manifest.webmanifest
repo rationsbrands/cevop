@@ -1,11 +1,16 @@
 {
+  "id": "/",
   "name": "Cevop Admin",
   "short_name": "Admin",
+  "description": "Cevop restaurant operations dashboard",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
   "background_color": "#0D0D0D",
   "theme_color": "#0D0D0D",
+  "categories": ["business", "productivity"],
   "icons": [
     {
       "src": "/icon-192.png",

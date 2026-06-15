@@ -320,6 +320,8 @@ export function WaiterBoard() {
     },
     enabled: !!token,
     staleTime: 5000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
   });
 
   const { data: tasksData, refetch: refetchTasks } = useQuery({
@@ -393,6 +395,8 @@ export function WaiterBoard() {
     },
     enabled: !!token,
     staleTime: 5000,
+    refetchInterval: 20_000,
+    refetchIntervalInBackground: true,
   });
 
   const tables = tablesData || [];
@@ -511,16 +515,28 @@ export function WaiterBoard() {
     };
     socket.on('SYNC_REQUIRED', handleSyncRequired);
 
-    // Keepalive ping every 25 seconds
-    // Prevents iOS and Android from killing idle WebSocket connections
+    // Keepalive ping every 25 seconds — prevents iOS/Android killing idle connections
     const keepAlive = setInterval(() => {
-      if (socket.connected) {
-        socket.emit('ping');
-      }
+      if (socket.connected) socket.emit('ping');
     }, 25000);
+
+    // Re-connect and re-fetch when app comes back from sleep/background
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        if (!socket.connected) socket.connect();
+        else refreshNowRef.current().catch(() => void 0);
+      }
+    };
+    const onOnline = () => {
+      if (!socket.connected) socket.connect();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onOnline);
 
     return () => {
       clearInterval(keepAlive);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onOnline);
       socket.off('SYNC_REQUIRED', handleSyncRequired);
       socket.disconnect();
     };

@@ -1,11 +1,16 @@
 {
+  "id": "/",
   "name": "Cevop Service",
   "short_name": "Cevop",
+  "description": "Cevop kitchen display, waiter board, and kiosk",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
   "background_color": "#0D0D0D",
   "theme_color": "#0D0D0D",
+  "categories": ["business", "productivity"],
   "icons": [
     {
       "src": "/icon-192.png",

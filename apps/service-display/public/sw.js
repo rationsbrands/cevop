@@ -2,7 +2,7 @@
 import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
 import { Queue } from 'workbox-background-sync';
 
-const CACHE_NAME = 'cevop-service-v2';
+const CACHE_NAME = 'cevop-service-v3';
 
 // Precache ALL build assets — injected by vite-plugin-pwa at build time
 precacheAndRoute(self.__WB_MANIFEST);

@@ -133,7 +133,19 @@ waiterCallsRouter.post('/public', async (req: Request, res: Response) => {
         roles: ['WAITER', 'SERVICE'],
         title: 'Waiter Called',
         body: `${finalCall.table?.label || 'Table'}${finalCall.reason ? ` — ${finalCall.reason}` : ''}`,
-        url: '/',
+        url: '/service-desk',
+        tag: `waiter-call:${call.id}`,
+      },
+    });
+
+    notificationQueue.add('ADMIN_WEB_PUSH', {
+      type: 'ADMIN_WEB_PUSH',
+      data: {
+        organizationId: table.organizationId,
+        branchId: actualBranchId,
+        title: 'Waiter Called',
+        body: `${finalCall.table?.label || 'Table'}${finalCall.reason ? ` — ${finalCall.reason}` : ''}`,
+        url: '/service-desk',
         tag: `waiter-call:${call.id}`,
       },
     });

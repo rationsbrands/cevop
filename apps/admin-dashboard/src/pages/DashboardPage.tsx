@@ -3,10 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth, useApi } from '../context/auth';
 import { formatPrice } from '../../../../shared/utils/currency';
 import { AutoFitText } from '../components/AutoFitText';
-import { useApi as useFetch } from '../hooks/useFetch';
-import { getFinanceSummary } from '../services/finance';
-import { getSummary as getInventorySummary } from '../services/inventory';
-import { formatCurrency } from '../lib/utils';
+import { useSocket } from '../context/socket';
 
 interface Summary {
   todayOrders: number;
@@ -86,37 +83,7 @@ export function DashboardPage() {
   const [syncing, setSyncing] = useState(false);
 
   const branchId = api.effectiveBranchId ?? undefined;
-  const canViewFinance = [
-    'ORG_OWNER',
-    'ADMIN',
-    'ORG_MANAGER',
-    'ORG_FINANCE',
-    'BRANCH_ADMIN',
-    'BRANCH_FINANCE',
-  ].includes(user?.role ?? '');
-  const canViewInventory = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(
-    user?.role ?? '',
-  );
-
-  const now = new Date();
-  const fromMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-  const toDay = now.toISOString().slice(0, 10);
-
-  const { data: financeRes } = useFetch(
-    () =>
-      canViewFinance && token
-        ? getFinanceSummary(token, { branchId, from: fromMonth, to: toDay })
-        : Promise.resolve(null),
-    [token, branchId, canViewFinance],
-  );
-  const { data: inventoryRes } = useFetch(
-    () =>
-      canViewInventory && token ? getInventorySummary(token, branchId) : Promise.resolve(null),
-    [token, branchId, canViewInventory],
-  );
-
-  const fin = (financeRes as any)?.data;
-  const inv = (inventoryRes as any)?.data;
+  const { socket } = useSocket();
 
   const load = useCallback(
     async (isSilent = false, cancelled = false) => {
@@ -171,14 +138,28 @@ export function DashboardPage() {
     };
   }, [load]);
 
-  // Background Heartbeat Sync (Industry Standard)
+  // Live socket refresh — stats update instantly when orders change
+  useEffect(() => {
+    if (!socket) return;
+    const refresh = () => load(true);
+    socket.on('ORDER_CREATED', refresh);
+    socket.on('ORDER_UPDATED', refresh);
+    socket.on('PAYMENT_RECORDED', refresh);
+    return () => {
+      socket.off('ORDER_CREATED', refresh);
+      socket.off('ORDER_UPDATED', refresh);
+      socket.off('PAYMENT_RECORDED', refresh);
+    };
+  }, [socket, load]);
+
+  // Background heartbeat — catches anything missed while backgrounded
   useEffect(() => {
     let cancelled = false;
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && navigator.onLine && !cancelled) {
         load(true, cancelled);
       }
-    }, 60000); // Every 60 seconds
+    }, 30000);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -343,13 +324,11 @@ export function DashboardPage() {
             sub="Active branches"
           />
           <StatCard label="Staff" value={orgDashboard?.staffCount ?? 0} sub="Active staff" />
-          <Link to="/reports" className="card p-5 hover:bg-[var(--surface2)] transition-colors">
+          <Link to="/orders" className="card p-5 hover:bg-[var(--surface2)] transition-colors">
             <div className="text-[10px] text-[var(--muted)] uppercase tracking-widest font-extrabold mb-1">
-              Reports
+              Orders
             </div>
-            <div className="text-sm font-semibold text-[var(--text)]">
-              Organisation-wide reports
-            </div>
+            <div className="text-sm font-semibold text-[var(--text)]">All branch orders</div>
           </Link>
           <Link to="/branches" className="card p-5 hover:bg-[var(--surface2)] transition-colors">
             <div className="text-[10px] text-[var(--muted)] uppercase tracking-widest font-extrabold mb-1">
@@ -401,17 +380,6 @@ export function DashboardPage() {
               </Link>
             </>
           )}
-
-        {(role === 'ORG_FINANCE' || role === 'BRANCH_FINANCE') && (
-          <Link to="/reports" className="card p-4 hover:bg-[var(--surface2)] transition-colors">
-            <div className="text-xs text-[var(--muted)] uppercase font-bold tracking-widest">
-              Finance
-            </div>
-            <div className="mt-1 text-sm font-semibold text-[var(--text)]">
-              Review revenue and reports
-            </div>
-          </Link>
-        )}
 
         {role === 'CASHIER' && !orgMode && (
           <>
@@ -503,180 +471,6 @@ export function DashboardPage() {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {/* Finance + Inventory snapshot */}
-      {(canViewFinance || canViewInventory) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {canViewFinance && (
-            <div className="card">
-              <div className="card-header">
-                <h2 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
-                  Finance — This Month
-                </h2>
-                <Link
-                  to="/finance"
-                  className="text-xs font-semibold"
-                  style={{ color: 'var(--accent)' }}
-                >
-                  View all →
-                </Link>
-              </div>
-              <div className="card-body">
-                {!fin ? (
-                  <p className="text-sm" style={{ color: 'var(--muted)' }}>
-                    Loading…
-                  </p>
-                ) : (
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      {
-                        label: 'Revenue',
-                        value: formatCurrency(fin.revenue, currency),
-                        color: 'var(--success)',
-                      },
-                      {
-                        label: 'Net Profit',
-                        value: formatCurrency(fin.netProfit, currency),
-                        color: fin.netProfit >= 0 ? 'var(--accent)' : 'var(--danger)',
-                      },
-                      {
-                        label: 'Expenses',
-                        value: formatCurrency(fin.totalOpex + fin.wastage, currency),
-                        color: 'var(--warning)',
-                      },
-                      {
-                        label: 'Margin',
-                        value: `${fin.netMargin.toFixed(1)}%`,
-                        color:
-                          fin.netMargin >= 20
-                            ? 'var(--success)'
-                            : fin.netMargin >= 0
-                              ? 'var(--warning)'
-                              : 'var(--danger)',
-                      },
-                    ].map((s) => (
-                      <div
-                        key={s.label}
-                        className="rounded-lg p-3"
-                        style={{ background: 'var(--surface2)' }}
-                      >
-                        <div
-                          className="text-[10px] uppercase font-bold tracking-widest mb-1"
-                          style={{ color: 'var(--muted)' }}
-                        >
-                          {s.label}
-                        </div>
-                        <div className="text-base font-black" style={{ color: s.color }}>
-                          {s.value}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="flex gap-3 mt-3">
-                  <Link
-                    to="/finance/pnl"
-                    className="text-xs font-semibold"
-                    style={{ color: 'var(--muted)' }}
-                  >
-                    P&L →
-                  </Link>
-                  <Link
-                    to="/finance/expenses"
-                    className="text-xs font-semibold"
-                    style={{ color: 'var(--muted)' }}
-                  >
-                    Expenses →
-                  </Link>
-                </div>
-              </div>
-            </div>
-          )}
-          {canViewInventory && (
-            <div className="card">
-              <div className="card-header">
-                <h2 className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
-                  Inventory{branchId ? '' : ' — Select Branch'}
-                </h2>
-                <Link
-                  to="/inventory"
-                  className="text-xs font-semibold"
-                  style={{ color: 'var(--accent)' }}
-                >
-                  View all →
-                </Link>
-              </div>
-              <div className="card-body">
-                {!inv ? (
-                  <p className="text-sm" style={{ color: 'var(--muted)' }}>
-                    {branchId ? 'Loading…' : 'Select a branch to see inventory.'}
-                  </p>
-                ) : (
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      { label: 'Total Items', value: inv.totalItems, color: 'var(--info)' },
-                      {
-                        label: 'Stock Value',
-                        value: formatCurrency(inv.totalStockValue, currency),
-                        color: 'var(--success)',
-                      },
-                      {
-                        label: 'Low Stock',
-                        value: inv.lowStockCount,
-                        color: inv.lowStockCount > 0 ? 'var(--warning)' : 'var(--muted)',
-                      },
-                      {
-                        label: 'Out of Stock',
-                        value: inv.outOfStockCount,
-                        color: inv.outOfStockCount > 0 ? 'var(--danger)' : 'var(--muted)',
-                      },
-                    ].map((s) => (
-                      <div
-                        key={s.label}
-                        className="rounded-lg p-3"
-                        style={{ background: 'var(--surface2)' }}
-                      >
-                        <div
-                          className="text-[10px] uppercase font-bold tracking-widest mb-1"
-                          style={{ color: 'var(--muted)' }}
-                        >
-                          {s.label}
-                        </div>
-                        <div className="text-base font-black" style={{ color: s.color }}>
-                          {s.value}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="flex gap-3 mt-3">
-                  <Link
-                    to="/inventory/items"
-                    className="text-xs font-semibold"
-                    style={{ color: 'var(--muted)' }}
-                  >
-                    Items →
-                  </Link>
-                  <Link
-                    to="/inventory/purchase-orders"
-                    className="text-xs font-semibold"
-                    style={{ color: 'var(--muted)' }}
-                  >
-                    Purchase Orders →
-                  </Link>
-                  <Link
-                    to="/inventory/wastage"
-                    className="text-xs font-semibold"
-                    style={{ color: 'var(--muted)' }}
-                  >
-                    Wastage →
-                  </Link>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
 

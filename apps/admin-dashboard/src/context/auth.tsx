@@ -10,6 +10,7 @@ import React, {
 } from 'react';
 import { getTokenExpiry, isTokenStale } from '../../../../shared/utils/authSession';
 import { showToast } from '../components/Popup';
+import { subscribeToPush } from '../services/push';
 
 const API_BASE = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL || '';
 const AUTH_HEADERS = { 'Content-Type': 'application/json', 'x-cevop-app': 'admin' };
@@ -413,6 +414,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setUser(userData);
         if (userData.branch) setActiveBranchFilter(userData.branch);
+        subscribeToPush(activeToken).catch(() => void 0);
         return true;
       }
       setToken(null);
@@ -619,6 +621,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
+    subscribeToPush(body.data.accessToken).catch(() => void 0);
   }
 
   async function logout() {

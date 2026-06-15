@@ -54,13 +54,17 @@ export function SocketProvider({
 
     setSocket(s);
 
-    s.on('connect', () => {
-      setConnected(true);
+    function joinRooms() {
       if (branchId) {
         s.emit('JOIN_BRANCH', { orgId: organizationId, branchId });
       } else {
         s.emit('JOIN_ORG', organizationId);
       }
+    }
+
+    s.on('connect', () => {
+      setConnected(true);
+      joinRooms();
     });
 
     s.on('disconnect', () => setConnected(false));
@@ -74,8 +78,32 @@ export function SocketProvider({
       if (s.connected) s.emit('ping');
     }, 25000);
 
+    // Re-connect and re-fetch when the app comes back from background/sleep
+    function onVisible() {
+      if (document.visibilityState === 'visible') {
+        if (!s.connected) {
+          s.connect();
+        } else {
+          // Already connected — rooms may have been dropped, rejoin and signal a sync
+          joinRooms();
+        }
+        setSyncSignal((n) => n + 1);
+      }
+    }
+
+    // Re-connect when network comes back after being offline
+    function onOnline() {
+      if (!s.connected) s.connect();
+      setSyncSignal((n) => n + 1);
+    }
+
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onOnline);
+
     return () => {
       clearInterval(keepAlive);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onOnline);
       s.disconnect();
       setSocket(null);
       setConnected(false);

@@ -159,7 +159,19 @@ serviceRequestsRouter.post('/public', async (req: Request, res: Response) => {
         roles: ['WAITER', 'SERVICE'],
         title: 'Service Request',
         body: `${finalRequest.table?.label || 'Table'} — ${finalRequest.serviceType}${finalRequest.notes ? ` — ${finalRequest.notes}` : ''}`,
-        url: '/',
+        url: '/service-desk',
+        tag: `service-request:${request.id}`,
+      },
+    });
+
+    notificationQueue.add('ADMIN_WEB_PUSH', {
+      type: 'ADMIN_WEB_PUSH',
+      data: {
+        organizationId: table.organizationId,
+        branchId: actualBranchId,
+        title: 'Service Request',
+        body: `${finalRequest.table?.label || 'Table'} — ${finalRequest.serviceType}${finalRequest.notes ? ` — ${finalRequest.notes}` : ''}`,
+        url: '/service-desk',
         tag: `service-request:${request.id}`,
       },
     });

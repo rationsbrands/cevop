@@ -109,7 +109,9 @@ export function ServiceBoard() {
       return json;
     },
     enabled: !!token && !!user,
-    staleTime: 30000,
+    staleTime: 15000,
+    refetchInterval: 20_000,
+    refetchIntervalInBackground: true,
   });
 
   const { data: callsData, refetch: refetchCalls } = useQuery({
@@ -124,7 +126,9 @@ export function ServiceBoard() {
       return json.data;
     },
     enabled: !!token && !!user,
-    staleTime: 30000,
+    staleTime: 15000,
+    refetchInterval: 20_000,
+    refetchIntervalInBackground: true,
   });
 
   const { data: serviceRequestsData, refetch: refetchRequests } = useQuery({
@@ -139,7 +143,9 @@ export function ServiceBoard() {
       return json.data;
     },
     enabled: !!token && !!user,
-    staleTime: 30000,
+    staleTime: 15000,
+    refetchInterval: 20_000,
+    refetchIntervalInBackground: true,
   });
 
   const { data: tablesData, refetch: refetchTables } = useQuery({
@@ -153,7 +159,9 @@ export function ServiceBoard() {
       return json.data;
     },
     enabled: !!token && !!user,
-    staleTime: 30000,
+    staleTime: 15000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
   });
 
   const orders = useMemo(() => {
@@ -427,7 +435,17 @@ export function ServiceBoard() {
       queryClient.invalidateQueries({ queryKey: ['service-requests'] });
     });
 
+    // Re-connect and re-fetch when app comes back from sleep/background
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        if (!socket.connected) socket.connect();
+        refreshNowRef.current().catch(() => void 0);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
     return () => {
+      document.removeEventListener('visibilitychange', onVisible);
       socket.disconnect();
     };
   }, [user, playAlert, queryClient]);

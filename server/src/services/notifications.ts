@@ -121,6 +121,38 @@ export async function notifyStaffWebPush(params: {
   });
 }
 
+export async function notifyAdminWebPush(params: {
+  organizationId: string;
+  branchId: string;
+  title: string;
+  body: string;
+  url?: string;
+  tag?: string;
+}): Promise<void> {
+  if (!ensureWebPushConfigured()) return;
+
+  // Find admin-app subscriptions for org-level admins and branch-scoped admins for this branch
+  const subs = await (prisma as any).pushSubscription.findMany({
+    where: {
+      organizationId: params.organizationId,
+      app: 'admin',
+      OR: [
+        { branchId: params.branchId },
+        { branchId: null }, // org-wide admins receive all branch events
+      ],
+    },
+    select: { endpoint: true, subscription: true },
+  });
+
+  if (!subs?.length) return;
+  await sendWebPushToEndpoints(subs, {
+    title: params.title,
+    body: params.body,
+    url: params.url,
+    tag: params.tag,
+  });
+}
+
 async function sendWhatsApp(phoneNumber: string, message: string): Promise<void> {
   const token = process.env.WHATSAPP_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_ID;

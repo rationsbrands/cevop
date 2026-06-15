@@ -19,8 +19,6 @@ import {
   IconX,
   IconOverview,
   IconCashier,
-  IconInventory,
-  IconOverview as IconFinance,
 } from './Icons';
 
 interface BranchOption {
@@ -70,15 +68,6 @@ export function Shell() {
     'ORG_FINANCE',
     'ORG_AUDITOR',
   ].includes(role);
-  const canViewReports = [
-    'ORG_OWNER',
-    'ADMIN',
-    'ORG_MANAGER',
-    'ORG_FINANCE',
-    'ORG_AUDITOR',
-    'BRANCH_ADMIN',
-    'BRANCH_FINANCE',
-  ].includes(role);
   const canViewAuditLogs = [
     'ORG_OWNER',
     'ADMIN',
@@ -102,15 +91,6 @@ export function Shell() {
   const canViewCashier = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN', 'CASHIER'].includes(
     role,
   );
-  const canViewInventory = ['ORG_OWNER', 'ADMIN', 'ORG_MANAGER', 'BRANCH_ADMIN'].includes(role);
-  const canViewFinance = [
-    'ORG_OWNER',
-    'ADMIN',
-    'ORG_MANAGER',
-    'ORG_FINANCE',
-    'BRANCH_ADMIN',
-    'BRANCH_FINANCE',
-  ].includes(role);
   const canViewServiceDesk = [
     'ORG_OWNER',
     'ADMIN',
@@ -188,32 +168,10 @@ export function Shell() {
     onToggle?: () => void;
   };
 
-  const inFinance = location.pathname.startsWith('/finance');
-  const inInventory = location.pathname.startsWith('/inventory');
-  const [financeOpen, setFinanceOpen] = useState(inFinance);
-  const [inventoryOpen, setInventoryOpen] = useState(inInventory);
   const [operationsOpen, setOperationsOpen] = useState(true);
   const [restaurantOpen, setRestaurantOpen] = useState(true);
   const [peopleOpen, setPeopleOpen] = useState(true);
   const [orgOpen, setOrgOpen] = useState(true);
-  const [financeGroupOpen, setFinanceGroupOpen] = useState(inFinance);
-  const [inventoryGroupOpen, setInventoryGroupOpen] = useState(inInventory);
-
-  // Keep open state in sync when navigating externally (e.g. browser back)
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (inFinance) {
-      setFinanceOpen(true);
-      setFinanceGroupOpen(true);
-    }
-  }, [inFinance]);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (inInventory) {
-      setInventoryOpen(true);
-      setInventoryGroupOpen(true);
-    }
-  }, [inInventory]);
 
   const NAV_GROUPS: NavGroup[] = [
     {
@@ -260,69 +218,11 @@ export function Shell() {
       }),
     },
     {
-      group: 'Finance',
-      collapsible: true,
-      open: financeGroupOpen,
-      onToggle: () => setFinanceGroupOpen((v) => !v),
-      items: [
-        {
-          to: '/finance',
-          label: 'Overview',
-          Icon: IconFinance,
-          toggle: () => setFinanceOpen((v) => !v),
-          isOpen: financeOpen,
-        },
-        ...(financeOpen
-          ? [
-              { to: '/finance/pnl', label: 'P&L', Icon: IconFinance, indent: true },
-              { to: '/finance/expenses', label: 'Expenses', Icon: IconFinance, indent: true },
-            ]
-          : []),
-        { to: '/reports', label: 'Reports', Icon: IconOverview },
-      ].filter(({ to }) => {
-        if (to === '/reports') return canViewReports;
-        return canViewFinance;
-      }),
-    },
-    {
-      group: 'Inventory',
-      collapsible: true,
-      open: inventoryGroupOpen,
-      onToggle: () => setInventoryGroupOpen((v) => !v),
-      items: [
-        {
-          to: '/inventory',
-          label: 'Overview',
-          Icon: IconInventory,
-          toggle: () => setInventoryOpen((v) => !v),
-          isOpen: inventoryOpen,
-        },
-        ...(inventoryOpen
-          ? [
-              { to: '/inventory/items', label: 'Items', Icon: IconInventory, indent: true },
-              { to: '/inventory/movements', label: 'Movements', Icon: IconInventory, indent: true },
-              { to: '/inventory/stocktake', label: 'Stocktake', Icon: IconInventory, indent: true },
-              { to: '/inventory/wastage', label: 'Wastage', Icon: IconInventory, indent: true },
-              { to: '/inventory/suppliers', label: 'Suppliers', Icon: IconInventory, indent: true },
-              {
-                to: '/inventory/purchase-orders',
-                label: 'Purchase Orders',
-                Icon: IconInventory,
-                indent: true,
-              },
-            ]
-          : []),
-      ].filter(() => canViewInventory),
-    },
-    {
       group: 'People',
       collapsible: true,
       open: peopleOpen,
       onToggle: () => setPeopleOpen((v) => !v),
-      items: [
-        { to: '/users', label: 'Staff', Icon: IconStaff },
-        { to: '/timesheets', label: 'Timesheets & Payroll', Icon: IconStaff },
-      ].filter(() => canManageStaff),
+      items: [{ to: '/users', label: 'Staff', Icon: IconStaff }].filter(() => canManageStaff),
     },
     {
       group: 'Organisation',
@@ -535,14 +435,8 @@ export function Shell() {
                       key={to}
                       to={to}
                       end={exact}
-                      onClick={(e) => {
-                        if (toggle) {
-                          // If already on this route, just toggle — don't re-navigate
-                          if (location.pathname === to || location.pathname.startsWith(to + '/')) {
-                            e.preventDefault();
-                          }
-                          toggle();
-                        }
+                      onClick={() => {
+                        if (toggle) toggle();
                         setMobileMenuOpen(false);
                       }}
                       className={({ isActive }) =>

@@ -42,18 +42,13 @@ import { invitesRouter } from './routes/invites';
 import { opsRouter } from './routes/ops';
 import { helpOptionsRouter } from './routes/helpOptions';
 import { waiterTasksRouter } from './routes/waiterTasks';
-import { plansRouter } from './routes/plans';
 import { pushRouter } from './routes/push';
 import { paymentsRouter } from './routes/payments';
 import { stationsRouter } from './routes/stations';
 import { analyticsRouter } from './routes/analytics';
 import { orderItemsRouter } from './routes/orderItems';
 import { notificationsRouter } from './routes/notifications';
-import { timesheetsRouter } from './routes/timesheets';
 import { shiftsRouter } from './routes/shifts';
-import { inventoryRouter } from './routes/inventory';
-import { financeRouter } from './routes/finance';
-import { recipesRouter } from './routes/recipes';
 import { initSocketHandlers } from './sockets/handlers';
 import { errorHandler } from './middleware/errorHandler';
 import { planGuard } from './middleware/planGuard';
@@ -171,13 +166,12 @@ function getRateLimitKey(req: Request): string {
 }
 
 /**
- * For the refresh endpoint, key by userId decoded from the JWT.
- * Falls back to IP if no valid token is present.
- * This means each user has their own rate limit bucket regardless of which
- * device or IP they are on — critical for restaurants with many devices on
- * one NAT IP.
+ * Extract userId from JWT for per-user rate limiting.
+ * Falls back to IP for unauthenticated requests.
+ * Critical for restaurants: 30 devices on the same WiFi share one public IP.
+ * Keying by userId gives every staff member their own independent bucket.
  */
-function getRefreshRateLimitKey(req: Request): string {
+function getUserRateLimitKey(req: Request): string {
   try {
     const auth = req.headers.authorization;
     if (auth && auth.startsWith('Bearer ')) {
@@ -193,6 +187,9 @@ function getRefreshRateLimitKey(req: Request): string {
   }
   return getRateLimitKey(req);
 }
+
+// Alias for refresh endpoint (same logic)
+const getRefreshRateLimitKey = getUserRateLimitKey;
 
 // Fallback in-memory limiters (used in dev or if Redis not configured)
 const authFallback = rateLimit({
@@ -217,9 +214,9 @@ const authRefreshFallback = rateLimit({
 
 const apiFallback = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 500,
+  max: 1000,
   skip: (req) => req.method === 'OPTIONS',
-  keyGenerator: getRateLimitKey,
+  keyGenerator: getUserRateLimitKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests.' },
@@ -248,7 +245,7 @@ function makeUpstashLimiter(requests: number, window: Duration, prefix: string):
 
 const upstashAuth = makeUpstashLimiter(50, '15 m', 'auth');
 const upstashRefresh = makeUpstashLimiter(300, '15 m', 'refresh');
-const upstashApi = makeUpstashLimiter(500, '15 m', 'api');
+const upstashApi = makeUpstashLimiter(1000, '15 m', 'api');
 const upstashPublic = makeUpstashLimiter(60, '1 m', 'public');
 
 function makeLimiter(
@@ -291,7 +288,7 @@ const authRefreshLimiter = makeLimiter(
   'Too many token refresh requests, please slow down.',
   getRefreshRateLimitKey,
 );
-const apiLimiter = makeLimiter(upstashApi, apiFallback, 'Too many requests.');
+const apiLimiter = makeLimiter(upstashApi, apiFallback, 'Too many requests.', getUserRateLimitKey);
 const publicLimiter = makeLimiter(
   upstashPublic,
   publicFallback,
@@ -316,8 +313,6 @@ app.use('/api/', (req, res, next) => {
   if (req.path.startsWith('/auth/refresh')) return next();
   return apiLimiter(req, res, next);
 });
-
-app.use('/api/plans', plansRouter);
 
 app.get('/api/public/config', (req, res) => {
   const configured = (process.env.ADMIN_DASHBOARD_URL || '').trim();
@@ -363,7 +358,6 @@ app.use('/api/menu', menuRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/order-items', orderItemsRouter);
 app.use('/api/notifications', notificationsRouter);
-app.use('/api/timesheets', timesheetsRouter);
 app.use('/api/shifts', shiftsRouter);
 app.use('/api/sessions', sessionsRouter);
 app.use('/api/tables', tablesRouter);
@@ -381,9 +375,6 @@ app.use('/api/push', pushRouter);
 app.use('/api/stations', stationsRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/payments', paymentsRouter);
-app.use('/api/inventory', inventoryRouter);
-app.use('/api/finance', financeRouter);
-app.use('/api/recipes', recipesRouter);
 
 // WebSocket
 initSocketHandlers(io);

@@ -296,7 +296,19 @@ ordersRouter.post('/public', optionalAuthenticate, async (req: Request, res: Res
         roles: ['KITCHEN', 'SERVICE'],
         title: 'New Order',
         body: `${order.table?.label || 'Table'} — #${String(order.id).slice(-6).toUpperCase()}`,
-        url: '/',
+        url: '/kds',
+        tag: `order:${order.id}`,
+      },
+    });
+
+    notificationQueue.add('ADMIN_WEB_PUSH', {
+      type: 'ADMIN_WEB_PUSH',
+      data: {
+        organizationId: actualOrgId as string,
+        branchId: actualBranchId,
+        title: 'New Order',
+        body: `${order.table?.label || 'Table'} — #${String(order.id).slice(-6).toUpperCase()}`,
+        url: '/orders',
         tag: `order:${order.id}`,
       },
     });
@@ -403,13 +415,16 @@ ordersRouter.get(
           prisma.order.count({
             where: { organizationId: orgId, status: { in: ['RECEIVED', 'PREPARING', 'READY'] } },
           }),
-          prisma.orderItem.groupBy({
-            by: ['menuItemId'],
-            where: { order: { organizationId: orgId } },
-            _sum: { quantity: true },
-            orderBy: { _sum: { quantity: 'desc' } },
-            take: 5,
-          }),
+          prisma.$queryRaw<Array<{ menuItemId: string; total: bigint }>>`
+            SELECT oi."menuItemId", SUM(oi.quantity) AS total
+            FROM order_items oi
+            JOIN orders o ON o.id = oi."orderId"
+            WHERE o."organizationId" = ${orgId}
+              AND oi."menuItemId" IS NOT NULL
+            GROUP BY oi."menuItemId"
+            ORDER BY total DESC
+            LIMIT 5
+          `,
         ]);
 
       const menuItemIds = (popularItems as Array<{ menuItemId: string | null }>).map(
@@ -452,7 +467,7 @@ ordersRouter.get(
 
       const recentOrders = await prisma.order.findMany({
         where: { organizationId: orgId },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { createdAt: 'desc' },
         take: 10,
         select: {
           id: true,
@@ -472,12 +487,12 @@ ordersRouter.get(
             todayOrders,
             totalRevenue: Number(totalRevenue._sum.total) || 0,
             activeOrders,
-            popularItems: (
-              popularItems as Array<{ menuItemId: string; _sum: { quantity: number | null } }>
-            ).map((i) => ({
-              menuItem: menuMap.get(i.menuItemId),
-              totalQuantity: i._sum.quantity,
-            })),
+            popularItems: (popularItems as Array<{ menuItemId: string; total: bigint }>).map(
+              (i) => ({
+                menuItem: menuMap.get(i.menuItemId),
+                totalQuantity: Number(i.total),
+              }),
+            ),
           },
           branches,
           staffCount,
@@ -543,18 +558,31 @@ ordersRouter.get(
         prisma.order.count({
           where: { ...baseWhere, status: { in: ['RECEIVED', 'PREPARING', 'READY'] } },
         }),
-        prisma.orderItem.groupBy({
-          by: ['menuItemId'],
-          where: baseItemWhere,
-          _sum: { quantity: true },
-          orderBy: { _sum: { quantity: 'desc' } },
-          take: 5,
-        }),
+        branchScope
+          ? prisma.$queryRaw<Array<{ menuItemId: string; total: bigint }>>`
+              SELECT oi."menuItemId", SUM(oi.quantity) AS total
+              FROM order_items oi
+              JOIN orders o ON o.id = oi."orderId"
+              WHERE o."organizationId" = ${orgId}
+                AND o."branchId" = ${branchScope}
+                AND oi."menuItemId" IS NOT NULL
+              GROUP BY oi."menuItemId"
+              ORDER BY total DESC
+              LIMIT 5
+            `
+          : prisma.$queryRaw<Array<{ menuItemId: string; total: bigint }>>`
+              SELECT oi."menuItemId", SUM(oi.quantity) AS total
+              FROM order_items oi
+              JOIN orders o ON o.id = oi."orderId"
+              WHERE o."organizationId" = ${orgId}
+                AND oi."menuItemId" IS NOT NULL
+              GROUP BY oi."menuItemId"
+              ORDER BY total DESC
+              LIMIT 5
+            `,
       ]);
 
-      const menuItemIds = (popularItems as Array<{ menuItemId: string | null }>).map(
-        (i) => i.menuItemId as string,
-      );
+      const menuItemIds = (popularItems as Array<{ menuItemId: string }>).map((i) => i.menuItemId);
       const menuItems = await prisma.menuItem.findMany({ where: { id: { in: menuItemIds } } });
       const menuMap = new Map(menuItems.map((m: any) => [m.id, m]));
 
@@ -562,11 +590,9 @@ ordersRouter.get(
         todayOrders,
         totalRevenue: Number(totalRevenue._sum.total) || 0,
         activeOrders,
-        popularItems: (
-          popularItems as Array<{ menuItemId: string; _sum: { quantity: number | null } }>
-        ).map((i) => ({
+        popularItems: (popularItems as Array<{ menuItemId: string; total: bigint }>).map((i) => ({
           menuItem: menuMap.get(i.menuItemId),
-          totalQuantity: i._sum.quantity,
+          totalQuantity: Number(i.total),
         })),
       };
 
@@ -939,7 +965,7 @@ ordersRouter.patch(
       );
       io.to(`order:${finalOrder.id}`).emit('ORDER_UPDATED', finalOrder);
 
-      analyticsCache.delete(`${req.user!.organizationId}:${req.branchScope || 'all'}`);
+      analyticsCache.delete(`${req.user!.organizationId}:${req.branchScope ?? 'ALL'}`);
 
       res.json({ success: true, data: finalOrder });
     } catch (err) {
@@ -1345,13 +1371,11 @@ ordersRouter.post(
       let table: any = null;
       if (!isTakeaway) {
         if (!tableId) {
-          res
-            .status(400)
-            .json({
-              success: false,
-              code: 'INVALID_REQUEST',
-              error: 'Table is required for dine-in orders',
-            });
+          res.status(400).json({
+            success: false,
+            code: 'INVALID_REQUEST',
+            error: 'Table is required for dine-in orders',
+          });
           return;
         }
         table = await prisma.table.findUnique({
@@ -1370,13 +1394,11 @@ ordersRouter.post(
         select: { id: true, price: true, stationId: true } as any,
       });
       if (menuItems.length !== itemIds.length) {
-        res
-          .status(400)
-          .json({
-            success: false,
-            code: 'INVALID_REQUEST',
-            error: 'One or more items are invalid',
-          });
+        res.status(400).json({
+          success: false,
+          code: 'INVALID_REQUEST',
+          error: 'One or more items are invalid',
+        });
         return;
       }
 
@@ -1419,13 +1441,11 @@ ordersRouter.post(
         const { getOrCreateSession } = await import('../services/tableSession');
         sessionId = await getOrCreateSession(table.id, orgId, branchId);
         if (!sessionId) {
-          res
-            .status(400)
-            .json({
-              success: false,
-              code: 'INVALID_REQUEST',
-              error: 'Could not create table session',
-            });
+          res.status(400).json({
+            success: false,
+            code: 'INVALID_REQUEST',
+            error: 'Could not create table session',
+          });
           return;
         }
         const { claimTableSession } = await import('../services/waiterAssignment');
@@ -1537,13 +1557,11 @@ ordersRouter.post(
         } as any,
       });
       if (menuItems.length !== itemIds.length) {
-        res
-          .status(400)
-          .json({
-            success: false,
-            code: 'INVALID_REQUEST',
-            error: 'One or more items are unavailable',
-          });
+        res.status(400).json({
+          success: false,
+          code: 'INVALID_REQUEST',
+          error: 'One or more items are unavailable',
+        });
         return;
       }
       const itemMap = new Map<string, any>(menuItems.map((m: any) => [m.id, m]));
@@ -1800,7 +1818,7 @@ ordersRouter.post(
         io.to(`${orgId}:${branchId}`).emit('ORDER_UPDATED', order);
         io.to(`order:${order.id}`).emit('ORDER_UPDATED', order);
       }
-      analyticsCache.delete(`${orgId}:${branchId || 'all'}`);
+      analyticsCache.delete(`${orgId}:${branchId ?? 'ALL'}`);
 
       res.json({
         success: true,

@@ -3,6 +3,7 @@ import { logger } from './logger';
 import {
   notifyNewOrder,
   notifyStaffWebPush,
+  notifyAdminWebPush,
   notifyWaiterCall,
   notifyServiceRequest,
 } from './notifications';
@@ -34,6 +35,9 @@ async function processNotificationJob(jobData: { type: string; data: any }): Pro
       break;
     case 'STAFF_WEB_PUSH':
       await notifyStaffWebPush(data);
+      break;
+    case 'ADMIN_WEB_PUSH':
+      await notifyAdminWebPush(data);
       break;
     case 'WAITER_CALL_NOTIFY':
       await notifyWaiterCall(

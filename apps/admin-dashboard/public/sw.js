@@ -1,17 +1,30 @@
 /// <reference lib="webworker" />
 import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
+import { Queue } from 'workbox-background-sync';
 
-const CACHE_NAME = 'cevop-admin-v1';
+const CACHE_NAME = 'cevop-admin-v2';
 
 // Precache ALL build assets — injected by vite-plugin-pwa at build time
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
-// Fallback install for environments where __WB_MANIFEST is not injected (dev)
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(['/', '/index.html']).catch(() => void 0)),
-  );
+// Background Sync Queue — queues failed POST/PATCH/PUT mutations when offline
+const mutationQueue = new Queue('admin-mutation-queue', {
+  maxRetentionTime: 24 * 60, // 24 hours
+  onSync: async ({ queue }) => {
+    let entry;
+    while ((entry = await queue.shiftRequest())) {
+      try {
+        await fetch(entry.request.clone());
+      } catch {
+        await queue.unshiftRequest(entry);
+        throw new Error('Replay failed — still offline');
+      }
+    }
+  },
+});
+
+self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
@@ -30,29 +43,50 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch strategy: network first for navigation, cache first for assets
 self.addEventListener('fetch', (event) => {
-  if (!event.request.url.startsWith(self.location.origin)) return;
-  if (event.request.url.includes('/api/') || event.request.url.includes('/socket.io/')) return;
-  if (event.request.method !== 'GET') return;
+  const { request } = event;
 
-  if (event.request.mode === 'navigate') {
+  // Queue offline mutations for later replay
+  if (request.url.includes('/api/') && ['POST', 'PATCH', 'PUT'].includes(request.method)) {
     event.respondWith(
-      fetch(event.request).catch(() =>
+      (async () => {
+        try {
+          return await fetch(request.clone());
+        } catch {
+          await mutationQueue.pushRequest({ request: request.clone() });
+          return new Response(
+            JSON.stringify({ success: false, queued: true, error: 'Offline — request queued' }),
+            { status: 202, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+      })(),
+    );
+    return;
+  }
+
+  // Skip non-GET, cross-origin, API, and socket requests
+  if (!request.url.startsWith(self.location.origin)) return;
+  if (request.url.includes('/api/') || request.url.includes('/socket.io/')) return;
+  if (request.method !== 'GET') return;
+
+  // Navigation — network first, fallback to cached shell
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request).catch(() =>
         caches.match('/index.html').then((cached) => cached || Response.error()),
       ),
     );
     return;
   }
 
-  // Static assets — cache first with network fallback
+  // Static assets — cache first, network fallback, then cache the response
   event.respondWith(
-    caches.match(event.request).then((cached) => {
+    caches.match(request).then((cached) => {
       if (cached) return cached;
-      return fetch(event.request).then((response) => {
+      return fetch(request).then((response) => {
         if (response.ok) {
           const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
         }
         return response;
       });
@@ -62,28 +96,30 @@ self.addEventListener('fetch', (event) => {
 
 // Push notification handler
 self.addEventListener('push', (event) => {
-  let data;
+  if (!event.data) return;
+
   try {
-    data = event.data ? event.data.json() : {};
-  } catch {
-    data = {};
+    const data = event.data.json();
+    const options = {
+      body: data.body || 'New update from Cevop',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      vibrate: [200, 100, 200, 100, 200, 100, 400],
+      data: { url: data.url || '/', type: data.type || 'GENERIC' },
+      tag: data.tag || 'cevop-alert',
+      renotify: true,
+      requireInteraction: true,
+      actions: [],
+    };
+
+    if (['WAITER_CALL', 'SERVICE_REQUEST', 'ORDER_READY'].includes(data.type)) {
+      options.actions.push({ action: 'view', title: 'View' });
+    }
+
+    event.waitUntil(self.registration.showNotification(data.title || 'Cevop Admin', options));
+  } catch (err) {
+    console.error('Push error:', err);
   }
-  const title = data.title ?? 'Cevop Admin';
-  const body = data.body ?? '';
-  const url = data.url ?? '/';
-  const tag = data.tag;
-
-  const options = {
-    body,
-    tag,
-    data: { url },
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    vibrate: [200, 100, 200],
-    requireInteraction: true,
-  };
-
-  event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener('notificationclick', (event) => {
@@ -91,9 +127,9 @@ self.addEventListener('notificationclick', (event) => {
   const url = event.notification.data?.url || '/';
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsArr) => {
-      const existingClient = clientsArr.find((c) => c.url.includes(url));
-      if (existingClient) return existingClient.focus();
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      const existing = clients.find((c) => c.url.includes(url));
+      if (existing) return existing.focus();
       return self.clients.openWindow(url);
     }),
   );
