@@ -511,6 +511,48 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
 // ─── GET /auth/me ─────────────────────────────────────────────────────────────
 authRouter.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
   try {
+    // Handle impersonation case first
+    if (req.user!.impersonating && req.user!.organizationId) {
+      const targetOrg = await prisma.organization.findUnique({
+        where: { id: req.user!.organizationId },
+      });
+      if (!targetOrg) {
+        res
+          .status(404)
+          .json({ success: false, code: 'NOT_FOUND', error: 'Organization not found' });
+        return;
+      }
+
+      // Build synthetic impersonation user from scratch
+      res.json({
+        success: true,
+        data: {
+          id: `impersonation-${targetOrg.id}`,
+          name: 'Impersonation User',
+          email: 'impersonation@cevop.internal',
+          role: 'ADMIN',
+          emailVerified: true,
+          mustChangePassword: false,
+          isOnShift: false,
+          organizationId: targetOrg.id,
+          branchId: null,
+          organization: {
+            id: targetOrg.id,
+            name: targetOrg.name,
+            slug: targetOrg.slug,
+            logo: targetOrg.logo,
+            currency: targetOrg.currency,
+            plan: targetOrg.plan,
+            planStatus: targetOrg.planStatus,
+            trialEndsAt: targetOrg.trialEndsAt?.toISOString(),
+          },
+          branch: null,
+        },
+      });
+      return;
+    }
+
+    // Normal user case
     const user = await prisma.user.findUnique({
       where: { id: req.user!.userId },
       include: { organization: true, branch: true },
@@ -518,19 +560,6 @@ authRouter.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
     if (!user) {
       res.status(404).json({ success: false, code: 'NOT_FOUND', error: 'User not found' });
       return;
-    }
-
-    if (req.user!.impersonating && req.user!.organizationId) {
-      const targetOrg = await prisma.organization.findUnique({
-        where: { id: req.user!.organizationId },
-      });
-      if (targetOrg) {
-        user.organizationId = targetOrg.id;
-        user.role = 'ADMIN' as any;
-        user.organization = targetOrg as any;
-        user.branchId = null;
-        user.branch = null;
-      }
     }
 
     res.json({
@@ -555,6 +584,9 @@ authRouter.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
           slug: user.organization.slug,
           logo: user.organization.logo,
           currency: user.organization.currency,
+          plan: user.organization.plan,
+          planStatus: user.organization.planStatus,
+          trialEndsAt: user.organization.trialEndsAt?.toISOString(),
         },
         branch: user.branch
           ? { id: user.branch.id, name: user.branch.name, slug: user.branch.slug }
