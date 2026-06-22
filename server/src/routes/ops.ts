@@ -456,9 +456,11 @@ opsRouter.post(
         userId: req.user!.userId, // Track original ops user
         organizationId: org.id, // Target org
         role: 'ORG_AUDITOR', // Read-only — ops can VIEW but not MODIFY client data
-        branchId: null,
+        branchId: undefined,
+        plan: org.plan,
+        currency: org.currency,
         impersonating: true,
-        opsUserId: req.user!.userId, // Track who is impersonating
+        opsRole: req.user!.opsRole,
       };
 
       const secret = process.env.ACCESS_TOKEN_SECRET || process.env.JWT_SECRET!;
@@ -506,7 +508,8 @@ opsRouter.post(
       });
 
       res.json({ success: true, data: { code, expiresAt } });
-    } catch {
+    } catch (err) {
+      logger.error('Failed to impersonate', { err });
       res.status(500).json({ success: false, error: 'Failed to impersonate' });
     }
   },

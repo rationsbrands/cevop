@@ -234,6 +234,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const silentRefresh = useCallback(async (): Promise<string | null> => {
+    // Don't attempt refresh when impersonating
+    if (sessionStorage.getItem('impersonate_token')) {
+      return token;
+    }
+
     // If a refresh is already in progress, return the existing promise
     if (refreshPromiseRef.current) {
       return refreshPromiseRef.current;
@@ -249,7 +254,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return token; // Return current in-memory token
     }
 
-    if (!sessionStorage.getItem('impersonate_token') && !localStorage.getItem(SESSION_MARKER_KEY)) {
+    if (!localStorage.getItem(SESSION_MARKER_KEY)) {
       return null;
     }
 
